@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { CalendarDays, Download, Plus, Save, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { CalendarDays, Download, ExternalLink, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
 import { GlassCard } from './GlassCard';
 import { TabNavigation } from './TabNavigation';
 import { useLibrary } from '../domain/LibraryContext';
@@ -135,9 +135,13 @@ export function FinancialPlanSection() {
 }
 
 export function CalendarSection() {
-  const { state, createCalendarEvent, deleteCalendarEvent } = useLibrary();
+  const { state, googleCalendarStatus, createCalendarEvent, deleteCalendarEvent, refreshGoogleCalendarStatus, connectGoogleCalendar, syncCalendarEventToGoogle } = useLibrary();
   const [draft, setDraft] = useState({ title: '', date: todayKey(), description: '' });
   const events = [...state.calendarEvents].sort((left, right) => left.date.localeCompare(right.date));
+
+  useEffect(() => {
+    void refreshGoogleCalendarStatus();
+  }, []);
 
   const save = () => {
     if (!draft.title.trim() || !draft.date) return;
@@ -148,11 +152,30 @@ export function CalendarSection() {
   return (
     <div className="space-y-5">
       <GlassCard>
-        <div className="flex items-center gap-3 mb-4">
+        <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-4 mb-4">
+          <div className="flex items-center gap-3">
           <CalendarDays className="w-6 h-6 text-[#c9a98d]" />
           <div>
             <h2 className="text-2xl text-[#f5f3f0]">Календарь</h2>
             <p className="text-sm text-[#a89b8f]">Общий календарь ассистента и руководителя. Важные задачи с флагом добавляются сюда автоматически.</p>
+          </div>
+          </div>
+          <div className="rounded-xl border border-[#c9a98d]/15 bg-[#2a2630]/45 p-3 text-sm min-w-72">
+            <p className="text-[#f5f3f0]">Google Calendar</p>
+            <p className="mt-1 text-xs text-[#a89b8f]">
+              {!googleCalendarStatus && 'Проверяем подключение...'}
+              {googleCalendarStatus && !googleCalendarStatus.configured && 'Не настроены GOOGLE_CLIENT_ID и GOOGLE_CLIENT_SECRET.'}
+              {googleCalendarStatus?.configured && !googleCalendarStatus.connected && 'Настроен, но еще не подключен.'}
+              {googleCalendarStatus?.connected && `Подключен: ${googleCalendarStatus.calendarId}`}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button onClick={connectGoogleCalendar} disabled={googleCalendarStatus ? !googleCalendarStatus.configured : true} className="rounded-lg border border-[#c9a98d]/25 px-3 py-1 text-xs text-[#c9a98d] disabled:opacity-50">
+                Подключить
+              </button>
+              <button onClick={() => void refreshGoogleCalendarStatus()} className="rounded-lg border border-[#c9a98d]/25 px-3 py-1 text-xs text-[#a89b8f] hover:text-[#c9a98d]">
+                Обновить статус
+              </button>
+            </div>
           </div>
         </div>
         <div className="grid md:grid-cols-[1.2fr_180px] gap-3">
@@ -172,6 +195,23 @@ export function CalendarSection() {
                 <h3 className="text-lg text-[#f5f3f0] mt-1">{event.title}</h3>
                 {event.description && <p className="text-sm text-[#a89b8f] mt-2">{event.description}</p>}
                 {event.sourceTaskId && <p className="text-xs text-[#a89b8f] mt-3">Создано из важной задачи</p>}
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                  {event.googleSyncStatus === 'synced' && <span className="rounded-full bg-[#5c7a5e]/25 px-3 py-1 text-[#b9d0b7]">Google: синхронизировано</span>}
+                  {event.googleSyncStatus === 'pending' && <span className="rounded-full bg-[#c9a98d]/20 px-3 py-1 text-[#c9a98d]">Google: синхронизация</span>}
+                  {event.googleSyncStatus === 'not_connected' && <span className="rounded-full bg-[#2a2630] px-3 py-1 text-[#a89b8f]">Google: не подключен</span>}
+                  {event.googleSyncStatus === 'error' && <span className="rounded-full bg-[#8b3a52]/25 px-3 py-1 text-[#f0c5cf]">Google: ошибка</span>}
+                  {event.googleSyncError && <span className="text-[#a89b8f]">{event.googleSyncError}</span>}
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button onClick={() => void syncCalendarEventToGoogle(event.id)} className="rounded-lg border border-[#c9a98d]/25 px-3 py-1 text-xs text-[#c9a98d] inline-flex items-center gap-1">
+                    <RefreshCw className="w-3 h-3" />Отправить в Google
+                  </button>
+                  {event.googleHtmlLink && (
+                    <a href={event.googleHtmlLink} target="_blank" rel="noreferrer" className="rounded-lg border border-[#c9a98d]/25 px-3 py-1 text-xs text-[#a89b8f] hover:text-[#c9a98d] inline-flex items-center gap-1">
+                      <ExternalLink className="w-3 h-3" />Открыть
+                    </a>
+                  )}
+                </div>
               </div>
               <button onClick={() => deleteCalendarEvent(event.id)} className="text-[#a89b8f] hover:text-[#8b3a52]" aria-label={`Удалить ${event.title}`}><Trash2 className="w-4 h-4" /></button>
             </div>

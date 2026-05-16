@@ -148,6 +148,10 @@ export interface CalendarEvent {
   date: string;
   description?: string | null;
   sourceTaskId?: string | null;
+  googleEventId?: string | null;
+  googleHtmlLink?: string | null;
+  googleSyncStatus?: 'pending' | 'synced' | 'error' | 'not_connected';
+  googleSyncError?: string | null;
   createdAt: string;
 }
 

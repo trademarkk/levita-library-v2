@@ -3,6 +3,7 @@ import { adminChecklistItems, initialState } from './seed';
 import { normalizeHashtags, roleRoutes } from './labels';
 import type {
   AppSettings,
+  CalendarEvent,
   ChecklistControlStatus,
   ChecklistReport,
   ChecklistReportSlot,
@@ -81,9 +82,17 @@ type CreateExpenseInput = {
   comment?: string;
 };
 
+type GoogleCalendarStatus = {
+  configured: boolean;
+  connected: boolean;
+  calendarId: string;
+  redirectUri: string;
+};
+
 type LibraryContextValue = {
   state: LibraryState;
   currentUser: User | null;
+  googleCalendarStatus: GoogleCalendarStatus | null;
   login: (email: string, password: string) => Promise<{ ok: boolean; error?: string; route?: string }>;
   logout: () => void;
   resetDemoData: () => void;
@@ -129,6 +138,9 @@ type LibraryContextValue = {
   createCalendarEvent: (input: { title: string; date: string; description?: string }) => void;
   updateCalendarEvent: (id: string, input: Partial<{ title: string; date: string; description: string }>) => void;
   deleteCalendarEvent: (id: string) => void;
+  refreshGoogleCalendarStatus: () => Promise<void>;
+  connectGoogleCalendar: () => void;
+  syncCalendarEventToGoogle: (id: string) => Promise<void>;
   createExpenseCategory: (name: string) => void;
   deleteExpenseCategory: (id: string) => void;
   createExpense: (input: CreateExpenseInput) => void;
@@ -380,6 +392,31 @@ async function saveDatabaseState(state: LibraryState) {
   if (!response.ok) throw new Error('Не удалось сохранить данные в базе.');
 }
 
+async function readApiError(response: Response) {
+  const payload = await response.json().catch(() => ({}));
+  return typeof payload.error === 'string' ? payload.error : 'Операция не выполнена.';
+}
+
+async function saveGoogleCalendarEvent(event: CalendarEvent) {
+  const endpoint = event.googleEventId ? `/api/google/events/${encodeURIComponent(event.googleEventId)}` : '/api/google/events';
+  const response = await fetch(endpoint, {
+    method: event.googleEventId ? 'PATCH' : 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title: event.title,
+      date: event.date,
+      description: event.description ?? '',
+    }),
+  });
+  if (!response.ok) throw new Error(await readApiError(response));
+  return await response.json() as { googleEventId: string; googleHtmlLink?: string };
+}
+
+async function removeGoogleCalendarEvent(googleEventId: string) {
+  const response = await fetch(`/api/google/events/${encodeURIComponent(googleEventId)}`, { method: 'DELETE' });
+  if (!response.ok) throw new Error(await readApiError(response));
+}
+
 function getMinutes(value?: string | null) {
   if (!value) return -1;
   const date = new Date(value);
@@ -439,6 +476,7 @@ function getReportStatus(checklist: DailyChecklist, slot: ChecklistReportSlot): 
 
 export function LibraryProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<LibraryState>(() => loadState());
+  const [googleCalendarStatus, setGoogleCalendarStatus] = useState<GoogleCalendarStatus | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
     return window.sessionStorage.getItem(SESSION_USER_KEY);
@@ -458,6 +496,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void refreshState();
+    void refreshGoogleCalendarStatus();
   }, []);
 
   useEffect(() => {
@@ -481,6 +520,46 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  const refreshGoogleCalendarStatus = async () => {
+    const response = await fetch('/api/google/status', { cache: 'no-store' });
+    if (!response.ok) {
+      setGoogleCalendarStatus(null);
+      return;
+    }
+    setGoogleCalendarStatus(await response.json() as GoogleCalendarStatus);
+  };
+
+  const syncGoogleEvent = async (event: CalendarEvent) => {
+    update((draft) => {
+      const stored = draft.calendarEvents.find((item) => item.id === event.id);
+      if (stored) {
+        stored.googleSyncStatus = 'pending';
+        stored.googleSyncError = null;
+      }
+    });
+
+    try {
+      const result = await saveGoogleCalendarEvent(event);
+      update((draft) => {
+        const stored = draft.calendarEvents.find((item) => item.id === event.id);
+        if (!stored) return;
+        stored.googleEventId = result.googleEventId;
+        stored.googleHtmlLink = result.googleHtmlLink ?? null;
+        stored.googleSyncStatus = 'synced';
+        stored.googleSyncError = null;
+      });
+      void refreshGoogleCalendarStatus();
+    } catch (error) {
+      update((draft) => {
+        const stored = draft.calendarEvents.find((item) => item.id === event.id);
+        if (!stored) return;
+        const message = error instanceof Error ? error.message : 'Не удалось синхронизировать событие.';
+        stored.googleSyncStatus = message.includes('не подключен') || message.includes('не настроен') ? 'not_connected' : 'error';
+        stored.googleSyncError = message;
+      });
+    }
+  };
+
   const buildAdminChecklistReports = () =>
     state.checklists
       .map((checklist) => {
@@ -501,6 +580,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
   const value = useMemo<LibraryContextValue>(() => ({
     state,
     currentUser,
+    googleCalendarStatus,
     async login(email, password) {
       const databaseState = await loadDatabaseState();
       const authState = databaseState ?? state;
@@ -537,6 +617,14 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       setCurrentUserId(null);
     },
     refreshState,
+    refreshGoogleCalendarStatus,
+    connectGoogleCalendar() {
+      window.location.href = '/api/google/connect';
+    },
+    async syncCalendarEventToGoogle(id) {
+      const event = state.calendarEvents.find((item) => item.id === id);
+      if (event) await syncGoogleEvent(event);
+    },
     usersByRole(role) {
       return role ? state.users.filter((user) => user.role === role) : state.users;
     },
@@ -583,23 +671,28 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       });
     },
     createTask(input) {
-      update((draft) => {
-        const taskId = newId('task');
-        const calendarEventId = input.addToCalendar && input.deadline ? newId('calendar-event') : null;
-        draft.tasks.unshift({ id: taskId, role: 'ASSISTANT', status: 'pending', createdAt: new Date().toISOString(), calendarEventId, ...input });
-        if (calendarEventId && input.deadline) {
-          draft.calendarEvents.unshift({
+      const taskId = newId('task');
+      const calendarEventId = input.addToCalendar && input.deadline ? newId('calendar-event') : null;
+      const calendarEvent: CalendarEvent | null = calendarEventId && input.deadline
+        ? {
             id: calendarEventId,
             title: input.title,
             date: input.deadline,
             description: input.description || null,
             sourceTaskId: taskId,
+            googleSyncStatus: 'pending',
+            googleSyncError: null,
             createdAt: new Date().toISOString(),
-          });
-        }
+          }
+        : null;
+      update((draft) => {
+        draft.tasks.unshift({ id: taskId, role: 'ASSISTANT', status: 'pending', createdAt: new Date().toISOString(), calendarEventId, ...input });
+        if (calendarEvent) draft.calendarEvents.unshift(calendarEvent);
       });
+      if (calendarEvent) void syncGoogleEvent(calendarEvent);
     },
     updateTask(id, input) {
+      let eventToSync: CalendarEvent | null = null;
       update((draft) => {
         const task = draft.tasks.find((item) => item.id === id);
         if (!task) return;
@@ -607,14 +700,20 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         if (task.addToCalendar && task.deadline) {
           if (task.calendarEventId) {
             const event = draft.calendarEvents.find((item) => item.id === task.calendarEventId);
-            if (event) Object.assign(event, { title: task.title, date: task.deadline, description: task.description || null });
+            if (event) {
+              Object.assign(event, { title: task.title, date: task.deadline, description: task.description || null });
+              eventToSync = { ...event };
+            }
           } else {
             const calendarEventId = newId('calendar-event');
             task.calendarEventId = calendarEventId;
-            draft.calendarEvents.unshift({ id: calendarEventId, title: task.title, date: task.deadline, description: task.description || null, sourceTaskId: task.id, createdAt: new Date().toISOString() });
+            const event: CalendarEvent = { id: calendarEventId, title: task.title, date: task.deadline, description: task.description || null, sourceTaskId: task.id, googleSyncStatus: 'pending', googleSyncError: null, createdAt: new Date().toISOString() };
+            draft.calendarEvents.unshift(event);
+            eventToSync = event;
           }
         }
       });
+      if (eventToSync) void syncGoogleEvent(eventToSync);
     },
     toggleTask(id) {
       update((draft) => {
@@ -822,17 +921,34 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       });
     },
     createCalendarEvent(input) {
+      const event: CalendarEvent = {
+        id: newId('calendar-event'),
+        title: input.title,
+        date: input.date,
+        description: input.description || null,
+        sourceTaskId: null,
+        googleSyncStatus: 'pending',
+        googleSyncError: null,
+        createdAt: new Date().toISOString(),
+      };
       update((draft) => {
-        draft.calendarEvents.unshift({ id: newId('calendar-event'), title: input.title, date: input.date, description: input.description || null, sourceTaskId: null, createdAt: new Date().toISOString() });
+        draft.calendarEvents.unshift(event);
       });
+      void syncGoogleEvent(event);
     },
     updateCalendarEvent(id, input) {
+      let eventToSync: CalendarEvent | null = null;
       update((draft) => {
         const event = draft.calendarEvents.find((item) => item.id === id);
-        if (event) Object.assign(event, input);
+        if (event) {
+          Object.assign(event, input);
+          eventToSync = { ...event };
+        }
       });
+      if (eventToSync) void syncGoogleEvent(eventToSync);
     },
     deleteCalendarEvent(id) {
+      const googleEventId = state.calendarEvents.find((event) => event.id === id)?.googleEventId;
       update((draft) => {
         draft.calendarEvents = draft.calendarEvents.filter((event) => event.id !== id);
         draft.tasks.forEach((task) => {
@@ -842,6 +958,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           }
         });
       });
+      if (googleEventId) void removeGoogleCalendarEvent(googleEventId).catch(() => undefined);
     },
     createExpenseCategory(name) {
       if (!name.trim()) return;
@@ -879,7 +996,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         }
       }, false);
     },
-  }), [currentUser, state]);
+  }), [currentUser, googleCalendarStatus, state]);
 
   return <LibraryContext.Provider value={value}>{children}</LibraryContext.Provider>;
 }
