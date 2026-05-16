@@ -152,6 +152,7 @@ export interface CalendarEvent {
   googleHtmlLink?: string | null;
   googleSyncStatus?: 'pending' | 'synced' | 'error' | 'not_connected';
   googleSyncError?: string | null;
+  source?: 'local' | 'google';
   createdAt: string;
 }
 

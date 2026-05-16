@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CalendarDays, Download, ExternalLink, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, Download, ExternalLink, Pencil, Plus, RefreshCw, Save, Trash2, X } from 'lucide-react';
 import { GlassCard } from './GlassCard';
 import { TabNavigation } from './TabNavigation';
 import { useLibrary } from '../domain/LibraryContext';
 import { formatDate } from '../domain/labels';
-import type { ExpenseAccount, ExpenseRecord, ExpenseStudio } from '../domain/types';
+import type { CalendarEvent, ExpenseAccount, ExpenseRecord, ExpenseStudio } from '../domain/types';
 
 const accountLabels: Record<ExpenseAccount, string> = {
   RS_SBER: 'РС Сбер',
@@ -30,6 +30,35 @@ function daysInMonth(month: string) {
   const [year, monthIndex] = month.split('-').map(Number);
   const daysCount = new Date(year, monthIndex, 0).getDate();
   return Array.from({ length: daysCount }, (_, index) => `${month}-${String(index + 1).padStart(2, '0')}`);
+}
+
+function addMonths(month: string, offset: number) {
+  const [year, monthIndex] = month.split('-').map(Number);
+  const date = new Date(year, monthIndex - 1 + offset, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function nextMonthStart(month: string) {
+  return `${addMonths(month, 1)}-01`;
+}
+
+function monthTitle(month: string) {
+  const [year, monthIndex] = month.split('-').map(Number);
+  return new Date(year, monthIndex - 1, 1).toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
+}
+
+function calendarCells(month: string) {
+  const days = daysInMonth(month);
+  const [year, monthIndex] = month.split('-').map(Number);
+  const firstDay = new Date(year, monthIndex - 1, 1).getDay();
+  const startOffset = firstDay === 0 ? 6 : firstDay - 1;
+  const cells = [...Array.from({ length: startOffset }, () => null as string | null), ...days];
+  while (cells.length % 7 !== 0) cells.push(null);
+  return cells;
+}
+
+function sameMonth(date: string, month: string) {
+  return date.startsWith(month);
 }
 
 function formatPlanDay(dateKey: string) {
@@ -135,18 +164,80 @@ export function FinancialPlanSection() {
 }
 
 export function CalendarSection() {
-  const { state, googleCalendarStatus, createCalendarEvent, deleteCalendarEvent, refreshGoogleCalendarStatus, connectGoogleCalendar, syncCalendarEventToGoogle } = useLibrary();
+  const { state, googleCalendarStatus, createCalendarEvent, updateCalendarEvent, deleteCalendarEvent, refreshGoogleCalendarStatus, connectGoogleCalendar, importGoogleCalendarEvents, syncCalendarEventToGoogle } = useLibrary();
+  const [month, setMonth] = useState(currentMonthKey());
+  const [selectedDate, setSelectedDate] = useState(todayKey());
   const [draft, setDraft] = useState({ title: '', date: todayKey(), description: '' });
-  const events = [...state.calendarEvents].sort((left, right) => left.date.localeCompare(right.date));
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState({ title: '', date: todayKey(), description: '' });
+  const [isImporting, setIsImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const cells = useMemo(() => calendarCells(month), [month]);
+  const monthEvents = useMemo(
+    () => [...state.calendarEvents]
+      .filter((event) => sameMonth(event.date, month))
+      .sort((left, right) => left.date.localeCompare(right.date) || left.title.localeCompare(right.title)),
+    [month, state.calendarEvents],
+  );
+  const eventsByDate = useMemo(() => monthEvents.reduce<Record<string, CalendarEvent[]>>((acc, event) => {
+    acc[event.date] = [...(acc[event.date] ?? []), event];
+    return acc;
+  }, {}), [monthEvents]);
+  const selectedEvents = eventsByDate[selectedDate] ?? [];
+  const editingEvent = editingId ? state.calendarEvents.find((event) => event.id === editingId) ?? null : null;
 
   useEffect(() => {
     void refreshGoogleCalendarStatus();
   }, []);
 
+  useEffect(() => {
+    if (!sameMonth(selectedDate, month)) setSelectedDate(`${month}-01`);
+  }, [month, selectedDate]);
+
+  useEffect(() => {
+    if (!editingEvent) return;
+    setEditDraft({
+      title: editingEvent.title,
+      date: editingEvent.date,
+      description: editingEvent.description ?? '',
+    });
+  }, [editingEvent?.id]);
+
   const save = () => {
     if (!draft.title.trim() || !draft.date) return;
     createCalendarEvent(draft);
     setDraft({ title: '', date: todayKey(), description: '' });
+  };
+
+  const importFromGoogle = async () => {
+    setIsImporting(true);
+    setImportError(null);
+    try {
+      await importGoogleCalendarEvents(`${month}-01`, nextMonthStart(month));
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : 'Не удалось загрузить события Google.');
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  const openEvent = (event: CalendarEvent) => {
+    setEditingId(event.id);
+  };
+
+  const saveEditing = () => {
+    if (!editingEvent || !editDraft.title.trim() || !editDraft.date) return;
+    updateCalendarEvent(editingEvent.id, {
+      title: editDraft.title,
+      date: editDraft.date,
+      description: editDraft.description,
+    });
+    setEditingId(null);
+  };
+
+  const moveEvent = (id: string, date: string) => {
+    updateCalendarEvent(id, { date });
+    setSelectedDate(date);
   };
 
   return (
@@ -175,9 +266,13 @@ export function CalendarSection() {
               <button onClick={() => void refreshGoogleCalendarStatus()} className="rounded-lg border border-[#c9a98d]/25 px-3 py-1 text-xs text-[#a89b8f] hover:text-[#c9a98d]">
                 Обновить статус
               </button>
+              <button onClick={() => void importFromGoogle()} disabled={!googleCalendarStatus?.connected || isImporting} className="rounded-lg border border-[#c9a98d]/25 px-3 py-1 text-xs text-[#a89b8f] hover:text-[#c9a98d] disabled:opacity-50">
+                {isImporting ? 'Загружаем...' : 'Загрузить месяц'}
+              </button>
             </div>
           </div>
         </div>
+        {importError && <p className="mb-4 text-sm text-[#f0c5cf]">{importError}</p>}
         <div className="grid md:grid-cols-[1.2fr_180px] gap-3">
           <input value={draft.title} onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))} placeholder="Событие" className="field" />
           <input type="date" value={draft.date} onChange={(event) => setDraft((value) => ({ ...value, date: event.target.value }))} className="field" />
@@ -186,38 +281,155 @@ export function CalendarSection() {
         <button onClick={save} className="primary-action mt-4 flex items-center gap-2"><Save className="w-4 h-4" />Сохранить событие</button>
       </GlassCard>
 
-      <div className="grid lg:grid-cols-2 gap-4">
-        {events.map((event) => (
-          <GlassCard key={event.id}>
+      <div className="calendar-shell">
+        <div className="calendar-toolbar">
+          <div>
+            <p className="text-xs uppercase tracking-[0.22em] text-[#c9a98d]">Календарная сетка</p>
+            <h3 className="text-2xl text-[#f5f3f0] capitalize">{monthTitle(month)}</h3>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => setMonth(addMonths(month, -1))} className="calendar-icon-button" aria-label="Предыдущий месяц"><ChevronLeft className="w-4 h-4" /></button>
+            <button onClick={() => (setMonth(currentMonthKey()), setSelectedDate(todayKey()))} className="calendar-soft-button">Сегодня</button>
+            <button onClick={() => setMonth(addMonths(month, 1))} className="calendar-icon-button" aria-label="Следующий месяц"><ChevronRight className="w-4 h-4" /></button>
+          </div>
+        </div>
+        <div className="calendar-grid">
+          {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map((day) => <div key={day} className="calendar-weekday">{day}</div>)}
+          {cells.map((date, index) => {
+            const dayEvents = date ? eventsByDate[date] ?? [] : [];
+            const isSelected = date === selectedDate;
+            const isToday = date === todayKey();
+            return (
+              <button
+                key={date ?? `blank-${index}`}
+                type="button"
+                disabled={!date}
+                onClick={() => date && setSelectedDate(date)}
+                onDragOver={(event) => date && event.preventDefault()}
+                onDrop={(event) => {
+                  const id = event.dataTransfer.getData('text/calendar-event-id');
+                  if (date && id) moveEvent(id, date);
+                }}
+                className={`calendar-day ${isSelected ? 'is-selected' : ''} ${isToday ? 'is-today' : ''}`}
+              >
+                {date && (
+                  <>
+                    <span className="calendar-day-number">{Number(date.slice(-2))}</span>
+                    <span className="calendar-day-events">
+                      {dayEvents.slice(0, 3).map((event) => (
+                        <span
+                          key={event.id}
+                          draggable
+                          onClick={(mouseEvent) => (mouseEvent.stopPropagation(), openEvent(event))}
+                          onDragStart={(dragEvent) => dragEvent.dataTransfer.setData('text/calendar-event-id', event.id)}
+                          className={`calendar-event-chip ${event.sourceTaskId ? 'is-task' : event.source === 'google' ? 'is-google' : ''}`}
+                        >
+                          {event.title}
+                        </span>
+                      ))}
+                      {dayEvents.length > 3 && <span className="calendar-more">+{dayEvents.length - 3}</span>}
+                    </span>
+                  </>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="grid xl:grid-cols-[0.9fr_1.1fr] gap-4">
+        <GlassCard>
+          <p className="text-xs text-[#c9a98d]">{formatDate(selectedDate)}</p>
+          <h3 className="mt-1 text-xl text-[#f5f3f0]">События выбранного дня</h3>
+          <div className="mt-4 space-y-3">
+            {selectedEvents.map((event) => (
+              <CalendarEventCard
+                key={event.id}
+                event={event}
+                onEdit={() => openEvent(event)}
+                onSync={() => void syncCalendarEventToGoogle(event.id)}
+                onDelete={() => deleteCalendarEvent(event.id)}
+              />
+            ))}
+            {selectedEvents.length === 0 && <p className="rounded-lg bg-[#2a2630]/45 p-4 text-sm text-[#a89b8f]">На эту дату событий пока нет.</p>}
+          </div>
+        </GlassCard>
+
+        <GlassCard>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-xs text-[#c9a98d]">Месяц</p>
+              <h3 className="text-xl text-[#f5f3f0]">Все события</h3>
+            </div>
+            <span className="rounded-full bg-[#c9a98d]/15 px-3 py-1 text-xs text-[#c9a98d]">{monthEvents.length}</span>
+          </div>
+          <div className="mt-4 max-h-[28rem] space-y-3 overflow-y-auto pr-2">
+            {monthEvents.map((event) => (
+              <CalendarEventCard
+                key={event.id}
+                event={event}
+                onEdit={() => openEvent(event)}
+                onSync={() => void syncCalendarEventToGoogle(event.id)}
+                onDelete={() => deleteCalendarEvent(event.id)}
+              />
+            ))}
+            {monthEvents.length === 0 && <p className="rounded-lg bg-[#2a2630]/45 p-4 text-sm text-[#a89b8f]">В этом месяце событий пока нет.</p>}
+          </div>
+        </GlassCard>
+      </div>
+
+      {editingEvent && (
+        <div className="calendar-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="calendar-modal">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-xs text-[#c9a98d]">{formatDate(event.date)}</p>
-                <h3 className="text-lg text-[#f5f3f0] mt-1">{event.title}</h3>
-                {event.description && <p className="text-sm text-[#a89b8f] mt-2">{event.description}</p>}
-                {event.sourceTaskId && <p className="text-xs text-[#a89b8f] mt-3">Создано из важной задачи</p>}
-                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-                  {event.googleSyncStatus === 'synced' && <span className="rounded-full bg-[#5c7a5e]/25 px-3 py-1 text-[#b9d0b7]">Google: синхронизировано</span>}
-                  {event.googleSyncStatus === 'pending' && <span className="rounded-full bg-[#c9a98d]/20 px-3 py-1 text-[#c9a98d]">Google: синхронизация</span>}
-                  {event.googleSyncStatus === 'not_connected' && <span className="rounded-full bg-[#2a2630] px-3 py-1 text-[#a89b8f]">Google: не подключен</span>}
-                  {event.googleSyncStatus === 'error' && <span className="rounded-full bg-[#8b3a52]/25 px-3 py-1 text-[#f0c5cf]">Google: ошибка</span>}
-                  {event.googleSyncError && <span className="text-[#a89b8f]">{event.googleSyncError}</span>}
-                </div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <button onClick={() => void syncCalendarEventToGoogle(event.id)} className="rounded-lg border border-[#c9a98d]/25 px-3 py-1 text-xs text-[#c9a98d] inline-flex items-center gap-1">
-                    <RefreshCw className="w-3 h-3" />Отправить в Google
-                  </button>
-                  {event.googleHtmlLink && (
-                    <a href={event.googleHtmlLink} target="_blank" rel="noreferrer" className="rounded-lg border border-[#c9a98d]/25 px-3 py-1 text-xs text-[#a89b8f] hover:text-[#c9a98d] inline-flex items-center gap-1">
-                      <ExternalLink className="w-3 h-3" />Открыть
-                    </a>
-                  )}
-                </div>
+                <p className="text-xs text-[#c9a98d]">Редактирование события</p>
+                <h3 className="text-2xl text-[#f5f3f0]">{editingEvent.title}</h3>
               </div>
-              <button onClick={() => deleteCalendarEvent(event.id)} className="text-[#a89b8f] hover:text-[#8b3a52]" aria-label={`Удалить ${event.title}`}><Trash2 className="w-4 h-4" /></button>
+              <button onClick={() => setEditingId(null)} className="calendar-icon-button" aria-label="Закрыть"><X className="w-4 h-4" /></button>
             </div>
-          </GlassCard>
-        ))}
-        {events.length === 0 && <GlassCard><p className="text-[#a89b8f]">Событий пока нет.</p></GlassCard>}
+            <div className="mt-5 grid gap-3">
+              <input value={editDraft.title} onChange={(event) => setEditDraft((value) => ({ ...value, title: event.target.value }))} className="field" />
+              <input type="date" value={editDraft.date} onChange={(event) => setEditDraft((value) => ({ ...value, date: event.target.value }))} className="field" />
+              <textarea value={editDraft.description} onChange={(event) => setEditDraft((value) => ({ ...value, description: event.target.value }))} className="field min-h-28" />
+            </div>
+            <div className="mt-5 flex flex-wrap gap-2">
+              <button onClick={saveEditing} className="primary-action flex items-center gap-2"><Save className="w-4 h-4" />Сохранить и отправить</button>
+              <button onClick={() => void syncCalendarEventToGoogle(editingEvent.id)} className="calendar-soft-button inline-flex items-center gap-2"><RefreshCw className="w-4 h-4" />Синхронизировать</button>
+              {editingEvent.googleHtmlLink && <a href={editingEvent.googleHtmlLink} target="_blank" rel="noreferrer" className="calendar-soft-button inline-flex items-center gap-2"><ExternalLink className="w-4 h-4" />Открыть в Google</a>}
+              <button onClick={() => (deleteCalendarEvent(editingEvent.id), setEditingId(null))} className="calendar-danger-button inline-flex items-center gap-2"><Trash2 className="w-4 h-4" />Удалить</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CalendarEventCard({ event, onEdit, onSync, onDelete }: { event: CalendarEvent; onEdit: () => void; onSync: () => void; onDelete: () => void }) {
+  return (
+    <div className="rounded-xl border border-[#c9a98d]/15 bg-[#2a2630]/45 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs text-[#c9a98d]">{formatDate(event.date)}</p>
+          <h4 className="mt-1 text-[#f5f3f0]">{event.title}</h4>
+          {event.description && <p className="mt-2 text-sm text-[#a89b8f]">{event.description}</p>}
+          {event.sourceTaskId && <p className="mt-2 text-xs text-[#a89b8f]">Создано из важной задачи</p>}
+        </div>
+        <button onClick={onDelete} className="text-[#a89b8f] hover:text-[#8b3a52]" aria-label={`Удалить ${event.title}`}><Trash2 className="w-4 h-4" /></button>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+        {event.source === 'google' && <span className="rounded-full bg-[#486a8d]/25 px-3 py-1 text-[#bdd7f0]">Источник: Google</span>}
+        {event.googleSyncStatus === 'synced' && <span className="rounded-full bg-[#5c7a5e]/25 px-3 py-1 text-[#b9d0b7]">Google: синхронизировано</span>}
+        {event.googleSyncStatus === 'pending' && <span className="rounded-full bg-[#c9a98d]/20 px-3 py-1 text-[#c9a98d]">Google: синхронизация</span>}
+        {event.googleSyncStatus === 'not_connected' && <span className="rounded-full bg-[#2a2630] px-3 py-1 text-[#a89b8f]">Google: не подключен</span>}
+        {event.googleSyncStatus === 'error' && <span className="rounded-full bg-[#8b3a52]/25 px-3 py-1 text-[#f0c5cf]">Google: ошибка</span>}
+        {event.googleSyncError && <span className="text-[#a89b8f]">{event.googleSyncError}</span>}
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button onClick={onEdit} className="calendar-soft-button inline-flex items-center gap-1"><Pencil className="w-3 h-3" />Редактировать</button>
+        <button onClick={onSync} className="calendar-soft-button inline-flex items-center gap-1"><RefreshCw className="w-3 h-3" />В Google</button>
+        {event.googleHtmlLink && <a href={event.googleHtmlLink} target="_blank" rel="noreferrer" className="calendar-soft-button inline-flex items-center gap-1"><ExternalLink className="w-3 h-3" />Открыть</a>}
       </div>
     </div>
   );

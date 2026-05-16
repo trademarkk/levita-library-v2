@@ -89,6 +89,15 @@ type GoogleCalendarStatus = {
   redirectUri: string;
 };
 
+type GoogleCalendarImportedEvent = {
+  googleEventId: string;
+  googleHtmlLink?: string | null;
+  title: string;
+  date: string;
+  description?: string | null;
+  updated?: string | null;
+};
+
 type LibraryContextValue = {
   state: LibraryState;
   currentUser: User | null;
@@ -143,6 +152,7 @@ type LibraryContextValue = {
   deleteCalendarEvent: (id: string) => void;
   refreshGoogleCalendarStatus: () => Promise<void>;
   connectGoogleCalendar: () => void;
+  importGoogleCalendarEvents: (timeMin: string, timeMax: string) => Promise<void>;
   syncCalendarEventToGoogle: (id: string) => Promise<void>;
   createExpenseCategory: (name: string) => void;
   deleteExpenseCategory: (id: string) => void;
@@ -465,6 +475,13 @@ async function removeGoogleCalendarEvent(googleEventId: string) {
   if (!response.ok) throw new Error(await readApiError(response));
 }
 
+async function fetchGoogleCalendarEvents(timeMin: string, timeMax: string) {
+  const params = new URLSearchParams({ timeMin, timeMax });
+  const response = await fetch(`/api/google/events?${params.toString()}`, { cache: 'no-store' });
+  if (!response.ok) throw new Error(await readApiError(response));
+  return await response.json() as { events: GoogleCalendarImportedEvent[] };
+}
+
 function getMinutes(value?: string | null) {
   if (!value) return -1;
   const date = new Date(value);
@@ -669,6 +686,38 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     connectGoogleCalendar() {
       window.location.href = '/api/google/connect';
     },
+    async importGoogleCalendarEvents(timeMin, timeMax) {
+      const result = await fetchGoogleCalendarEvents(timeMin, timeMax);
+      update((draft) => {
+        for (const googleEvent of result.events) {
+          const existing = draft.calendarEvents.find((event) => event.googleEventId === googleEvent.googleEventId);
+          if (existing) {
+            existing.title = googleEvent.title;
+            existing.date = googleEvent.date;
+            existing.description = googleEvent.description ?? null;
+            existing.googleHtmlLink = googleEvent.googleHtmlLink ?? null;
+            existing.googleSyncStatus = 'synced';
+            existing.googleSyncError = null;
+            existing.source = existing.source ?? 'google';
+            continue;
+          }
+          draft.calendarEvents.unshift({
+            id: newId('calendar-event'),
+            title: googleEvent.title,
+            date: googleEvent.date,
+            description: googleEvent.description ?? null,
+            sourceTaskId: null,
+            googleEventId: googleEvent.googleEventId,
+            googleHtmlLink: googleEvent.googleHtmlLink ?? null,
+            googleSyncStatus: 'synced',
+            googleSyncError: null,
+            source: 'google',
+            createdAt: googleEvent.updated ?? new Date().toISOString(),
+          });
+        }
+      });
+      void refreshGoogleCalendarStatus();
+    },
     async syncCalendarEventToGoogle(id) {
       const event = state.calendarEvents.find((item) => item.id === id);
       if (event) await syncGoogleEvent(event);
@@ -747,6 +796,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
             sourceTaskId: taskId,
             googleSyncStatus: 'pending',
             googleSyncError: null,
+            source: 'local',
             createdAt: new Date().toISOString(),
           }
         : null;
@@ -772,7 +822,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           } else {
             const calendarEventId = newId('calendar-event');
             task.calendarEventId = calendarEventId;
-            const event: CalendarEvent = { id: calendarEventId, title: task.title, date: task.deadline, description: task.description || null, sourceTaskId: task.id, googleSyncStatus: 'pending', googleSyncError: null, createdAt: new Date().toISOString() };
+            const event: CalendarEvent = { id: calendarEventId, title: task.title, date: task.deadline, description: task.description || null, sourceTaskId: task.id, googleSyncStatus: 'pending', googleSyncError: null, source: 'local', createdAt: new Date().toISOString() };
             draft.calendarEvents.unshift(event);
             eventToSync = event;
           }
@@ -994,6 +1044,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         sourceTaskId: null,
         googleSyncStatus: 'pending',
         googleSyncError: null,
+        source: 'local',
         createdAt: new Date().toISOString(),
       };
       update((draft) => {

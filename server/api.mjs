@@ -204,6 +204,18 @@ function googleEventPayload(input) {
   };
 }
 
+function normalizeGoogleEvent(event) {
+  const date = event.start?.date || String(event.start?.dateTime || '').slice(0, 10);
+  return {
+    googleEventId: event.id,
+    googleHtmlLink: event.htmlLink || null,
+    title: event.summary || 'Без названия',
+    date,
+    description: event.description || null,
+    updated: event.updated || null,
+  };
+}
+
 function getState() {
   const selectState = db.prepare('SELECT payload, updated_at FROM app_state WHERE id = ?');
   const row = selectState.get('main');
@@ -305,6 +317,24 @@ const server = http.createServer(async (request, response) => {
         body: JSON.stringify(googleEventPayload(body)),
       });
       send(response, 200, { googleEventId: event.id, googleHtmlLink: event.htmlLink });
+      return;
+    }
+
+    if (url.pathname === '/api/google/events' && request.method === 'GET') {
+      const timeMin = url.searchParams.get('timeMin');
+      const timeMax = url.searchParams.get('timeMax');
+      if (!timeMin || !timeMax) {
+        send(response, 400, { error: 'timeMin and timeMax are required' });
+        return;
+      }
+      const params = new URLSearchParams({
+        timeMin: `${timeMin}T00:00:00.000Z`,
+        timeMax: `${timeMax}T00:00:00.000Z`,
+        singleEvents: 'true',
+        orderBy: 'startTime',
+      });
+      const payload = await googleCalendarRequest(`/events?${params.toString()}`, { method: 'GET' });
+      send(response, 200, { events: (payload.items || []).map(normalizeGoogleEvent).filter((event) => event.date) });
       return;
     }
 
