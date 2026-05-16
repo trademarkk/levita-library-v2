@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { CalendarDays, ChevronLeft, ChevronRight, Download, ExternalLink, Pencil, Plus, RefreshCw, Save, Trash2, X } from 'lucide-react';
 import { GlassCard } from './GlassCard';
 import { TabNavigation } from './TabNavigation';
@@ -172,6 +172,7 @@ export function CalendarSection() {
   const [editDraft, setEditDraft] = useState({ title: '', date: todayKey(), description: '' });
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+  const importedMonthsRef = useRef<Set<string>>(new Set());
   const cells = useMemo(() => calendarCells(month), [month]);
   const monthEvents = useMemo(
     () => [...state.calendarEvents]
@@ -194,6 +195,25 @@ export function CalendarSection() {
     if (!sameMonth(selectedDate, month)) setSelectedDate(`${month}-01`);
   }, [month, selectedDate]);
 
+  const save = () => {
+    if (!draft.title.trim() || !draft.date) return;
+    createCalendarEvent(draft);
+    setDraft({ title: '', date: todayKey(), description: '' });
+  };
+
+  const importFromGoogle = async (targetMonth = month) => {
+    setIsImporting(true);
+    setImportError(null);
+    try {
+      await importGoogleCalendarEvents(`${targetMonth}-01`, nextMonthStart(targetMonth));
+      importedMonthsRef.current.add(targetMonth);
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : 'Не удалось загрузить события Google.');
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
   useEffect(() => {
     if (!editingEvent) return;
     setEditDraft({
@@ -203,23 +223,11 @@ export function CalendarSection() {
     });
   }, [editingEvent?.id]);
 
-  const save = () => {
-    if (!draft.title.trim() || !draft.date) return;
-    createCalendarEvent(draft);
-    setDraft({ title: '', date: todayKey(), description: '' });
-  };
-
-  const importFromGoogle = async () => {
-    setIsImporting(true);
-    setImportError(null);
-    try {
-      await importGoogleCalendarEvents(`${month}-01`, nextMonthStart(month));
-    } catch (error) {
-      setImportError(error instanceof Error ? error.message : 'Не удалось загрузить события Google.');
-    } finally {
-      setIsImporting(false);
-    }
-  };
+  useEffect(() => {
+    if (!googleCalendarStatus?.connected) return;
+    if (importedMonthsRef.current.has(month)) return;
+    void importFromGoogle(month);
+  }, [googleCalendarStatus?.connected, month]);
 
   const openEvent = (event: CalendarEvent) => {
     setEditingId(event.id);
@@ -267,11 +275,14 @@ export function CalendarSection() {
                 Обновить статус
               </button>
               <button onClick={() => void importFromGoogle()} disabled={!googleCalendarStatus?.connected || isImporting} className="rounded-lg border border-[#c9a98d]/25 px-3 py-1 text-xs text-[#a89b8f] hover:text-[#c9a98d] disabled:opacity-50">
-                {isImporting ? 'Загружаем...' : 'Загрузить месяц'}
+                {isImporting ? 'Загружаем...' : 'Обновить события'}
               </button>
             </div>
           </div>
         </div>
+        {googleCalendarStatus?.connected && !isImporting && importedMonthsRef.current.has(month) && (
+          <p className="mb-4 text-xs text-[#a89b8f]">События Google за выбранный месяц загружены.</p>
+        )}
         {importError && <p className="mb-4 text-sm text-[#f0c5cf]">{importError}</p>}
         <div className="grid md:grid-cols-[1.2fr_180px] gap-3">
           <input value={draft.title} onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))} placeholder="Событие" className="field" />
