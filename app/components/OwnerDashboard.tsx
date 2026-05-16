@@ -21,7 +21,7 @@ const tabs = [
   { id: 'templates', label: 'Шаблоны сообщений' },
   { id: 'document-templates', label: 'Шаблоны документов' },
   { id: 'links', label: 'Рабочие ссылки и таблицы' },
-  { id: 'checklists', label: 'Чек-листы' },
+  { id: 'checklists', label: 'Контроль чек-листов' },
   { id: 'calls', label: 'Чек-лист звонка' },
   { id: 'refunds', label: 'Возвраты' },
 ];
@@ -292,24 +292,33 @@ function OwnerDocumentTemplatesSection() {
 function MonitoringSection() {
   const { ownerChecklistReports, refreshState } = useLibrary();
   const reports = ownerChecklistReports();
-  const [selectedAssigneeId, setSelectedAssigneeId] = useState<string | null>(null);
-  const selectedReport = reports.find((report) => report.assignee.id === selectedAssigneeId) ?? null;
-  const grouped = reports.reduce<Record<string, typeof reports>>((acc, report) => {
-    const date = new Date(report.checklist.date);
-    const key = Number.isNaN(date.getTime()) ? 'unknown-date' : date.toISOString().slice(0, 10);
+  const [selectedChecklistId, setSelectedChecklistId] = useState<string | null>(null);
+  const selectedReport = reports.find((report) => report.checklist.id === selectedChecklistId) ?? null;
+  const now = new Date();
+  const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const getDateKey = (value: string) => {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return 'unknown-date';
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  };
+  const todayReports = reports.filter((report) => getDateKey(report.checklist.date) === todayKey);
+  const historyReports = reports.filter((report) => getDateKey(report.checklist.date) !== todayKey);
+  const grouped = historyReports.reduce<Record<string, typeof reports>>((acc, report) => {
+    const key = getDateKey(report.checklist.date);
     acc[key] = [...(acc[key] ?? []), report];
     return acc;
   }, {});
 
   if (selectedReport) {
-    return <OwnerChecklistSnapshot report={selectedReport} onBack={() => setSelectedAssigneeId(null)} />;
+    return <OwnerChecklistSnapshot report={selectedReport} onBack={() => setSelectedChecklistId(null)} />;
   }
 
   return (
     <div className="space-y-8">
       <div>
         <h2 className="text-2xl text-[#f5f3f0]">Контроль чек-листов администраторов</h2>
-        <p className="text-[#a89b8f] mt-2">Показываются только администраторы и старшие администраторы.</p>
+        <p className="text-[#a89b8f] mt-2">Сегодняшние чек-листы показаны полностью, ниже хранится история прошлых дат.</p>
       </div>
       <button onClick={() => void refreshState()} className="px-4 py-2 rounded-lg border border-[#c9a98d]/20 text-[#f5f3f0] hover:bg-[#2a2630] w-fit">
         Обновить из базы
@@ -319,7 +328,45 @@ function MonitoringSection() {
           <p className="text-[#a89b8f]">Пока нет чек-листов администраторов для контроля.</p>
         </GlassCard>
       )}
-      {Object.entries(grouped).map(([dateKey, items]) => (
+      <div>
+        <h3 className="text-xl mb-4 text-[#f5f3f0]">Сегодня</h3>
+        <div className="space-y-4">
+          {todayReports.map((report, i) => (
+            <GlassCard key={report.checklist.id} delay={i * 0.04}>
+              <div className="space-y-4">
+                <div>
+                  <h4 className="text-[#f5f3f0]">{report.assignee.name}</h4>
+                  <p className="text-sm text-[#a89b8f]">{roleLabels[report.assignee.role]} · {formatDate(report.checklist.date)} · {report.completedCount}/{report.checklist.items.length}</p>
+                </div>
+                <button onClick={() => setSelectedChecklistId(report.checklist.id)} className="px-4 py-2 rounded-lg bg-[#c9a98d]/20 text-[#c9a98d] hover:bg-[#c9a98d]/30 w-fit">
+                  Открыть чек-лист
+                </button>
+                <div className="grid xl:grid-cols-3 gap-3">
+                  <ControlReportCard slot="14:00" status={report.report14} />
+                  <ControlReportCard slot="18:00" status={report.report18} />
+                  <ControlReportCard slot="22:00" status={report.report22} />
+                </div>
+                <div className="space-y-2">
+                  {report.checklist.items.map((item) => (
+                    <div key={item.id} className="flex items-center gap-3 p-3 rounded-lg bg-[#2a2630]/50">
+                      <span className={`w-3 h-3 rounded-full ${item.completed ? 'bg-[#5e6d58]' : 'bg-[#8b3a52]'}`} />
+                      <span className={`flex-1 ${item.completed ? 'text-[#a89b8f] line-through' : 'text-[#f5f3f0]'}`}>{item.label}</span>
+                      <span className="text-xs text-[#a89b8f]">{formatTime(item.completedAt)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </GlassCard>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <h3 className="text-xl mb-4 text-[#f5f3f0]">История чек-листов</h3>
+        {historyReports.length === 0 && <GlassCard><p className="text-[#a89b8f]">Прошлых чек-листов пока нет.</p></GlassCard>}
+      </div>
+
+      {Object.entries(grouped).sort(([left], [right]) => right.localeCompare(left)).map(([dateKey, items]) => (
         <div key={dateKey}>
           <h3 className="text-xl mb-4 text-[#f5f3f0]">{formatDate(dateKey)}</h3>
           <div className="space-y-4">
@@ -330,7 +377,7 @@ function MonitoringSection() {
                     <h4 className="text-[#f5f3f0]">{report.assignee.name}</h4>
                     <p className="text-sm text-[#a89b8f]">{roleLabels[report.assignee.role]} · {report.completedCount}/{report.checklist.items.length}</p>
                   </div>
-                  <button onClick={() => setSelectedAssigneeId(report.assignee.id)} className="px-4 py-2 rounded-lg bg-[#c9a98d]/20 text-[#c9a98d] hover:bg-[#c9a98d]/30 w-fit">
+                  <button onClick={() => setSelectedChecklistId(report.checklist.id)} className="px-4 py-2 rounded-lg bg-[#c9a98d]/20 text-[#c9a98d] hover:bg-[#c9a98d]/30 w-fit">
                     Открыть чек-лист
                   </button>
                   <div className="grid xl:grid-cols-3 gap-3">
@@ -405,14 +452,40 @@ function ControlReportCard({ slot, status }: { slot: string; status: ChecklistCo
 }
 
 function CallsSection() {
-  const { state } = useLibrary();
+  const { state, addCallChecklistItem, updateCallChecklistItem, deleteCallChecklistItem } = useLibrary();
+  const [draft, setDraft] = useState('');
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+
+  const save = () => {
+    if (!draft.trim()) return;
+    if (editingIndex === null) addCallChecklistItem(draft);
+    else updateCallChecklistItem(editingIndex, draft);
+    setDraft('');
+    setEditingIndex(null);
+  };
   return (
-    <GlassCard>
+    <div className="space-y-4">
+      <GlassCard>
+        <h2 className="text-2xl text-[#f5f3f0] mb-4">Чек-лист звонка</h2>
+        <div className="grid md:grid-cols-[1fr_auto] gap-3">
+          <input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Пункт чек-листа звонка" className="field" />
+          <button onClick={save} className="primary-action">{editingIndex === null ? 'Добавить' : 'Сохранить'}</button>
+        </div>
+        {editingIndex !== null && <button onClick={() => { setEditingIndex(null); setDraft(''); }} className="mt-3 text-sm text-[#a89b8f] hover:text-[#c9a98d]">Отменить редактирование</button>}
+      </GlassCard>
+      <GlassCard>
       <h2 className="text-2xl text-[#f5f3f0] mb-4">Чек-лист звонка</h2>
       <div className="space-y-2">
-        {state.callChecklist.map((item) => <div key={item} className="p-3 rounded-lg bg-[#2a2630]/60 text-[#f5f3f0]">{item}</div>)}
+        {state.callChecklist.map((item, index) => (
+          <div key={`${item}-${index}`} className="flex items-center gap-3 p-3 rounded-lg bg-[#2a2630]/60 text-[#f5f3f0]">
+            <span className="flex-1">{item}</span>
+            <button onClick={() => { setEditingIndex(index); setDraft(item); }} className="text-[#a89b8f] hover:text-[#c9a98d]" aria-label={`Редактировать ${item}`}><Edit2 className="w-4 h-4" /></button>
+            <button onClick={() => deleteCallChecklistItem(index)} className="text-[#a89b8f] hover:text-[#8b3a52]" aria-label={`Удалить ${item}`}><Trash2 className="w-4 h-4" /></button>
+          </div>
+        ))}
       </div>
     </GlassCard>
+    </div>
   );
 }
 

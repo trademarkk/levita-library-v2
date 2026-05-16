@@ -102,7 +102,7 @@ function TasksSection() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-8">
       <div className="flex justify-end">
         <button onClick={() => setShowForm((value) => !value)} className="flex items-center gap-2 px-4 py-2 bg-[#c9a98d]/20 text-[#c9a98d] rounded-lg hover:bg-[#c9a98d]/30">
           <Plus className="w-4 h-4" />
@@ -163,11 +163,26 @@ function TasksSection() {
 function AdminChecklistMonitor() {
   const { adminChecklistReports, refreshState } = useLibrary();
   const reports = adminChecklistReports();
-  const [selectedAssigneeId, setSelectedAssigneeId] = useState<string | null>(null);
-  const selectedReport = reports.find((report) => report.assignee.id === selectedAssigneeId) ?? null;
+  const [selectedChecklistId, setSelectedChecklistId] = useState<string | null>(null);
+  const selectedReport = reports.find((report) => report.checklist.id === selectedChecklistId) ?? null;
+  const now = new Date();
+  const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const getDateKey = (value: string) => {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return 'unknown-date';
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  };
+  const todayReports = reports.filter((report) => getDateKey(report.checklist.date) === todayKey);
+  const historyReports = reports.filter((report) => getDateKey(report.checklist.date) !== todayKey);
+  const grouped = historyReports.reduce<Record<string, typeof reports>>((acc, report) => {
+    const key = getDateKey(report.checklist.date);
+    acc[key] = [...(acc[key] ?? []), report];
+    return acc;
+  }, {});
 
   if (selectedReport) {
-    return <ChecklistSnapshot report={selectedReport} onBack={() => setSelectedAssigneeId(null)} />;
+    return <ChecklistSnapshot report={selectedReport} onBack={() => setSelectedChecklistId(null)} />;
   }
 
   return (
@@ -180,14 +195,76 @@ function AdminChecklistMonitor() {
           <p className="text-[#a89b8f]">Пока нет чек-листов администраторов для контроля.</p>
         </GlassCard>
       )}
-      {reports.map((report, idx) => (
+      <div>
+        <h3 className="text-xl mb-4 text-[#f5f3f0]">Сегодня</h3>
+        <div className="space-y-4">
+          {todayReports.map((report, idx) => (
+            <GlassCard key={report.checklist.id} delay={idx * 0.05}>
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-lg text-[#f5f3f0]">{report.assignee.name}</h3>
+                  <p className="text-sm text-[#a89b8f]">{roleLabels[report.assignee.role]} · {formatDate(report.checklist.date)} · {report.completedCount}/{report.checklist.items.length}</p>
+                </div>
+                <button onClick={() => setSelectedChecklistId(report.checklist.id)} className="px-4 py-2 rounded-lg bg-[#c9a98d]/20 text-[#c9a98d] hover:bg-[#c9a98d]/30 w-fit">
+                  Открыть чек-лист
+                </button>
+                <div className="grid xl:grid-cols-3 gap-3">
+                  <ReportStatusCard slot="14:00" status={report.report14} />
+                  <ReportStatusCard slot="18:00" status={report.report18} />
+                  <ReportStatusCard slot="22:00" status={report.report22} />
+                </div>
+                <div className="space-y-2">
+                  {report.checklist.items.map((item) => (
+                    <div key={item.id} className="flex items-center gap-3 p-3 rounded-lg bg-[#2a2630]/50">
+                      <span className={`w-3 h-3 rounded-full ${item.completed ? 'bg-[#5e6d58]' : 'bg-[#8b3a52]'}`} />
+                      <span className={`flex-1 ${item.completed ? 'text-[#a89b8f] line-through' : 'text-[#f5f3f0]'}`}>{item.label}</span>
+                      <span className="text-xs text-[#a89b8f]">{formatTime(item.completedAt)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </GlassCard>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <h3 className="text-xl mb-4 text-[#f5f3f0]">История чек-листов</h3>
+        {historyReports.length === 0 && <GlassCard><p className="text-[#a89b8f]">Прошлых чек-листов пока нет.</p></GlassCard>}
+      </div>
+      {Object.entries(grouped).sort(([left], [right]) => right.localeCompare(left)).map(([dateKey, items]) => (
+        <div key={dateKey}>
+          <h3 className="text-xl mb-4 text-[#f5f3f0]">{formatDate(dateKey)}</h3>
+          <div className="space-y-4">
+            {items.map((report, idx) => (
+              <GlassCard key={report.checklist.id} delay={idx * 0.05}>
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="text-lg text-[#f5f3f0]">{report.assignee.name}</h3>
+                    <p className="text-sm text-[#a89b8f]">{roleLabels[report.assignee.role]} · {report.completedCount}/{report.checklist.items.length}</p>
+                  </div>
+                  <button onClick={() => setSelectedChecklistId(report.checklist.id)} className="px-4 py-2 rounded-lg bg-[#c9a98d]/20 text-[#c9a98d] hover:bg-[#c9a98d]/30 w-fit">
+                    Открыть чек-лист
+                  </button>
+                  <div className="grid xl:grid-cols-3 gap-3">
+                    <ReportStatusCard slot="14:00" status={report.report14} />
+                    <ReportStatusCard slot="18:00" status={report.report18} />
+                    <ReportStatusCard slot="22:00" status={report.report22} />
+                  </div>
+                </div>
+              </GlassCard>
+            ))}
+          </div>
+        </div>
+      ))}
+      {false && reports.map((report, idx) => (
         <GlassCard key={report.checklist.id} delay={idx * 0.05}>
           <div className="space-y-4">
             <div>
               <h3 className="text-lg text-[#f5f3f0]">{report.assignee.name}</h3>
               <p className="text-sm text-[#a89b8f]">{roleLabels[report.assignee.role]} · {formatDate(report.checklist.date)} · {report.completedCount}/{report.checklist.items.length}</p>
             </div>
-            <button onClick={() => setSelectedAssigneeId(report.assignee.id)} className="px-4 py-2 rounded-lg bg-[#c9a98d]/20 text-[#c9a98d] hover:bg-[#c9a98d]/30 w-fit">
+            <button onClick={() => setSelectedChecklistId(report.checklist.id)} className="px-4 py-2 rounded-lg bg-[#c9a98d]/20 text-[#c9a98d] hover:bg-[#c9a98d]/30 w-fit">
               Открыть чек-лист
             </button>
             <div className="grid xl:grid-cols-3 gap-3">

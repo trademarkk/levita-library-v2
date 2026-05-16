@@ -226,6 +226,7 @@ export function CalendarSection() {
 export function ExpensesSection() {
   const { state, createExpense, deleteExpense, createExpenseCategory, deleteExpenseCategory } = useLibrary();
   const [activeTab, setActiveTab] = useState('STAVROPOLSKAYA');
+  const [month, setMonth] = useState(currentMonthKey());
   const [categoryName, setCategoryName] = useState('');
   const [draft, setDraft] = useState({
     date: todayKey(),
@@ -241,7 +242,8 @@ export function ExpensesSection() {
     { id: 'MACHUGI', label: 'Расходы Мачуги' },
     { id: 'SUMMARY', label: 'Расходы СВОД' },
   ];
-  const visibleExpenses = activeTab === 'SUMMARY' ? state.expenses : state.expenses.filter((expense) => expense.studio === activeTab);
+  const monthlyExpenses = state.expenses.filter((expense) => expense.date.startsWith(month));
+  const visibleExpenses = activeTab === 'SUMMARY' ? monthlyExpenses : monthlyExpenses.filter((expense) => expense.studio === activeTab);
   const total = visibleExpenses.reduce((sum, expense) => sum + expense.amount, 0);
 
   const saveExpense = () => {
@@ -271,11 +273,17 @@ export function ExpensesSection() {
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-5">
           <div>
             <h2 className="text-2xl text-[#f5f3f0]">Расходы</h2>
-            <p className="text-sm text-[#a89b8f] mt-1">Итого в текущем срезе: <span className="text-[#c9a98d]">{money(total)}</span></p>
+            <p className="text-sm text-[#a89b8f] mt-1">Итого за выбранный месяц: <span className="text-[#c9a98d]">{money(total)}</span></p>
           </div>
-          <button onClick={() => downloadExcel(`expenses-${activeTab}.xls`, [['Дата', 'Расход', 'Счет', 'Статья', 'Студия', 'Комментарий'], ...exportRows])} className="primary-action flex items-center gap-2">
-            <Download className="w-4 h-4" />Выгрузить в Excel
-          </button>
+          <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
+            <label className="text-sm text-[#a89b8f]">
+              Месяц
+              <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="field mt-2 min-w-52" />
+            </label>
+            <button onClick={() => downloadExcel(`expenses-${activeTab}-${month}.xls`, [['Дата', 'Расход', 'Счет', 'Статья', 'Студия', 'Комментарий'], ...exportRows])} className="primary-action flex items-center gap-2">
+              <Download className="w-4 h-4" />Выгрузить в Excel
+            </button>
+          </div>
         </div>
 
         <div className="grid md:grid-cols-3 xl:grid-cols-6 gap-3">

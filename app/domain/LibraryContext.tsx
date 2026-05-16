@@ -104,6 +104,9 @@ type LibraryContextValue = {
   createEmployee: (input: CreateEmployeeInput) => void;
   updateEmployee: (id: string, input: Partial<Pick<User, 'name' | 'email' | 'password' | 'role' | 'status'>>) => void;
   deleteEmployee: (id: string) => void;
+  addCallChecklistItem: (label: string) => void;
+  updateCallChecklistItem: (index: number, label: string) => void;
+  deleteCallChecklistItem: (index: number) => void;
   createTask: (input: Pick<TaskTemplate, 'title' | 'period' | 'description' | 'priority'> & Partial<Pick<TaskTemplate, 'deadline' | 'addToCalendar'>>) => void;
   updateTask: (id: string, input: Partial<Pick<TaskTemplate, 'title' | 'period' | 'description' | 'priority' | 'status' | 'deadline' | 'addToCalendar'>>) => void;
   toggleTask: (id: string) => void;
@@ -160,17 +163,23 @@ function newId(prefix: string) {
 }
 
 function startOfTodayIso() {
-  const date = new Date();
-  date.setHours(0, 0, 0, 0);
-  return date.toISOString();
+  return dateKey();
+}
+
+function dateKey(value?: string | Date | null) {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) return '';
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function checklistDateKey(checklist: Pick<DailyChecklist, 'date' | 'createdAt'>) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(checklist.date)) return checklist.date;
+  return dateKey(checklist.date) || dateKey(checklist.createdAt);
 }
 
 function isToday(value?: string | null) {
   if (!value) return false;
-  const date = new Date(value);
-  const today = new Date();
-  if (Number.isNaN(date.getTime())) return false;
-  return date.getFullYear() === today.getFullYear() && date.getMonth() === today.getMonth() && date.getDate() === today.getDate();
+  return dateKey(value) === dateKey();
 }
 
 function latestIso(left?: string | null, right?: string | null) {
@@ -240,7 +249,33 @@ function mergeChecklistReports(left: ChecklistReport[], right: ChecklistReport[]
   });
 }
 
-function mergeChecklistItems(left: DailyChecklist['items'], right: DailyChecklist['items'], isAdminRole: boolean) {
+function normalizeChecklistReportForDate(report: ChecklistReport, targetDate: string) {
+  if (targetDate === dateKey()) return normalizeChecklistReportForToday(report);
+  return {
+    ...report,
+    submittedAt: report.submittedAt ?? null,
+    sentToTelegram: Boolean(report.sentToTelegram),
+    telegramSentAt: report.telegramSentAt ?? (report.sentToTelegram ? report.submittedAt ?? null : null),
+  };
+}
+
+function mergeChecklistReportsForDate(left: ChecklistReport[], right: ChecklistReport[], targetDate: string) {
+  return (['14:00', '18:00', '22:00'] as ChecklistReportSlot[]).map((slot) => {
+    const primary = left.find((report) => report.slot === slot);
+    const incoming = right.find((report) => report.slot === slot);
+    const report = { ...blankReport(slot, primary?.adminName || incoming?.adminName || ''), ...primary, ...incoming };
+    const submittedAt = latestIso(primary?.submittedAt, incoming?.submittedAt);
+    const telegramSentAt = latestIso(primary?.telegramSentAt, incoming?.telegramSentAt);
+    return normalizeChecklistReportForDate({
+      ...report,
+      submittedAt,
+      sentToTelegram: Boolean((primary?.sentToTelegram || incoming?.sentToTelegram) && submittedAt),
+      telegramSentAt,
+    }, targetDate);
+  });
+}
+
+function mergeChecklistItems(left: DailyChecklist['items'], right: DailyChecklist['items'], isAdminRole: boolean, targetDate = dateKey()) {
   const maxLength = Math.max(left.length, right.length, isAdminRole ? CANONICAL_ADMIN_CHECKLIST_ITEMS.length : 0);
   return Array.from({ length: maxLength }, (_, index) => {
     const primary = left[index];
@@ -249,7 +284,9 @@ function mergeChecklistItems(left: DailyChecklist['items'], right: DailyChecklis
       ? CANONICAL_ADMIN_CHECKLIST_ITEMS[index]
       : primary?.label ?? incoming?.label ?? '';
     const completedAt = latestIso(primary?.completedAt, incoming?.completedAt);
-    const completed = Boolean(completedAt && isToday(completedAt));
+    const completed = targetDate === dateKey()
+      ? Boolean(completedAt && isToday(completedAt))
+      : Boolean(primary?.completed || incoming?.completed || completedAt);
     return {
       id: primary?.id ?? incoming?.id ?? newId('checklist-item'),
       label,
@@ -262,14 +299,15 @@ function mergeChecklistItems(left: DailyChecklist['items'], right: DailyChecklis
 
 function mergeUserChecklists(existing: DailyChecklist, incoming: DailyChecklist, assignee?: User) {
   const isAdminRole = assignee?.role === 'ADMIN' || assignee?.role === 'SENIOR_ADMIN' || existing.role === 'ADMIN' || existing.role === 'SENIOR_ADMIN' || incoming.role === 'ADMIN' || incoming.role === 'SENIOR_ADMIN';
+  const targetDate = checklistDateKey(existing) || checklistDateKey(incoming) || dateKey();
   return {
     ...existing,
     role: assignee?.role ?? existing.role,
-    date: startOfTodayIso(),
+    date: targetDate,
     createdAt: latestIso(existing.createdAt, incoming.createdAt) ?? existing.createdAt,
     title: existing.title || incoming.title,
-    items: mergeChecklistItems(existing.items, incoming.items, isAdminRole),
-    reports: isAdminRole ? mergeChecklistReports(existing.reports, incoming.reports) : [],
+    items: mergeChecklistItems(existing.items, incoming.items, isAdminRole, targetDate),
+    reports: isAdminRole ? mergeChecklistReportsForDate(existing.reports, incoming.reports, targetDate) : [],
   };
 }
 
@@ -286,22 +324,25 @@ function normalizeState(raw: Partial<LibraryState> | null): LibraryState {
     joinDate: user.joinDate || 'май 2026',
   })) as User[];
 
+  const today = dateKey();
   const normalizedChecklists = (raw.checklists || [])
     .filter((checklist) => users.some((user) => user.id === checklist.assignedTo))
     .map((checklist) => {
       const assignee = users.find((user) => user.id === checklist.assignedTo);
       const isAdminRole = assignee?.role === 'ADMIN' || assignee?.role === 'SENIOR_ADMIN' || checklist.role === 'ADMIN' || checklist.role === 'SENIOR_ADMIN';
+      const targetDate = checklistDateKey(checklist) || today;
+      const isTodayChecklist = targetDate === today;
       return {
         ...checklist,
         role: assignee?.role ?? checklist.role,
-        date: startOfTodayIso(),
+        date: targetDate,
         items: Array.isArray(checklist.items)
           ? checklist.items.map((item, index) => ({
               ...item,
               label: isAdminRole && index < CANONICAL_ADMIN_CHECKLIST_ITEMS.length ? CANONICAL_ADMIN_CHECKLIST_ITEMS[index] : item.label,
-              completed: Boolean(item.completedAt && isToday(item.completedAt)),
-              completedAt: item.completedAt && isToday(item.completedAt) ? item.completedAt : null,
-              completedBy: item.completedAt && isToday(item.completedAt) ? item.completedBy ?? null : null,
+              completed: isTodayChecklist ? Boolean(item.completedAt && isToday(item.completedAt)) : Boolean(item.completed || item.completedAt),
+              completedAt: isTodayChecklist ? (item.completedAt && isToday(item.completedAt) ? item.completedAt : null) : item.completedAt ?? null,
+              completedBy: isTodayChecklist ? (item.completedAt && isToday(item.completedAt) ? item.completedBy ?? null : null) : item.completedBy ?? null,
             }))
           : [],
         reports: isAdminRole
@@ -309,10 +350,10 @@ function normalizeState(raw: Partial<LibraryState> | null): LibraryState {
               const existing = checklist.reports?.find((report) => report.slot === slot);
               const report = { ...blankReport(slot, assignee?.name ?? ''), ...existing };
               return {
-                ...normalizeChecklistReportForToday({
+                ...normalizeChecklistReportForDate({
                   ...report,
                   telegramSentAt: report.telegramSentAt ?? (report.sentToTelegram ? report.submittedAt ?? null : null),
-                }),
+                }, targetDate),
               };
             })
           : [],
@@ -321,16 +362,17 @@ function normalizeState(raw: Partial<LibraryState> | null): LibraryState {
   const checklistsByUser = new Map<string, DailyChecklist>();
   normalizedChecklists.forEach((checklist) => {
     const assignee = users.find((user) => user.id === checklist.assignedTo);
-    const existing = checklistsByUser.get(checklist.assignedTo);
+    const key = `${checklist.assignedTo}:${checklistDateKey(checklist) || today}`;
+    const existing = checklistsByUser.get(key);
     checklistsByUser.set(
-      checklist.assignedTo,
+      key,
       existing ? mergeUserChecklists(existing, checklist, assignee) : mergeUserChecklists(checklist, checklist, assignee),
     );
   });
   const checklists = Array.from(checklistsByUser.values());
   users.forEach((user) => {
     const needsChecklist = user.role === 'ADMIN' || user.role === 'SENIOR_ADMIN' || user.role === 'ASSISTANT';
-    const hasChecklist = checklists.some((checklist) => checklist.assignedTo === user.id);
+    const hasChecklist = checklists.some((checklist) => checklist.assignedTo === user.id && checklistDateKey(checklist) === today);
     if (needsChecklist && !hasChecklist) checklists.unshift(createDailyChecklist(user));
   });
 
@@ -629,7 +671,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       return role ? state.users.filter((user) => user.role === role) : state.users;
     },
     checklistForUser(userId) {
-      return state.checklists.find((checklist) => checklist.assignedTo === userId) ?? null;
+      return state.checklists.find((checklist) => checklist.assignedTo === userId && checklistDateKey(checklist) === dateKey()) ?? null;
     },
     adminChecklistReports() {
       return buildAdminChecklistReports();
@@ -668,6 +710,23 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         if (!user || user.role === 'OWNER') return;
         draft.users = draft.users.filter((item) => item.id !== id);
         draft.checklists = draft.checklists.filter((item) => item.assignedTo !== id);
+      });
+    },
+    addCallChecklistItem(label) {
+      if (!label.trim()) return;
+      update((draft) => {
+        draft.callChecklist.push(label.trim());
+      });
+    },
+    updateCallChecklistItem(index, label) {
+      if (!label.trim()) return;
+      update((draft) => {
+        if (draft.callChecklist[index] !== undefined) draft.callChecklist[index] = label.trim();
+      });
+    },
+    deleteCallChecklistItem(index) {
+      update((draft) => {
+        draft.callChecklist = draft.callChecklist.filter((_, itemIndex) => itemIndex !== index);
       });
     },
     createTask(input) {
