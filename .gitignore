@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.log
+.env
+.env.*
+!.env.example
+
+# Local runtime state
+data/*.sqlite
+data/*.sqlite-*
+
+# Local QA artifacts
+qa-screenshots/
+qa-screenshots-stage2/

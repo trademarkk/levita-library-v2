@@ -1,0 +1,24 @@
+import { ReactNode } from 'react';
+import { motion } from 'motion/react';
+
+interface GlassCardProps {
+  children: ReactNode;
+  className?: string;
+  delay?: number;
+}
+
+export function GlassCard({ children, className = '', delay = 0 }: GlassCardProps) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5, delay }}
+      className={`relative group ${className}`}
+    >
+      <div className="absolute inset-0 bg-gradient-to-b from-[#c9a98d]/5 to-transparent rounded-xl blur-xl group-hover:blur-2xl transition-all duration-500"></div>
+      <div className="relative bg-[#1a1820]/60 backdrop-blur-xl border border-[#c9a98d]/20 rounded-xl p-6 hover:border-[#c9a98d]/40 transition-all duration-500">
+        {children}
+      </div>
+    </motion.div>
+  );
+}
