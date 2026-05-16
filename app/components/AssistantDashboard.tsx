@@ -186,7 +186,7 @@ function AdminChecklistMonitor() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-8">
       <button onClick={() => void refreshState()} className="px-4 py-2 rounded-lg border border-[#c9a98d]/20 text-[#f5f3f0] hover:bg-[#2a2630]">
         Обновить из базы
       </button>
@@ -197,10 +197,10 @@ function AdminChecklistMonitor() {
       )}
       <div>
         <h3 className="text-xl mb-4 text-[#f5f3f0]">Сегодня</h3>
-        <div className="space-y-4">
+        <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
           {todayReports.map((report, idx) => (
             <GlassCard key={report.checklist.id} delay={idx * 0.05}>
-              <div className="space-y-4">
+              <div className="flex flex-col gap-4">
                 <div>
                   <h3 className="text-lg text-[#f5f3f0]">{report.assignee.name}</h3>
                   <p className="text-sm text-[#a89b8f]">{roleLabels[report.assignee.role]} · {formatDate(report.checklist.date)} · {report.completedCount}/{report.checklist.items.length}</p>
@@ -208,20 +208,6 @@ function AdminChecklistMonitor() {
                 <button onClick={() => setSelectedChecklistId(report.checklist.id)} className="px-4 py-2 rounded-lg bg-[#c9a98d]/20 text-[#c9a98d] hover:bg-[#c9a98d]/30 w-fit">
                   Открыть чек-лист
                 </button>
-                <div className="grid xl:grid-cols-3 gap-3">
-                  <ReportStatusCard slot="14:00" status={report.report14} />
-                  <ReportStatusCard slot="18:00" status={report.report18} />
-                  <ReportStatusCard slot="22:00" status={report.report22} />
-                </div>
-                <div className="space-y-2">
-                  {report.checklist.items.map((item) => (
-                    <div key={item.id} className="flex items-center gap-3 p-3 rounded-lg bg-[#2a2630]/50">
-                      <span className={`w-3 h-3 rounded-full ${item.completed ? 'bg-[#5e6d58]' : 'bg-[#8b3a52]'}`} />
-                      <span className={`flex-1 ${item.completed ? 'text-[#a89b8f] line-through' : 'text-[#f5f3f0]'}`}>{item.label}</span>
-                      <span className="text-xs text-[#a89b8f]">{formatTime(item.completedAt)}</span>
-                    </div>
-                  ))}
-                </div>
               </div>
             </GlassCard>
           ))}
@@ -246,34 +232,11 @@ function AdminChecklistMonitor() {
                   <button onClick={() => setSelectedChecklistId(report.checklist.id)} className="px-4 py-2 rounded-lg bg-[#c9a98d]/20 text-[#c9a98d] hover:bg-[#c9a98d]/30 w-fit">
                     Открыть чек-лист
                   </button>
-                  <div className="grid xl:grid-cols-3 gap-3">
-                    <ReportStatusCard slot="14:00" status={report.report14} />
-                    <ReportStatusCard slot="18:00" status={report.report18} />
-                    <ReportStatusCard slot="22:00" status={report.report22} />
-                  </div>
                 </div>
               </GlassCard>
             ))}
           </div>
         </div>
-      ))}
-      {false && reports.map((report, idx) => (
-        <GlassCard key={report.checklist.id} delay={idx * 0.05}>
-          <div className="space-y-4">
-            <div>
-              <h3 className="text-lg text-[#f5f3f0]">{report.assignee.name}</h3>
-              <p className="text-sm text-[#a89b8f]">{roleLabels[report.assignee.role]} · {formatDate(report.checklist.date)} · {report.completedCount}/{report.checklist.items.length}</p>
-            </div>
-            <button onClick={() => setSelectedChecklistId(report.checklist.id)} className="px-4 py-2 rounded-lg bg-[#c9a98d]/20 text-[#c9a98d] hover:bg-[#c9a98d]/30 w-fit">
-              Открыть чек-лист
-            </button>
-            <div className="grid xl:grid-cols-3 gap-3">
-              <ReportStatusCard slot="14:00" status={report.report14} />
-              <ReportStatusCard slot="18:00" status={report.report18} />
-              <ReportStatusCard slot="22:00" status={report.report22} />
-            </div>
-          </div>
-        </GlassCard>
       ))}
     </div>
   );
