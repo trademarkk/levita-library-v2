@@ -440,16 +440,22 @@ async function readApiError(response: Response) {
 }
 
 async function saveGoogleCalendarEvent(event: CalendarEvent) {
-  const endpoint = event.googleEventId ? `/api/google/events/${encodeURIComponent(event.googleEventId)}` : '/api/google/events';
-  const response = await fetch(endpoint, {
-    method: event.googleEventId ? 'PATCH' : 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      title: event.title,
-      date: event.date,
-      description: event.description ?? '',
-    }),
+  const payload = JSON.stringify({
+    title: event.title,
+    date: event.date,
+    description: event.description ?? '',
   });
+  const submit = (endpoint: string, method: 'POST' | 'PATCH') => fetch(endpoint, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: payload,
+  });
+
+  const endpoint = event.googleEventId ? `/api/google/events/${encodeURIComponent(event.googleEventId)}` : '/api/google/events';
+  let response = await submit(endpoint, event.googleEventId ? 'PATCH' : 'POST');
+  if (response.status === 404 && event.googleEventId) {
+    response = await submit('/api/google/events', 'POST');
+  }
   if (!response.ok) throw new Error(await readApiError(response));
   return await response.json() as { googleEventId: string; googleHtmlLink?: string };
 }
