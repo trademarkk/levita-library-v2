@@ -274,25 +274,48 @@ async function googleTasksRequest(path, options = {}) {
   return payload;
 }
 
-function googleEventPayload(input) {
+function googleEventPayload(input, options = {}) {
   const config = getGoogleConfig();
+  const recurrence = googleRecurrencePayload(input.recurrence);
+  const base = {
+    summary: input.title,
+    description: input.description || '',
+    ...(recurrence.length || options.includeEmptyRecurrence ? { recurrence } : {}),
+  };
   if (input.startTime) {
     const startTime = input.startTime;
     const endTime = input.endTime || addOneHour(input.startTime);
     return {
-      summary: input.title,
-      description: input.description || '',
+      ...base,
       start: { dateTime: `${input.date}T${startTime}:00`, timeZone: config.timeZone },
       end: { dateTime: `${input.date}T${endTime}:00`, timeZone: config.timeZone },
     };
   }
 
   return {
-    summary: input.title,
-    description: input.description || '',
+    ...base,
     start: { date: input.date },
     end: { date: nextDate(input.date) },
   };
+}
+
+function googleRecurrencePayload(recurrence) {
+  if (!recurrence || recurrence.frequency !== 'weekly' || !Array.isArray(recurrence.weekdays) || !recurrence.weekdays.length) return [];
+  const weekdayCodes = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+  const byDay = recurrence.weekdays
+    .map((day) => weekdayCodes[Number(day)])
+    .filter(Boolean)
+    .join(',');
+  if (!byDay) return [];
+  const parts = [
+    'FREQ=WEEKLY',
+    `INTERVAL=${Math.max(1, Number(recurrence.interval) || 1)}`,
+    `BYDAY=${byDay}`,
+  ];
+  if (recurrence.until && /^\d{4}-\d{2}-\d{2}$/.test(recurrence.until)) {
+    parts.push(`UNTIL=${recurrence.until.replaceAll('-', '')}T235959Z`);
+  }
+  return [`RRULE:${parts.join(';')}`];
 }
 
 function normalizeGoogleEvent(event) {
@@ -305,6 +328,7 @@ function normalizeGoogleEvent(event) {
     : { date: '', time: null };
   return {
     googleEventId: event.id,
+    googleRecurringEventId: event.recurringEventId || null,
     googleHtmlLink: event.htmlLink || null,
     title: event.summary || 'Без названия',
     date: start.date,
@@ -603,7 +627,7 @@ const server = http.createServer(async (request, response) => {
       }
       const event = await googleCalendarRequest(`/events/${encodeURIComponent(googleEventId)}`, {
         method: 'PATCH',
-        body: JSON.stringify(googleEventPayload(body)),
+        body: JSON.stringify(googleEventPayload(body, { includeEmptyRecurrence: true })),
       });
       send(response, 200, { googleEventId: event.id, googleHtmlLink: event.htmlLink });
       return;

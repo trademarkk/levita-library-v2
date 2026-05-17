@@ -4,6 +4,7 @@ import { normalizeHashtags, roleRoutes } from './labels';
 import type {
   AppSettings,
   CalendarEvent,
+  CalendarEventRecurrence,
   ChecklistControlStatus,
   ChecklistReport,
   ChecklistReportSlot,
@@ -94,6 +95,7 @@ type GoogleCalendarStatus = {
 
 type GoogleCalendarImportedEvent = {
   googleEventId: string;
+  googleRecurringEventId?: string | null;
   googleHtmlLink?: string | null;
   title: string;
   date: string;
@@ -103,6 +105,15 @@ type GoogleCalendarImportedEvent = {
   source?: 'google-calendar' | 'google-task';
   sourceName?: string | null;
   updated?: string | null;
+};
+
+type CalendarEventInput = {
+  title: string;
+  date: string;
+  startTime?: string;
+  endTime?: string;
+  description?: string;
+  recurrence?: CalendarEventRecurrence | null;
 };
 
 type LibraryContextValue = {
@@ -154,8 +165,8 @@ type LibraryContextValue = {
   updateFinancialPlanRow: (month: string, rowId: string, title: string) => void;
   deleteFinancialPlanRow: (month: string, rowId: string) => void;
   updateFinancialPlanCell: (month: string, rowId: string, date: string, value: string) => void;
-  createCalendarEvent: (input: { title: string; date: string; startTime?: string; endTime?: string; description?: string }) => void;
-  updateCalendarEvent: (id: string, input: Partial<{ title: string; date: string; startTime: string; endTime: string; description: string }>) => void;
+  createCalendarEvent: (input: CalendarEventInput) => void;
+  updateCalendarEvent: (id: string, input: Partial<CalendarEventInput>) => void;
   deleteCalendarEvent: (id: string) => void;
   refreshGoogleCalendarStatus: () => Promise<void>;
   connectGoogleCalendar: () => void;
@@ -187,6 +198,21 @@ function dateKey(value?: string | Date | null) {
   const date = value ? new Date(value) : new Date();
   if (Number.isNaN(date.getTime())) return '';
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function normalizeRecurrence(input?: CalendarEventRecurrence | null): CalendarEventRecurrence | null {
+  if (!input || input.frequency !== 'weekly') return null;
+  const weekdays = Array.from(new Set((input.weekdays || [])
+    .map((day) => Number(day))
+    .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)))
+    .sort((left, right) => left - right);
+  if (!weekdays.length) return null;
+  return {
+    frequency: 'weekly',
+    interval: Math.max(1, Number(input.interval) || 1),
+    weekdays,
+    until: input.until || null,
+  };
 }
 
 function checklistDateKey(checklist: Pick<DailyChecklist, 'date' | 'createdAt'>) {
@@ -404,7 +430,20 @@ function normalizeState(raw: Partial<LibraryState> | null): LibraryState {
     documentTemplates: raw.documentTemplates || base.documentTemplates,
     usefulContacts: raw.usefulContacts || base.usefulContacts,
     financialPlans: raw.financialPlans || base.financialPlans,
-    calendarEvents: raw.calendarEvents || base.calendarEvents,
+    calendarEvents: (raw.calendarEvents || base.calendarEvents).map((event) => ({
+      ...event,
+      startTime: event.startTime ?? null,
+      endTime: event.endTime ?? null,
+      description: event.description ?? null,
+      sourceTaskId: event.sourceTaskId ?? null,
+      googleEventId: event.googleEventId ?? null,
+      googleRecurringEventId: event.googleRecurringEventId ?? null,
+      googleHtmlLink: event.googleHtmlLink ?? null,
+      googleSyncError: event.googleSyncError ?? null,
+      source: event.source ?? 'local',
+      sourceName: event.sourceName ?? null,
+      recurrence: normalizeRecurrence(event.recurrence),
+    })),
     expenseCategories: raw.expenseCategories || base.expenseCategories,
     expenses: raw.expenses || base.expenses,
     settings: { ...base.settings, ...(raw.settings || {}) },
@@ -466,6 +505,7 @@ async function saveGoogleCalendarEvent(event: CalendarEvent) {
     startTime: event.startTime || '',
     endTime: event.endTime || '',
     description: event.description ?? '',
+    recurrence: event.recurrence ?? null,
   });
   const submit = (endpoint: string, method: 'POST' | 'PATCH') => fetch(endpoint, {
     method,
@@ -703,6 +743,9 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       const result = await fetchGoogleCalendarEvents(timeMin, timeMax);
       update((draft) => {
         for (const googleEvent of result.events) {
+          if (googleEvent.googleRecurringEventId && draft.calendarEvents.some((event) => event.googleEventId === googleEvent.googleRecurringEventId && event.recurrence)) {
+            continue;
+          }
           const existing = draft.calendarEvents.find((event) => event.googleEventId === googleEvent.googleEventId);
           if (existing) {
             existing.title = googleEvent.title;
@@ -711,6 +754,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
             existing.endTime = googleEvent.endTime ?? null;
             existing.description = googleEvent.description ?? null;
             existing.googleHtmlLink = googleEvent.googleHtmlLink ?? null;
+            existing.googleRecurringEventId = googleEvent.googleRecurringEventId ?? null;
             existing.googleSyncStatus = 'synced';
             existing.googleSyncError = null;
             existing.source = googleEvent.source ?? 'google-calendar';
@@ -726,11 +770,13 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
             description: googleEvent.description ?? null,
             sourceTaskId: null,
             googleEventId: googleEvent.googleEventId,
+            googleRecurringEventId: googleEvent.googleRecurringEventId ?? null,
             googleHtmlLink: googleEvent.googleHtmlLink ?? null,
             googleSyncStatus: 'synced',
             googleSyncError: null,
             source: googleEvent.source ?? 'google-calendar',
             sourceName: googleEvent.sourceName ?? null,
+            recurrence: null,
             createdAt: googleEvent.updated ?? new Date().toISOString(),
           });
         }
@@ -818,6 +864,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
             googleSyncStatus: 'pending',
             googleSyncError: null,
             source: 'local',
+            recurrence: null,
             createdAt: new Date().toISOString(),
           }
         : null;
@@ -843,7 +890,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           } else {
             const calendarEventId = newId('calendar-event');
             task.calendarEventId = calendarEventId;
-            const event: CalendarEvent = { id: calendarEventId, title: task.title, date: task.deadline, startTime: null, endTime: null, description: task.description || null, sourceTaskId: task.id, googleSyncStatus: 'pending', googleSyncError: null, source: 'local', createdAt: new Date().toISOString() };
+            const event: CalendarEvent = { id: calendarEventId, title: task.title, date: task.deadline, startTime: null, endTime: null, description: task.description || null, sourceTaskId: task.id, googleSyncStatus: 'pending', googleSyncError: null, source: 'local', recurrence: null, createdAt: new Date().toISOString() };
             draft.calendarEvents.unshift(event);
             eventToSync = event;
           }
@@ -1068,6 +1115,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         googleSyncStatus: 'pending',
         googleSyncError: null,
         source: 'local',
+        recurrence: normalizeRecurrence(input.recurrence),
         createdAt: new Date().toISOString(),
       };
       update((draft) => {
@@ -1080,7 +1128,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       update((draft) => {
         const event = draft.calendarEvents.find((item) => item.id === id);
         if (event) {
-          Object.assign(event, input);
+          Object.assign(event, input, input.recurrence !== undefined ? { recurrence: normalizeRecurrence(input.recurrence) } : {});
           eventToSync = { ...event };
         }
       });

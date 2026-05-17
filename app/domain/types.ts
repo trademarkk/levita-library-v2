@@ -142,6 +142,15 @@ export interface FinancialPlanMonth {
   rows: FinancialPlanRow[];
 }
 
+export type CalendarRecurrenceFrequency = 'weekly';
+
+export interface CalendarEventRecurrence {
+  frequency: CalendarRecurrenceFrequency;
+  interval: number;
+  weekdays: number[];
+  until?: string | null;
+}
+
 export interface CalendarEvent {
   id: string;
   title: string;
@@ -151,11 +160,13 @@ export interface CalendarEvent {
   description?: string | null;
   sourceTaskId?: string | null;
   googleEventId?: string | null;
+  googleRecurringEventId?: string | null;
   googleHtmlLink?: string | null;
   googleSyncStatus?: 'pending' | 'synced' | 'error' | 'not_connected';
   googleSyncError?: string | null;
   source?: 'local' | 'google' | 'google-calendar' | 'google-task';
   sourceName?: string | null;
+  recurrence?: CalendarEventRecurrence | null;
   createdAt: string;
 }
 

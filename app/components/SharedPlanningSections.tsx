@@ -4,7 +4,23 @@ import { GlassCard } from './GlassCard';
 import { TabNavigation } from './TabNavigation';
 import { useLibrary } from '../domain/LibraryContext';
 import { formatDate } from '../domain/labels';
-import type { CalendarEvent, ExpenseAccount, ExpenseRecord, ExpenseStudio } from '../domain/types';
+import type { CalendarEvent, CalendarEventRecurrence, ExpenseAccount, ExpenseRecord, ExpenseStudio } from '../domain/types';
+
+type CalendarRepeatMode = 'none' | 'weekly';
+type CalendarDraft = {
+  title: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  description: string;
+  repeat: CalendarRepeatMode;
+  repeatUntil: string;
+};
+type CalendarDisplayEvent = CalendarEvent & {
+  displayId: string;
+  sourceEventId: string;
+  isGeneratedOccurrence?: boolean;
+};
 
 const accountLabels: Record<ExpenseAccount, string> = {
   RS_SBER: 'РС Сбер',
@@ -24,6 +40,10 @@ function currentMonthKey() {
 
 function todayKey() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function emptyCalendarDraft(date = todayKey()): CalendarDraft {
+  return { title: '', date, startTime: '', endTime: '', description: '', repeat: 'none', repeatUntil: '' };
 }
 
 function daysInMonth(month: string) {
@@ -59,6 +79,72 @@ function calendarCells(month: string) {
 
 function sameMonth(date: string, month: string) {
   return date.startsWith(month);
+}
+
+function dateValue(date: string) {
+  return new Date(`${date}T00:00:00`);
+}
+
+function dateDiffDays(left: string, right: string) {
+  return Math.floor((dateValue(left).getTime() - dateValue(right).getTime()) / 86_400_000);
+}
+
+function recurrenceLabel(event: CalendarEvent) {
+  if (event.recurrence?.frequency !== 'weekly') return null;
+  return 'Повтор: еженедельно';
+}
+
+function recurrenceFromDraft(draft: CalendarDraft): CalendarEventRecurrence | null {
+  if (draft.repeat !== 'weekly' || !draft.date) return null;
+  return {
+    frequency: 'weekly',
+    interval: 1,
+    weekdays: [dateValue(draft.date).getDay()],
+    until: draft.repeatUntil || null,
+  };
+}
+
+function draftFromEvent(event: CalendarEvent): CalendarDraft {
+  return {
+    title: event.title,
+    date: event.date,
+    startTime: event.startTime ?? '',
+    endTime: event.endTime ?? '',
+    description: event.description ?? '',
+    repeat: event.recurrence?.frequency === 'weekly' ? 'weekly' : 'none',
+    repeatUntil: event.recurrence?.until ?? '',
+  };
+}
+
+function expandCalendarEvents(events: CalendarEvent[], month: string): CalendarDisplayEvent[] {
+  const days = daysInMonth(month);
+  const expanded = events.flatMap((event) => {
+    if (event.recurrence?.frequency !== 'weekly') {
+      return sameMonth(event.date, month)
+        ? [{ ...event, displayId: event.id, sourceEventId: event.id }]
+        : [];
+    }
+
+    const recurrence = event.recurrence;
+    return days
+      .filter((date) => {
+        if (date < event.date) return false;
+        if (recurrence.until && date > recurrence.until) return false;
+        const weekday = dateValue(date).getDay();
+        if (!recurrence.weekdays.includes(weekday)) return false;
+        const weeksFromStart = Math.floor(Math.max(0, dateDiffDays(date, event.date)) / 7);
+        return weeksFromStart % Math.max(1, recurrence.interval || 1) === 0;
+      })
+      .map((date) => ({
+        ...event,
+        date,
+        displayId: `${event.id}:${date}`,
+        sourceEventId: event.id,
+        isGeneratedOccurrence: date !== event.date,
+      }));
+  });
+
+  return expanded.sort((left, right) => left.date.localeCompare(right.date) || (left.startTime || '').localeCompare(right.startTime || '') || left.title.localeCompare(right.title));
 }
 
 function eventTimeRange(event: CalendarEvent) {
@@ -184,20 +270,18 @@ export function CalendarSection() {
   const { state, googleCalendarStatus, createCalendarEvent, updateCalendarEvent, deleteCalendarEvent, refreshGoogleCalendarStatus, connectGoogleCalendar, importGoogleCalendarEvents, syncCalendarEventToGoogle } = useLibrary();
   const [month, setMonth] = useState(currentMonthKey());
   const [selectedDate, setSelectedDate] = useState(todayKey());
-  const [draft, setDraft] = useState({ title: '', date: todayKey(), startTime: '', endTime: '', description: '' });
+  const [draft, setDraft] = useState<CalendarDraft>(() => emptyCalendarDraft());
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState({ title: '', date: todayKey(), startTime: '', endTime: '', description: '' });
+  const [editDraft, setEditDraft] = useState<CalendarDraft>(() => emptyCalendarDraft());
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const importedMonthsRef = useRef<Set<string>>(new Set());
   const cells = useMemo(() => calendarCells(month), [month]);
   const monthEvents = useMemo(
-    () => [...state.calendarEvents]
-      .filter((event) => sameMonth(event.date, month))
-      .sort((left, right) => left.date.localeCompare(right.date) || (left.startTime || '').localeCompare(right.startTime || '') || left.title.localeCompare(right.title)),
+    () => expandCalendarEvents(state.calendarEvents, month),
     [month, state.calendarEvents],
   );
-  const eventsByDate = useMemo(() => monthEvents.reduce<Record<string, CalendarEvent[]>>((acc, event) => {
+  const eventsByDate = useMemo(() => monthEvents.reduce<Record<string, CalendarDisplayEvent[]>>((acc, event) => {
     acc[event.date] = [...(acc[event.date] ?? []), event];
     return acc;
   }, {}), [monthEvents]);
@@ -218,8 +302,8 @@ export function CalendarSection() {
 
   const save = () => {
     if (!draft.title.trim() || !draft.date) return;
-    createCalendarEvent(draft);
-    setDraft((value) => ({ title: '', date: value.date, startTime: '', endTime: '', description: '' }));
+    createCalendarEvent({ ...draft, recurrence: recurrenceFromDraft(draft) });
+    setDraft((value) => emptyCalendarDraft(value.date));
   };
 
   const importFromGoogle = async (targetMonth = month) => {
@@ -237,13 +321,7 @@ export function CalendarSection() {
 
   useEffect(() => {
     if (!editingEvent) return;
-    setEditDraft({
-      title: editingEvent.title,
-      date: editingEvent.date,
-      startTime: editingEvent.startTime ?? '',
-      endTime: editingEvent.endTime ?? '',
-      description: editingEvent.description ?? '',
-    });
+    setEditDraft(draftFromEvent(editingEvent));
   }, [editingEvent?.id]);
 
   useEffect(() => {
@@ -252,8 +330,8 @@ export function CalendarSection() {
     void importFromGoogle(month);
   }, [googleCalendarStatus?.connected, month]);
 
-  const openEvent = (event: CalendarEvent) => {
-    setEditingId(event.id);
+  const openEvent = (event: CalendarDisplayEvent) => {
+    setEditingId(event.sourceEventId);
   };
 
   const saveEditing = () => {
@@ -264,6 +342,7 @@ export function CalendarSection() {
       startTime: editDraft.startTime,
       endTime: editDraft.endTime,
       description: editDraft.description,
+      recurrence: recurrenceFromDraft(editDraft),
     });
     setEditingId(null);
   };
@@ -321,6 +400,17 @@ export function CalendarSection() {
           <input type="time" value={draft.startTime} onChange={(event) => setDraft((value) => ({ ...value, startTime: event.target.value }))} className="field" aria-label="Время начала" />
           <input type="time" value={draft.endTime} onChange={(event) => setDraft((value) => ({ ...value, endTime: event.target.value }))} className="field" aria-label="Время окончания" />
           <textarea value={draft.description} onChange={(event) => setDraft((value) => ({ ...value, description: event.target.value }))} placeholder="Комментарий" className="field md:col-span-4 min-h-20" />
+          <label className="text-sm text-[#a89b8f] md:col-span-2">
+            Повтор
+            <select value={draft.repeat} onChange={(event) => setDraft((value) => ({ ...value, repeat: event.target.value as CalendarRepeatMode }))} className="field mt-2">
+              <option value="none">Не повторять</option>
+              <option value="weekly">Еженедельно в этот день недели</option>
+            </select>
+          </label>
+          <label className="text-sm text-[#a89b8f] md:col-span-2">
+            Повторять до
+            <input type="date" value={draft.repeatUntil} onChange={(event) => setDraft((value) => ({ ...value, repeatUntil: event.target.value }))} disabled={draft.repeat === 'none'} className="field mt-2 disabled:opacity-45" />
+          </label>
         </div>
         <button onClick={save} className="primary-action mt-4 flex items-center gap-2"><Save className="w-4 h-4" />Сохранить событие</button>
       </GlassCard>
@@ -362,14 +452,16 @@ export function CalendarSection() {
                     <span className="calendar-day-events">
                       {dayEvents.slice(0, 3).map((event) => (
                         <span
-                          key={event.id}
-                          draggable
+                          key={event.displayId}
+                          draggable={!event.recurrence}
                           onClick={(mouseEvent) => {
                             mouseEvent.stopPropagation();
                             selectCalendarDate(event.date);
                             openEvent(event);
                           }}
-                          onDragStart={(dragEvent) => dragEvent.dataTransfer.setData('text/calendar-event-id', event.id)}
+                          onDragStart={(dragEvent) => {
+                            if (!event.recurrence) dragEvent.dataTransfer.setData('text/calendar-event-id', event.sourceEventId);
+                          }}
                           className={`calendar-event-chip ${event.sourceTaskId || event.source === 'google-task' ? 'is-task' : event.source === 'google' || event.source === 'google-calendar' ? 'is-google' : ''}`}
                         >
                           <span className="calendar-event-time">{eventTimeRange(event)}</span>
@@ -393,11 +485,11 @@ export function CalendarSection() {
           <div className="mt-4 space-y-3">
             {selectedEvents.map((event) => (
               <CalendarEventCard
-                key={event.id}
+                key={event.displayId}
                 event={event}
                 onEdit={() => openEvent(event)}
                 onSync={() => void syncCalendarEventToGoogle(event.id)}
-                onDelete={() => deleteCalendarEvent(event.id)}
+                onDelete={() => deleteCalendarEvent(event.sourceEventId)}
               />
             ))}
             {selectedEvents.length === 0 && <p className="rounded-lg bg-[#2a2630]/45 p-4 text-sm text-[#a89b8f]">На эту дату событий пока нет.</p>}
@@ -415,11 +507,11 @@ export function CalendarSection() {
           <div className="mt-4 max-h-[28rem] space-y-3 overflow-y-auto pr-2">
             {monthEvents.map((event) => (
               <CalendarEventCard
-                key={event.id}
+                key={event.displayId}
                 event={event}
                 onEdit={() => openEvent(event)}
                 onSync={() => void syncCalendarEventToGoogle(event.id)}
-                onDelete={() => deleteCalendarEvent(event.id)}
+                onDelete={() => deleteCalendarEvent(event.sourceEventId)}
               />
             ))}
             {monthEvents.length === 0 && <p className="rounded-lg bg-[#2a2630]/45 p-4 text-sm text-[#a89b8f]">В этом месяце событий пока нет.</p>}
@@ -445,6 +537,19 @@ export function CalendarSection() {
                 <input type="time" value={editDraft.endTime} onChange={(event) => setEditDraft((value) => ({ ...value, endTime: event.target.value }))} className="field" aria-label="Время окончания" />
               </div>
               <textarea value={editDraft.description} onChange={(event) => setEditDraft((value) => ({ ...value, description: event.target.value }))} className="field min-h-28" />
+              <div className="grid md:grid-cols-2 gap-3">
+                <label className="text-sm text-[#a89b8f]">
+                  Повтор
+                  <select value={editDraft.repeat} onChange={(event) => setEditDraft((value) => ({ ...value, repeat: event.target.value as CalendarRepeatMode }))} className="field mt-2">
+                    <option value="none">Не повторять</option>
+                    <option value="weekly">Еженедельно в этот день недели</option>
+                  </select>
+                </label>
+                <label className="text-sm text-[#a89b8f]">
+                  Повторять до
+                  <input type="date" value={editDraft.repeatUntil} onChange={(event) => setEditDraft((value) => ({ ...value, repeatUntil: event.target.value }))} disabled={editDraft.repeat === 'none'} className="field mt-2 disabled:opacity-45" />
+                </label>
+              </div>
             </div>
             <div className="mt-5 flex flex-wrap gap-2">
               <button onClick={saveEditing} className="primary-action flex items-center gap-2"><Save className="w-4 h-4" />Сохранить и отправить</button>
@@ -461,6 +566,7 @@ export function CalendarSection() {
 
 function CalendarEventCard({ event, onEdit, onSync, onDelete }: { event: CalendarEvent; onEdit: () => void; onSync: () => void; onDelete: () => void }) {
   const sourceLabel = calendarSourceLabel(event);
+  const repeatLabel = recurrenceLabel(event);
   const isGoogleTask = event.source === 'google-task';
   return (
     <div className="rounded-xl border border-[#c9a98d]/15 bg-[#2a2630]/45 p-4">
@@ -476,6 +582,7 @@ function CalendarEventCard({ event, onEdit, onSync, onDelete }: { event: Calenda
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
         {sourceLabel && <span className="rounded-full bg-[#486a8d]/25 px-3 py-1 text-[#bdd7f0]">{sourceLabel}</span>}
+        {repeatLabel && <span className="rounded-full bg-[#c9a98d]/15 px-3 py-1 text-[#c9a98d]">{repeatLabel}</span>}
         {event.googleSyncStatus === 'synced' && <span className="rounded-full bg-[#5c7a5e]/25 px-3 py-1 text-[#b9d0b7]">Google: синхронизировано</span>}
         {event.googleSyncStatus === 'pending' && <span className="rounded-full bg-[#c9a98d]/20 px-3 py-1 text-[#c9a98d]">Google: синхронизация</span>}
         {event.googleSyncStatus === 'not_connected' && <span className="rounded-full bg-[#2a2630] px-3 py-1 text-[#a89b8f]">Google: не подключен</span>}
