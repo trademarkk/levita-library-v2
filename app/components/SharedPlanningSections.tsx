@@ -192,7 +192,11 @@ export function CalendarSection() {
   }, []);
 
   useEffect(() => {
-    if (!sameMonth(selectedDate, month)) setSelectedDate(`${month}-01`);
+    if (!sameMonth(selectedDate, month)) {
+      const firstDay = `${month}-01`;
+      setSelectedDate(firstDay);
+      setDraft((value) => ({ ...value, date: firstDay }));
+    }
   }, [month, selectedDate]);
 
   const save = () => {
@@ -246,6 +250,12 @@ export function CalendarSection() {
   const moveEvent = (id: string, date: string) => {
     updateCalendarEvent(id, { date });
     setSelectedDate(date);
+    setDraft((value) => ({ ...value, date }));
+  };
+
+  const selectCalendarDate = (date: string) => {
+    setSelectedDate(date);
+    setDraft((value) => ({ ...value, date }));
   };
 
   return (
@@ -300,7 +310,7 @@ export function CalendarSection() {
           </div>
           <div className="flex flex-wrap gap-2">
             <button onClick={() => setMonth(addMonths(month, -1))} className="calendar-icon-button" aria-label="Предыдущий месяц"><ChevronLeft className="w-4 h-4" /></button>
-            <button onClick={() => (setMonth(currentMonthKey()), setSelectedDate(todayKey()))} className="calendar-soft-button">Сегодня</button>
+            <button onClick={() => (setMonth(currentMonthKey()), selectCalendarDate(todayKey()))} className="calendar-soft-button">Сегодня</button>
             <button onClick={() => setMonth(addMonths(month, 1))} className="calendar-icon-button" aria-label="Следующий месяц"><ChevronRight className="w-4 h-4" /></button>
           </div>
         </div>
@@ -315,7 +325,7 @@ export function CalendarSection() {
                 key={date ?? `blank-${index}`}
                 type="button"
                 disabled={!date}
-                onClick={() => date && setSelectedDate(date)}
+                onClick={() => date && selectCalendarDate(date)}
                 onDragOver={(event) => date && event.preventDefault()}
                 onDrop={(event) => {
                   const id = event.dataTransfer.getData('text/calendar-event-id');
@@ -331,7 +341,11 @@ export function CalendarSection() {
                         <span
                           key={event.id}
                           draggable
-                          onClick={(mouseEvent) => (mouseEvent.stopPropagation(), openEvent(event))}
+                          onClick={(mouseEvent) => {
+                            mouseEvent.stopPropagation();
+                            selectCalendarDate(event.date);
+                            openEvent(event);
+                          }}
                           onDragStart={(dragEvent) => dragEvent.dataTransfer.setData('text/calendar-event-id', event.id)}
                           className={`calendar-event-chip ${event.sourceTaskId ? 'is-task' : event.source === 'google' ? 'is-google' : ''}`}
                         >
