@@ -26,6 +26,7 @@ function loadDotEnv() {
 
 loadDotEnv();
 const PORT = Number(process.env.LEVTIA_API_PORT || 4174);
+const GOOGLE_REQUEST_TIMEOUT_MS = Number(process.env.GOOGLE_REQUEST_TIMEOUT_MS || 12000);
 
 mkdirSync(dataDir, { recursive: true });
 
@@ -209,14 +210,26 @@ async function googleCalendarRequest(path, options = {}) {
   const url = path.startsWith('/users/') || path.startsWith('/calendars/')
     ? `https://www.googleapis.com/calendar/v3${path}`
     : `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(config.calendarId)}${path}`;
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-    },
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), GOOGLE_REQUEST_TIMEOUT_MS);
+  let response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        ...(options.headers || {}),
+      },
+    });
+  } catch (error) {
+    const requestError = new Error(error?.name === 'AbortError' ? 'Google Calendar request timed out.' : 'Google Calendar request failed.');
+    requestError.statusCode = error?.name === 'AbortError' ? 504 : 502;
+    throw requestError;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (response.status === 204) return null;
   const payload = await response.json().catch(() => ({}));
@@ -230,14 +243,26 @@ async function googleCalendarRequest(path, options = {}) {
 
 async function googleTasksRequest(path, options = {}) {
   const accessToken = await getGoogleAccessToken();
-  const response = await fetch(`https://tasks.googleapis.com/tasks/v1${path}`, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-    },
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), GOOGLE_REQUEST_TIMEOUT_MS);
+  let response;
+  try {
+    response = await fetch(`https://tasks.googleapis.com/tasks/v1${path}`, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        ...(options.headers || {}),
+      },
+    });
+  } catch (error) {
+    const requestError = new Error(error?.name === 'AbortError' ? 'Google Tasks request timed out.' : 'Google Tasks request failed.');
+    requestError.statusCode = error?.name === 'AbortError' ? 504 : 502;
+    throw requestError;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (response.status === 204) return null;
   const payload = await response.json().catch(() => ({}));
@@ -346,10 +371,17 @@ async function listReadableCalendars() {
   if (!config.includeAllCalendars) return [{ id: config.calendarId, summary: config.calendarId }];
 
   try {
-    const payload = await googleCalendarRequest('/users/me/calendarList?minAccessRole=reader', { method: 'GET' });
-    const calendars = (payload.items || [])
-      .filter((calendar) => !calendar.deleted && !calendar.hidden && calendar.id)
-      .map((calendar) => ({ id: calendar.id, summary: calendar.summary || calendar.id }));
+    const calendars = [];
+    let pageToken = '';
+    do {
+      const params = new URLSearchParams({ minAccessRole: 'reader', maxResults: '250' });
+      if (pageToken) params.set('pageToken', pageToken);
+      const payload = await googleCalendarRequest(`/users/me/calendarList?${params.toString()}`, { method: 'GET' });
+      calendars.push(...(payload.items || [])
+        .filter((calendar) => !calendar.deleted && !calendar.hidden && calendar.id)
+        .map((calendar) => ({ id: calendar.id, summary: calendar.summary || calendar.id })));
+      pageToken = payload.nextPageToken || '';
+    } while (pageToken);
     return calendars.length ? calendars : [{ id: config.calendarId, summary: config.calendarId }];
   } catch (error) {
     if (error.statusCode === 403) return [{ id: config.calendarId, summary: config.calendarId }];
@@ -366,11 +398,20 @@ async function listGoogleEventsForRange(timeMin, timeMax) {
     singleEvents: 'true',
     orderBy: 'startTime',
     timeZone: config.timeZone,
+    maxResults: '2500',
   });
   const batches = await Promise.all(calendars.map(async (calendar) => {
     try {
-      const payload = await googleCalendarRequest(`/calendars/${encodeURIComponent(calendar.id)}/events?${params.toString()}`, { method: 'GET' });
-      return (payload.items || []).map((event) => normalizeGoogleEvent({ ...event, calendarSummary: calendar.summary }));
+      const events = [];
+      let pageToken = '';
+      do {
+        const pageParams = new URLSearchParams(params);
+        if (pageToken) pageParams.set('pageToken', pageToken);
+        const payload = await googleCalendarRequest(`/calendars/${encodeURIComponent(calendar.id)}/events?${pageParams.toString()}`, { method: 'GET' });
+        events.push(...(payload.items || []).map((event) => normalizeGoogleEvent({ ...event, calendarSummary: calendar.summary })));
+        pageToken = payload.nextPageToken || '';
+      } while (pageToken);
+      return events;
     } catch (error) {
       if (error.statusCode === 403 || error.statusCode === 404) return [];
       throw error;
@@ -383,8 +424,15 @@ async function listGoogleTasksForRange(timeMin, timeMax) {
   const config = getGoogleConfig();
   if (!config.includeTasks) return [];
   try {
-    const listsPayload = await googleTasksRequest('/users/@me/lists?maxResults=100', { method: 'GET' });
-    const taskLists = listsPayload.items || [];
+    const taskLists = [];
+    let listPageToken = '';
+    do {
+      const listParams = new URLSearchParams({ maxResults: '100' });
+      if (listPageToken) listParams.set('pageToken', listPageToken);
+      const listsPayload = await googleTasksRequest(`/users/@me/lists?${listParams.toString()}`, { method: 'GET' });
+      taskLists.push(...(listsPayload.items || []));
+      listPageToken = listsPayload.nextPageToken || '';
+    } while (listPageToken);
     const params = new URLSearchParams({
       dueMin: `${timeMin}T00:00:00.000Z`,
       dueMax: `${timeMax}T00:00:00.000Z`,
@@ -395,8 +443,16 @@ async function listGoogleTasksForRange(timeMin, timeMax) {
       maxResults: '100',
     });
     const batches = await Promise.all(taskLists.map(async (taskList) => {
-      const payload = await googleTasksRequest(`/lists/${encodeURIComponent(taskList.id)}/tasks?${params.toString()}`, { method: 'GET' });
-      return (payload.items || []).map((task) => normalizeGoogleTask(task, taskList)).filter((task) => task.date);
+      const tasks = [];
+      let taskPageToken = '';
+      do {
+        const pageParams = new URLSearchParams(params);
+        if (taskPageToken) pageParams.set('pageToken', taskPageToken);
+        const payload = await googleTasksRequest(`/lists/${encodeURIComponent(taskList.id)}/tasks?${pageParams.toString()}`, { method: 'GET' });
+        tasks.push(...(payload.items || []).map((task) => normalizeGoogleTask(task, taskList)).filter((task) => task.date));
+        taskPageToken = payload.nextPageToken || '';
+      } while (taskPageToken);
+      return tasks;
     }));
     return batches.flat();
   } catch (error) {
