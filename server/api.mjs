@@ -92,6 +92,8 @@ function getGoogleConfig() {
     clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
     redirectUri: process.env.GOOGLE_REDIRECT_URI || `http://127.0.0.1:${PORT}/api/google/callback`,
     calendarId: process.env.GOOGLE_CALENDAR_ID || 'primary',
+    includeAllCalendars: process.env.GOOGLE_INCLUDE_ALL_CALENDARS !== 'false',
+    includeTasks: process.env.GOOGLE_INCLUDE_TASKS !== 'false',
     timeZone: process.env.GOOGLE_TIME_ZONE || 'Europe/Moscow',
     appOrigin: process.env.LEVTIA_APP_ORIGIN || 'http://127.0.0.1:5173',
   };
@@ -204,7 +206,10 @@ function addOneHour(time) {
 async function googleCalendarRequest(path, options = {}) {
   const config = getGoogleConfig();
   const accessToken = await getGoogleAccessToken();
-  const response = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(config.calendarId)}${path}`, {
+  const url = path.startsWith('/users/') || path.startsWith('/calendars/')
+    ? `https://www.googleapis.com/calendar/v3${path}`
+    : `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(config.calendarId)}${path}`;
+  const response = await fetch(url, {
     ...options,
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -217,6 +222,27 @@ async function googleCalendarRequest(path, options = {}) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = new Error(payload.error?.message || payload.error_description || 'Google Calendar request failed.');
+    error.statusCode = response.status;
+    throw error;
+  }
+  return payload;
+}
+
+async function googleTasksRequest(path, options = {}) {
+  const accessToken = await getGoogleAccessToken();
+  const response = await fetch(`https://tasks.googleapis.com/tasks/v1${path}`, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    },
+  });
+
+  if (response.status === 204) return null;
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(payload.error?.message || payload.error_description || 'Google Tasks request failed.');
     error.statusCode = response.status;
     throw error;
   }
@@ -260,8 +286,123 @@ function normalizeGoogleEvent(event) {
     startTime: start.time,
     endTime: end.time,
     description: event.description || null,
+    source: 'google-calendar',
+    sourceName: event.calendarSummary || null,
     updated: event.updated || null,
   };
+}
+
+function toClock(hour, minute = '00') {
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function parseTimeRangeFromText(text = '') {
+  const rangeWithMinutes = text.match(/(?:^|\s)([01]?\d|2[0-3])[:.](\d{2})\s*[-–—]\s*([01]?\d|2[0-3])(?::|\.)(\d{2})(?:\s|$)/);
+  if (rangeWithMinutes) {
+    return {
+      startTime: toClock(rangeWithMinutes[1], rangeWithMinutes[2]),
+      endTime: toClock(rangeWithMinutes[3], rangeWithMinutes[4]),
+    };
+  }
+
+  const hourRange = text.match(/(?:^|\s)([01]?\d|2[0-3])\s*[-–—]\s*([01]?\d|2[0-3])(?:\s|$)/);
+  if (hourRange) {
+    return {
+      startTime: toClock(hourRange[1]),
+      endTime: toClock(hourRange[2]),
+    };
+  }
+
+  const single = text.match(/(?:^|\s)([01]?\d|2[0-3])[:.](\d{2})(?:\s|$)/);
+  if (single) {
+    return {
+      startTime: toClock(single[1], single[2]),
+      endTime: null,
+    };
+  }
+
+  return { startTime: null, endTime: null };
+}
+
+function normalizeGoogleTask(task, taskList) {
+  const dueDate = task.due ? String(task.due).slice(0, 10) : '';
+  const parsedTime = parseTimeRangeFromText(`${task.title || ''} ${task.notes || ''}`);
+  return {
+    googleEventId: `task:${taskList.id}:${task.id}`,
+    googleHtmlLink: task.webViewLink || null,
+    title: task.title || 'Задача без названия',
+    date: dueDate,
+    startTime: parsedTime.startTime,
+    endTime: parsedTime.endTime,
+    description: task.notes || null,
+    source: 'google-task',
+    sourceName: taskList.title || 'Google Tasks',
+    updated: task.updated || null,
+  };
+}
+
+async function listReadableCalendars() {
+  const config = getGoogleConfig();
+  if (!config.includeAllCalendars) return [{ id: config.calendarId, summary: config.calendarId }];
+
+  try {
+    const payload = await googleCalendarRequest('/users/me/calendarList?minAccessRole=reader', { method: 'GET' });
+    const calendars = (payload.items || [])
+      .filter((calendar) => !calendar.deleted && !calendar.hidden && calendar.id)
+      .map((calendar) => ({ id: calendar.id, summary: calendar.summary || calendar.id }));
+    return calendars.length ? calendars : [{ id: config.calendarId, summary: config.calendarId }];
+  } catch (error) {
+    if (error.statusCode === 403) return [{ id: config.calendarId, summary: config.calendarId }];
+    throw error;
+  }
+}
+
+async function listGoogleEventsForRange(timeMin, timeMax) {
+  const config = getGoogleConfig();
+  const calendars = await listReadableCalendars();
+  const params = new URLSearchParams({
+    timeMin: `${timeMin}T00:00:00.000Z`,
+    timeMax: `${timeMax}T00:00:00.000Z`,
+    singleEvents: 'true',
+    orderBy: 'startTime',
+    timeZone: config.timeZone,
+  });
+  const batches = await Promise.all(calendars.map(async (calendar) => {
+    try {
+      const payload = await googleCalendarRequest(`/calendars/${encodeURIComponent(calendar.id)}/events?${params.toString()}`, { method: 'GET' });
+      return (payload.items || []).map((event) => normalizeGoogleEvent({ ...event, calendarSummary: calendar.summary }));
+    } catch (error) {
+      if (error.statusCode === 403 || error.statusCode === 404) return [];
+      throw error;
+    }
+  }));
+  return batches.flat();
+}
+
+async function listGoogleTasksForRange(timeMin, timeMax) {
+  const config = getGoogleConfig();
+  if (!config.includeTasks) return [];
+  try {
+    const listsPayload = await googleTasksRequest('/users/@me/lists?maxResults=100', { method: 'GET' });
+    const taskLists = listsPayload.items || [];
+    const params = new URLSearchParams({
+      dueMin: `${timeMin}T00:00:00.000Z`,
+      dueMax: `${timeMax}T00:00:00.000Z`,
+      showCompleted: 'false',
+      showDeleted: 'false',
+      showHidden: 'true',
+      showAssigned: 'true',
+      maxResults: '100',
+    });
+    const batches = await Promise.all(taskLists.map(async (taskList) => {
+      const payload = await googleTasksRequest(`/lists/${encodeURIComponent(taskList.id)}/tasks?${params.toString()}`, { method: 'GET' });
+      return (payload.items || []).map((task) => normalizeGoogleTask(task, taskList)).filter((task) => task.date);
+    }));
+    return batches.flat();
+  } catch (error) {
+    if (error.statusCode === 403) return [];
+    throw error;
+  }
 }
 
 function getState() {
@@ -306,6 +447,9 @@ const server = http.createServer(async (request, response) => {
         configured: Boolean(config.clientId && config.clientSecret),
         connected: Boolean(token?.refresh_token || token?.access_token),
         calendarId: config.calendarId,
+        includeAllCalendars: config.includeAllCalendars,
+        includeTasks: config.includeTasks,
+        timeZone: config.timeZone,
         redirectUri: config.redirectUri,
       });
       return;
@@ -324,7 +468,11 @@ const server = http.createServer(async (request, response) => {
       authUrl.searchParams.set('client_id', config.clientId);
       authUrl.searchParams.set('redirect_uri', config.redirectUri);
       authUrl.searchParams.set('response_type', 'code');
-      authUrl.searchParams.set('scope', 'https://www.googleapis.com/auth/calendar.events');
+      authUrl.searchParams.set('scope', [
+        'https://www.googleapis.com/auth/calendar.events',
+        'https://www.googleapis.com/auth/calendar.readonly',
+        'https://www.googleapis.com/auth/tasks.readonly',
+      ].join(' '));
       authUrl.searchParams.set('access_type', 'offline');
       authUrl.searchParams.set('prompt', 'consent');
       authUrl.searchParams.set('state', state);
@@ -375,15 +523,18 @@ const server = http.createServer(async (request, response) => {
         send(response, 400, { error: 'timeMin and timeMax are required' });
         return;
       }
-      const params = new URLSearchParams({
-        timeMin: `${timeMin}T00:00:00.000Z`,
-        timeMax: `${timeMax}T00:00:00.000Z`,
-        singleEvents: 'true',
-        orderBy: 'startTime',
-        timeZone: getGoogleConfig().timeZone,
-      });
-      const payload = await googleCalendarRequest(`/events?${params.toString()}`, { method: 'GET' });
-      send(response, 200, { events: (payload.items || []).map(normalizeGoogleEvent).filter((event) => event.date) });
+      const [calendarEvents, taskEvents] = await Promise.all([
+        listGoogleEventsForRange(timeMin, timeMax),
+        listGoogleTasksForRange(timeMin, timeMax),
+      ]);
+      const events = [...calendarEvents, ...taskEvents]
+        .filter((event) => event.date)
+        .sort((left, right) => (
+          left.date.localeCompare(right.date)
+          || (left.startTime || '').localeCompare(right.startTime || '')
+          || left.title.localeCompare(right.title)
+        ));
+      send(response, 200, { events });
       return;
     }
 

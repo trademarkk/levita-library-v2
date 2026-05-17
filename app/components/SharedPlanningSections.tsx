@@ -68,6 +68,16 @@ function eventTimeRange(event: CalendarEvent) {
   return 'Весь день';
 }
 
+function calendarSourceLabel(event: CalendarEvent) {
+  if (event.source === 'google-task') {
+    return event.sourceName ? `Задача: ${event.sourceName}` : 'Источник: Google Tasks';
+  }
+  if (event.source === 'google-calendar' || event.source === 'google') {
+    return event.sourceName ? `Календарь: ${event.sourceName}` : 'Источник: Google Calendar';
+  }
+  return null;
+}
+
 function formatPlanDay(dateKey: string) {
   const date = new Date(`${dateKey}T00:00:00`);
   const months = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
@@ -184,7 +194,7 @@ export function CalendarSection() {
   const monthEvents = useMemo(
     () => [...state.calendarEvents]
       .filter((event) => sameMonth(event.date, month))
-      .sort((left, right) => left.date.localeCompare(right.date) || left.title.localeCompare(right.title)),
+      .sort((left, right) => left.date.localeCompare(right.date) || (left.startTime || '').localeCompare(right.startTime || '') || left.title.localeCompare(right.title)),
     [month, state.calendarEvents],
   );
   const eventsByDate = useMemo(() => monthEvents.reduce<Record<string, CalendarEvent[]>>((acc, event) => {
@@ -360,7 +370,7 @@ export function CalendarSection() {
                             openEvent(event);
                           }}
                           onDragStart={(dragEvent) => dragEvent.dataTransfer.setData('text/calendar-event-id', event.id)}
-                          className={`calendar-event-chip ${event.sourceTaskId ? 'is-task' : event.source === 'google' ? 'is-google' : ''}`}
+                          className={`calendar-event-chip ${event.sourceTaskId || event.source === 'google-task' ? 'is-task' : event.source === 'google' || event.source === 'google-calendar' ? 'is-google' : ''}`}
                         >
                           <span className="calendar-event-time">{eventTimeRange(event)}</span>
                           <span>{event.title}</span>
@@ -438,7 +448,7 @@ export function CalendarSection() {
             </div>
             <div className="mt-5 flex flex-wrap gap-2">
               <button onClick={saveEditing} className="primary-action flex items-center gap-2"><Save className="w-4 h-4" />Сохранить и отправить</button>
-              <button onClick={() => void syncCalendarEventToGoogle(editingEvent.id)} className="calendar-soft-button inline-flex items-center gap-2"><RefreshCw className="w-4 h-4" />Синхронизировать</button>
+              {editingEvent.source !== 'google-task' && <button onClick={() => void syncCalendarEventToGoogle(editingEvent.id)} className="calendar-soft-button inline-flex items-center gap-2"><RefreshCw className="w-4 h-4" />Синхронизировать</button>}
               {editingEvent.googleHtmlLink && <a href={editingEvent.googleHtmlLink} target="_blank" rel="noreferrer" className="calendar-soft-button inline-flex items-center gap-2"><ExternalLink className="w-4 h-4" />Открыть в Google</a>}
               <button onClick={() => (deleteCalendarEvent(editingEvent.id), setEditingId(null))} className="calendar-danger-button inline-flex items-center gap-2"><Trash2 className="w-4 h-4" />Удалить</button>
             </div>
@@ -450,6 +460,8 @@ export function CalendarSection() {
 }
 
 function CalendarEventCard({ event, onEdit, onSync, onDelete }: { event: CalendarEvent; onEdit: () => void; onSync: () => void; onDelete: () => void }) {
+  const sourceLabel = calendarSourceLabel(event);
+  const isGoogleTask = event.source === 'google-task';
   return (
     <div className="rounded-xl border border-[#c9a98d]/15 bg-[#2a2630]/45 p-4">
       <div className="flex items-start justify-between gap-3">
@@ -463,7 +475,7 @@ function CalendarEventCard({ event, onEdit, onSync, onDelete }: { event: Calenda
         <button onClick={onDelete} className="text-[#a89b8f] hover:text-[#8b3a52]" aria-label={`Удалить ${event.title}`}><Trash2 className="w-4 h-4" /></button>
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-        {event.source === 'google' && <span className="rounded-full bg-[#486a8d]/25 px-3 py-1 text-[#bdd7f0]">Источник: Google</span>}
+        {sourceLabel && <span className="rounded-full bg-[#486a8d]/25 px-3 py-1 text-[#bdd7f0]">{sourceLabel}</span>}
         {event.googleSyncStatus === 'synced' && <span className="rounded-full bg-[#5c7a5e]/25 px-3 py-1 text-[#b9d0b7]">Google: синхронизировано</span>}
         {event.googleSyncStatus === 'pending' && <span className="rounded-full bg-[#c9a98d]/20 px-3 py-1 text-[#c9a98d]">Google: синхронизация</span>}
         {event.googleSyncStatus === 'not_connected' && <span className="rounded-full bg-[#2a2630] px-3 py-1 text-[#a89b8f]">Google: не подключен</span>}
@@ -472,7 +484,7 @@ function CalendarEventCard({ event, onEdit, onSync, onDelete }: { event: Calenda
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         <button onClick={onEdit} className="calendar-soft-button inline-flex items-center gap-1"><Pencil className="w-3 h-3" />Редактировать</button>
-        <button onClick={onSync} className="calendar-soft-button inline-flex items-center gap-1"><RefreshCw className="w-3 h-3" />В Google</button>
+        {!isGoogleTask && <button onClick={onSync} className="calendar-soft-button inline-flex items-center gap-1"><RefreshCw className="w-3 h-3" />В Google</button>}
         {event.googleHtmlLink && <a href={event.googleHtmlLink} target="_blank" rel="noreferrer" className="calendar-soft-button inline-flex items-center gap-1"><ExternalLink className="w-3 h-3" />Открыть</a>}
       </div>
     </div>

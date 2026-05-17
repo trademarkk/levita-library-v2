@@ -87,6 +87,9 @@ type GoogleCalendarStatus = {
   connected: boolean;
   calendarId: string;
   redirectUri: string;
+  includeAllCalendars?: boolean;
+  includeTasks?: boolean;
+  timeZone?: string;
 };
 
 type GoogleCalendarImportedEvent = {
@@ -97,6 +100,8 @@ type GoogleCalendarImportedEvent = {
   startTime?: string | null;
   endTime?: string | null;
   description?: string | null;
+  source?: 'google-calendar' | 'google-task';
+  sourceName?: string | null;
   updated?: string | null;
 };
 
@@ -452,6 +457,9 @@ async function readApiError(response: Response) {
 }
 
 async function saveGoogleCalendarEvent(event: CalendarEvent) {
+  if (event.source === 'google-task' || event.googleEventId?.startsWith('task:')) {
+    throw new Error('Задачи Google импортируются только для просмотра.');
+  }
   const payload = JSON.stringify({
     title: event.title,
     date: event.date,
@@ -599,6 +607,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
   };
 
   const syncGoogleEvent = async (event: CalendarEvent) => {
+    if (event.source === 'google-task' || event.googleEventId?.startsWith('task:')) return;
     update((draft) => {
       const stored = draft.calendarEvents.find((item) => item.id === event.id);
       if (stored) {
@@ -704,7 +713,8 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
             existing.googleHtmlLink = googleEvent.googleHtmlLink ?? null;
             existing.googleSyncStatus = 'synced';
             existing.googleSyncError = null;
-            existing.source = existing.source ?? 'google';
+            existing.source = googleEvent.source ?? 'google-calendar';
+            existing.sourceName = googleEvent.sourceName ?? null;
             continue;
           }
           draft.calendarEvents.unshift({
@@ -719,7 +729,8 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
             googleHtmlLink: googleEvent.googleHtmlLink ?? null,
             googleSyncStatus: 'synced',
             googleSyncError: null,
-            source: 'google',
+            source: googleEvent.source ?? 'google-calendar',
+            sourceName: googleEvent.sourceName ?? null,
             createdAt: googleEvent.updated ?? new Date().toISOString(),
           });
         }
@@ -1086,7 +1097,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           }
         });
       });
-      if (googleEventId) void removeGoogleCalendarEvent(googleEventId).catch(() => undefined);
+      if (googleEventId && !googleEventId.startsWith('task:')) void removeGoogleCalendarEvent(googleEventId).catch(() => undefined);
     },
     createExpenseCategory(name) {
       if (!name.trim()) return;
