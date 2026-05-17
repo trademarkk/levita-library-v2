@@ -61,6 +61,13 @@ function sameMonth(date: string, month: string) {
   return date.startsWith(month);
 }
 
+function eventTimeRange(event: CalendarEvent) {
+  if (event.startTime && event.endTime) return `${event.startTime} - ${event.endTime}`;
+  if (event.startTime) return `с ${event.startTime}`;
+  if (event.endTime) return `до ${event.endTime}`;
+  return 'Весь день';
+}
+
 function formatPlanDay(dateKey: string) {
   const date = new Date(`${dateKey}T00:00:00`);
   const months = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
@@ -167,9 +174,9 @@ export function CalendarSection() {
   const { state, googleCalendarStatus, createCalendarEvent, updateCalendarEvent, deleteCalendarEvent, refreshGoogleCalendarStatus, connectGoogleCalendar, importGoogleCalendarEvents, syncCalendarEventToGoogle } = useLibrary();
   const [month, setMonth] = useState(currentMonthKey());
   const [selectedDate, setSelectedDate] = useState(todayKey());
-  const [draft, setDraft] = useState({ title: '', date: todayKey(), description: '' });
+  const [draft, setDraft] = useState({ title: '', date: todayKey(), startTime: '', endTime: '', description: '' });
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState({ title: '', date: todayKey(), description: '' });
+  const [editDraft, setEditDraft] = useState({ title: '', date: todayKey(), startTime: '', endTime: '', description: '' });
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const importedMonthsRef = useRef<Set<string>>(new Set());
@@ -202,7 +209,7 @@ export function CalendarSection() {
   const save = () => {
     if (!draft.title.trim() || !draft.date) return;
     createCalendarEvent(draft);
-    setDraft({ title: '', date: todayKey(), description: '' });
+    setDraft((value) => ({ title: '', date: value.date, startTime: '', endTime: '', description: '' }));
   };
 
   const importFromGoogle = async (targetMonth = month) => {
@@ -223,6 +230,8 @@ export function CalendarSection() {
     setEditDraft({
       title: editingEvent.title,
       date: editingEvent.date,
+      startTime: editingEvent.startTime ?? '',
+      endTime: editingEvent.endTime ?? '',
       description: editingEvent.description ?? '',
     });
   }, [editingEvent?.id]);
@@ -242,6 +251,8 @@ export function CalendarSection() {
     updateCalendarEvent(editingEvent.id, {
       title: editDraft.title,
       date: editDraft.date,
+      startTime: editDraft.startTime,
+      endTime: editDraft.endTime,
       description: editDraft.description,
     });
     setEditingId(null);
@@ -294,10 +305,12 @@ export function CalendarSection() {
           <p className="mb-4 text-xs text-[#a89b8f]">События Google за выбранный месяц загружены.</p>
         )}
         {importError && <p className="mb-4 text-sm text-[#f0c5cf]">{importError}</p>}
-        <div className="grid md:grid-cols-[1.2fr_180px] gap-3">
+        <div className="grid md:grid-cols-[1.2fr_180px_140px_140px] gap-3">
           <input value={draft.title} onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))} placeholder="Событие" className="field" />
           <input type="date" value={draft.date} onChange={(event) => setDraft((value) => ({ ...value, date: event.target.value }))} className="field" />
-          <textarea value={draft.description} onChange={(event) => setDraft((value) => ({ ...value, description: event.target.value }))} placeholder="Комментарий" className="field md:col-span-2 min-h-20" />
+          <input type="time" value={draft.startTime} onChange={(event) => setDraft((value) => ({ ...value, startTime: event.target.value }))} className="field" aria-label="Время начала" />
+          <input type="time" value={draft.endTime} onChange={(event) => setDraft((value) => ({ ...value, endTime: event.target.value }))} className="field" aria-label="Время окончания" />
+          <textarea value={draft.description} onChange={(event) => setDraft((value) => ({ ...value, description: event.target.value }))} placeholder="Комментарий" className="field md:col-span-4 min-h-20" />
         </div>
         <button onClick={save} className="primary-action mt-4 flex items-center gap-2"><Save className="w-4 h-4" />Сохранить событие</button>
       </GlassCard>
@@ -349,7 +362,8 @@ export function CalendarSection() {
                           onDragStart={(dragEvent) => dragEvent.dataTransfer.setData('text/calendar-event-id', event.id)}
                           className={`calendar-event-chip ${event.sourceTaskId ? 'is-task' : event.source === 'google' ? 'is-google' : ''}`}
                         >
-                          {event.title}
+                          <span className="calendar-event-time">{eventTimeRange(event)}</span>
+                          <span>{event.title}</span>
                         </span>
                       ))}
                       {dayEvents.length > 3 && <span className="calendar-more">+{dayEvents.length - 3}</span>}
@@ -415,7 +429,11 @@ export function CalendarSection() {
             </div>
             <div className="mt-5 grid gap-3">
               <input value={editDraft.title} onChange={(event) => setEditDraft((value) => ({ ...value, title: event.target.value }))} className="field" />
-              <input type="date" value={editDraft.date} onChange={(event) => setEditDraft((value) => ({ ...value, date: event.target.value }))} className="field" />
+              <div className="grid md:grid-cols-3 gap-3">
+                <input type="date" value={editDraft.date} onChange={(event) => setEditDraft((value) => ({ ...value, date: event.target.value }))} className="field" />
+                <input type="time" value={editDraft.startTime} onChange={(event) => setEditDraft((value) => ({ ...value, startTime: event.target.value }))} className="field" aria-label="Время начала" />
+                <input type="time" value={editDraft.endTime} onChange={(event) => setEditDraft((value) => ({ ...value, endTime: event.target.value }))} className="field" aria-label="Время окончания" />
+              </div>
               <textarea value={editDraft.description} onChange={(event) => setEditDraft((value) => ({ ...value, description: event.target.value }))} className="field min-h-28" />
             </div>
             <div className="mt-5 flex flex-wrap gap-2">
@@ -437,6 +455,7 @@ function CalendarEventCard({ event, onEdit, onSync, onDelete }: { event: Calenda
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-xs text-[#c9a98d]">{formatDate(event.date)}</p>
+          <p className="mt-1 text-xs text-[#a89b8f]">{eventTimeRange(event)}</p>
           <h4 className="mt-1 text-[#f5f3f0]">{event.title}</h4>
           {event.description && <p className="mt-2 text-sm text-[#a89b8f]">{event.description}</p>}
           {event.sourceTaskId && <p className="mt-2 text-xs text-[#a89b8f]">Создано из важной задачи</p>}

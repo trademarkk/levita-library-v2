@@ -92,6 +92,7 @@ function getGoogleConfig() {
     clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
     redirectUri: process.env.GOOGLE_REDIRECT_URI || `http://127.0.0.1:${PORT}/api/google/callback`,
     calendarId: process.env.GOOGLE_CALENDAR_ID || 'primary',
+    timeZone: process.env.GOOGLE_TIME_ZONE || 'Europe/Moscow',
     appOrigin: process.env.LEVTIA_APP_ORIGIN || 'http://127.0.0.1:5173',
   };
 }
@@ -173,6 +174,33 @@ function nextDate(date) {
   return value.toISOString().slice(0, 10);
 }
 
+function formatGoogleDateTime(value, timeZone) {
+  if (!value) return { date: '', time: null };
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return { date: String(value).slice(0, 10), time: null };
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const get = (type) => parts.find((part) => part.type === type)?.value || '';
+  return {
+    date: `${get('year')}-${get('month')}-${get('day')}`,
+    time: `${get('hour')}:${get('minute')}`,
+  };
+}
+
+function addOneHour(time) {
+  const [hours, minutes] = String(time || '').split(':').map(Number);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return '';
+  const total = (hours * 60 + minutes + 60) % (24 * 60);
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+}
+
 async function googleCalendarRequest(path, options = {}) {
   const config = getGoogleConfig();
   const accessToken = await getGoogleAccessToken();
@@ -196,6 +224,18 @@ async function googleCalendarRequest(path, options = {}) {
 }
 
 function googleEventPayload(input) {
+  const config = getGoogleConfig();
+  if (input.startTime) {
+    const startTime = input.startTime;
+    const endTime = input.endTime || addOneHour(input.startTime);
+    return {
+      summary: input.title,
+      description: input.description || '',
+      start: { dateTime: `${input.date}T${startTime}:00`, timeZone: config.timeZone },
+      end: { dateTime: `${input.date}T${endTime}:00`, timeZone: config.timeZone },
+    };
+  }
+
   return {
     summary: input.title,
     description: input.description || '',
@@ -205,12 +245,20 @@ function googleEventPayload(input) {
 }
 
 function normalizeGoogleEvent(event) {
-  const date = event.start?.date || String(event.start?.dateTime || '').slice(0, 10);
+  const config = getGoogleConfig();
+  const start = event.start?.date
+    ? { date: event.start.date, time: null }
+    : formatGoogleDateTime(event.start?.dateTime, event.start?.timeZone || config.timeZone);
+  const end = event.end?.dateTime
+    ? formatGoogleDateTime(event.end.dateTime, event.end?.timeZone || event.start?.timeZone || config.timeZone)
+    : { date: '', time: null };
   return {
     googleEventId: event.id,
     googleHtmlLink: event.htmlLink || null,
     title: event.summary || 'Без названия',
-    date,
+    date: start.date,
+    startTime: start.time,
+    endTime: end.time,
     description: event.description || null,
     updated: event.updated || null,
   };
@@ -332,6 +380,7 @@ const server = http.createServer(async (request, response) => {
         timeMax: `${timeMax}T00:00:00.000Z`,
         singleEvents: 'true',
         orderBy: 'startTime',
+        timeZone: getGoogleConfig().timeZone,
       });
       const payload = await googleCalendarRequest(`/events?${params.toString()}`, { method: 'GET' });
       send(response, 200, { events: (payload.items || []).map(normalizeGoogleEvent).filter((event) => event.date) });

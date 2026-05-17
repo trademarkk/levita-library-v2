@@ -94,6 +94,8 @@ type GoogleCalendarImportedEvent = {
   googleHtmlLink?: string | null;
   title: string;
   date: string;
+  startTime?: string | null;
+  endTime?: string | null;
   description?: string | null;
   updated?: string | null;
 };
@@ -147,8 +149,8 @@ type LibraryContextValue = {
   updateFinancialPlanRow: (month: string, rowId: string, title: string) => void;
   deleteFinancialPlanRow: (month: string, rowId: string) => void;
   updateFinancialPlanCell: (month: string, rowId: string, date: string, value: string) => void;
-  createCalendarEvent: (input: { title: string; date: string; description?: string }) => void;
-  updateCalendarEvent: (id: string, input: Partial<{ title: string; date: string; description: string }>) => void;
+  createCalendarEvent: (input: { title: string; date: string; startTime?: string; endTime?: string; description?: string }) => void;
+  updateCalendarEvent: (id: string, input: Partial<{ title: string; date: string; startTime: string; endTime: string; description: string }>) => void;
   deleteCalendarEvent: (id: string) => void;
   refreshGoogleCalendarStatus: () => Promise<void>;
   connectGoogleCalendar: () => void;
@@ -453,6 +455,8 @@ async function saveGoogleCalendarEvent(event: CalendarEvent) {
   const payload = JSON.stringify({
     title: event.title,
     date: event.date,
+    startTime: event.startTime || '',
+    endTime: event.endTime || '',
     description: event.description ?? '',
   });
   const submit = (endpoint: string, method: 'POST' | 'PATCH') => fetch(endpoint, {
@@ -694,6 +698,8 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           if (existing) {
             existing.title = googleEvent.title;
             existing.date = googleEvent.date;
+            existing.startTime = googleEvent.startTime ?? null;
+            existing.endTime = googleEvent.endTime ?? null;
             existing.description = googleEvent.description ?? null;
             existing.googleHtmlLink = googleEvent.googleHtmlLink ?? null;
             existing.googleSyncStatus = 'synced';
@@ -705,6 +711,8 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
             id: newId('calendar-event'),
             title: googleEvent.title,
             date: googleEvent.date,
+            startTime: googleEvent.startTime ?? null,
+            endTime: googleEvent.endTime ?? null,
             description: googleEvent.description ?? null,
             sourceTaskId: null,
             googleEventId: googleEvent.googleEventId,
@@ -792,6 +800,8 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
             id: calendarEventId,
             title: input.title,
             date: input.deadline,
+            startTime: null,
+            endTime: null,
             description: input.description || null,
             sourceTaskId: taskId,
             googleSyncStatus: 'pending',
@@ -822,7 +832,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           } else {
             const calendarEventId = newId('calendar-event');
             task.calendarEventId = calendarEventId;
-            const event: CalendarEvent = { id: calendarEventId, title: task.title, date: task.deadline, description: task.description || null, sourceTaskId: task.id, googleSyncStatus: 'pending', googleSyncError: null, source: 'local', createdAt: new Date().toISOString() };
+            const event: CalendarEvent = { id: calendarEventId, title: task.title, date: task.deadline, startTime: null, endTime: null, description: task.description || null, sourceTaskId: task.id, googleSyncStatus: 'pending', googleSyncError: null, source: 'local', createdAt: new Date().toISOString() };
             draft.calendarEvents.unshift(event);
             eventToSync = event;
           }
@@ -1040,6 +1050,8 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         id: newId('calendar-event'),
         title: input.title,
         date: input.date,
+        startTime: input.startTime || null,
+        endTime: input.endTime || null,
         description: input.description || null,
         sourceTaskId: null,
         googleSyncStatus: 'pending',

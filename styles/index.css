@@ -194,7 +194,9 @@
 }
 
 .calendar-event-chip {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
   overflow: hidden;
   border: 1px solid rgb(201 169 141 / 0.12);
   border-radius: 0.45rem;
@@ -204,7 +206,18 @@
   font-size: 0.72rem;
   line-height: 1.15;
   text-overflow: ellipsis;
+}
+
+.calendar-event-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.calendar-event-time {
+  color: #c9a98d;
+  font-size: 0.65rem;
+  font-weight: 700;
 }
 
 .calendar-event-chip.is-google {

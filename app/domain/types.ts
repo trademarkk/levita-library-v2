@@ -146,6 +146,8 @@ export interface CalendarEvent {
   id: string;
   title: string;
   date: string;
+  startTime?: string | null;
+  endTime?: string | null;
   description?: string | null;
   sourceTaskId?: string | null;
   googleEventId?: string | null;
