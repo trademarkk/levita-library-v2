@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, XAxis, YAxis } from 'recharts';
 import { ExternalLink, Pencil, Plus, Save, Trash2, X } from 'lucide-react';
 import { GlassCard } from './GlassCard';
@@ -21,6 +21,13 @@ type EvaluationDraft = {
 };
 
 type RatingScope = 'all' | 'studio' | 'trainer';
+
+type ChartPointSelection = {
+  evaluation: TrainerEvaluationSheet;
+  x: number;
+  y: number;
+  containerWidth: number;
+};
 
 function todayKey() {
   const date = new Date();
@@ -114,6 +121,45 @@ function SelectedEvaluationCard({ evaluation }: { evaluation: TrainerEvaluationS
           Открыть оценочный лист
         </a>
       </div>
+    </div>
+  );
+}
+
+function ChartEvaluationCard({ point, onClose }: { point: ChartPointSelection | null; onClose: () => void }) {
+  if (!point) return null;
+  const { evaluation, x, y, containerWidth } = point;
+  const placeBelow = y < 150;
+  const cardWidth = Math.min(336, Math.max(260, containerWidth - 32));
+  const left = Math.min(Math.max(16, x - cardWidth / 2), Math.max(16, containerWidth - cardWidth - 16));
+
+  return (
+    <div
+      className="absolute z-20 rounded-xl border border-[#c9a98d]/25 bg-[#1a1820]/95 p-4 text-sm shadow-2xl backdrop-blur"
+      style={{
+        width: `${cardWidth}px`,
+        left: `${left}px`,
+        top: `${placeBelow ? y + 18 : y - 18}px`,
+        transform: placeBelow ? undefined : 'translateY(-100%)',
+      }}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs text-[#c9a98d]">{formatDate(evaluation.evaluatedAt)}</p>
+          <h3 className="mt-1 text-base text-[#f5f3f0]">{evaluation.trainerName}</h3>
+        </div>
+        <button onClick={onClose} className="text-[#a89b8f] hover:text-[#f5f3f0]" aria-label="Закрыть карточку оценки">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="mt-3 space-y-1 text-[#a89b8f]">
+        <p>Оценка: <span className="text-[#f5f3f0]">{scoreLabel(evaluation.score)}</span></p>
+        <p>Студия: {studioLabels[evaluation.studio]}</p>
+        <p>Направление: {evaluation.direction}</p>
+      </div>
+      <a href={evaluation.sheetUrl} target="_blank" rel="noreferrer" className="mt-4 inline-flex items-center gap-2 text-[#c9a98d] hover:text-[#f5f3f0]">
+        <ExternalLink className="h-4 w-4" />
+        Открыть оценочный лист
+      </a>
     </div>
   );
 }
@@ -229,6 +275,7 @@ export function TrainerEvaluationSheetsSection() {
 
 export function TrainerRatingSection() {
   const { state } = useLibrary();
+  const chartAreaRef = useRef<HTMLDivElement>(null);
   const [scope, setScope] = useState<RatingScope>('all');
   const [studio, setStudio] = useState<ExpenseStudio>('STAVROPOLSKAYA');
   const trainerNames = useMemo(() => trainerNamesFrom(state.trainerEvaluations), [state.trainerEvaluations]);
@@ -239,6 +286,7 @@ export function TrainerRatingSection() {
   }, [state.trainerEvaluations]);
   const [selectedMonth, setSelectedMonth] = useState(() => availableMonths[0] ?? monthKey(todayKey()));
   const [selectedEvaluationId, setSelectedEvaluationId] = useState<string | null>(null);
+  const [chartPoint, setChartPoint] = useState<ChartPointSelection | null>(null);
 
   const filtered = useMemo(() => {
     const targetTrainer = trainerName || trainerNames[0] || '';
@@ -256,9 +304,19 @@ export function TrainerRatingSection() {
   const maxScore = Math.max(10, ...filtered.map((evaluation) => evaluation.score));
   const yMax = maxScore <= 10 ? 10 : Math.ceil(maxScore / 10) * 10;
   const selectedEvaluation = filtered.find((evaluation) => evaluation.id === selectedEvaluationId) ?? filtered[filtered.length - 1] ?? null;
-  const selectChartPoint = (chartState?: { activePayload?: Array<{ payload?: TrainerEvaluationSheet }> }) => {
+  const activeChartPoint = chartPoint && filtered.some((evaluation) => evaluation.id === chartPoint.evaluation.id) ? chartPoint : null;
+  const selectChartPoint = (chartState?: { activeCoordinate?: { x: number; y: number }; activePayload?: Array<{ payload?: TrainerEvaluationSheet }> }) => {
     const evaluation = chartState?.activePayload?.[0]?.payload;
-    if (evaluation?.id) setSelectedEvaluationId(evaluation.id);
+    if (!evaluation?.id) return;
+    setSelectedEvaluationId(evaluation.id);
+    if (chartState?.activeCoordinate) {
+      setChartPoint({
+        evaluation,
+        x: chartState.activeCoordinate.x,
+        y: chartState.activeCoordinate.y,
+        containerWidth: chartAreaRef.current?.clientWidth ?? 900,
+      });
+    }
   };
 
   return (
@@ -279,13 +337,14 @@ export function TrainerRatingSection() {
                 onChange={(event) => {
                   setSelectedMonth(event.target.value || monthKey(todayKey()));
                   setSelectedEvaluationId(null);
+                  setChartPoint(null);
                 }}
                 className="field mt-2"
               />
             </label>
             <label className="text-sm text-[#a89b8f]">
               Срез
-              <select value={scope} onChange={(event) => { setScope(event.target.value as RatingScope); setSelectedEvaluationId(null); }} className="field mt-2">
+              <select value={scope} onChange={(event) => { setScope(event.target.value as RatingScope); setSelectedEvaluationId(null); setChartPoint(null); }} className="field mt-2">
                 <option value="all">Общий</option>
                 <option value="studio">По студии</option>
                 <option value="trainer">По тренеру</option>
@@ -293,14 +352,14 @@ export function TrainerRatingSection() {
             </label>
             <label className="text-sm text-[#a89b8f]">
               Студия
-              <select value={studio} onChange={(event) => { setStudio(event.target.value as ExpenseStudio); setSelectedEvaluationId(null); }} disabled={scope !== 'studio'} className="field mt-2 disabled:opacity-45">
+              <select value={studio} onChange={(event) => { setStudio(event.target.value as ExpenseStudio); setSelectedEvaluationId(null); setChartPoint(null); }} disabled={scope !== 'studio'} className="field mt-2 disabled:opacity-45">
                 <option value="STAVROPOLSKAYA">Ставропольская</option>
                 <option value="MACHUGI">Мачуги</option>
               </select>
             </label>
             <label className="text-sm text-[#a89b8f]">
               Тренер
-              <select value={trainerName || trainerNames[0] || ''} onChange={(event) => { setTrainerName(event.target.value); setSelectedEvaluationId(null); }} disabled={scope !== 'trainer'} className="field mt-2 disabled:opacity-45">
+              <select value={trainerName || trainerNames[0] || ''} onChange={(event) => { setTrainerName(event.target.value); setSelectedEvaluationId(null); setChartPoint(null); }} disabled={scope !== 'trainer'} className="field mt-2 disabled:opacity-45">
                 {trainerNames.map((name) => <option key={name} value={name}>{name}</option>)}
               </select>
             </label>
@@ -325,21 +384,24 @@ export function TrainerRatingSection() {
       </GlassCard>
 
       <GlassCard>
-        <div className="h-[25rem]">
+        <div ref={chartAreaRef} className="relative h-[25rem]">
           {filtered.length ? (
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart
-                data={filtered}
-                margin={{ top: 16, right: 24, left: 0, bottom: 8 }}
-                onMouseMove={selectChartPoint}
-                onClick={selectChartPoint}
-              >
-                <CartesianGrid stroke="rgba(201,169,141,0.12)" vertical={false} />
-                <XAxis dataKey="evaluatedAt" tickFormatter={(value) => formatDate(String(value)).replace(/\s2026 г\./, '')} stroke="#a89b8f" tick={{ fontSize: 12 }} />
-                <YAxis domain={[0, yMax]} stroke="#a89b8f" tick={{ fontSize: 12 }} />
-                <Line type="monotone" dataKey="score" stroke="#c9a98d" strokeWidth={3} dot={{ r: 7, fill: '#c9a98d', stroke: '#1a1820', strokeWidth: 2, cursor: 'pointer' }} activeDot={{ r: 10, cursor: 'pointer', stroke: '#f5f3f0', strokeWidth: 2 }} />
-              </LineChart>
-            </ResponsiveContainer>
+            <>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart
+                  data={filtered}
+                  margin={{ top: 16, right: 24, left: 0, bottom: 8 }}
+                  onMouseMove={selectChartPoint}
+                  onClick={selectChartPoint}
+                >
+                  <CartesianGrid stroke="rgba(201,169,141,0.12)" vertical={false} />
+                  <XAxis dataKey="evaluatedAt" tickFormatter={(value) => formatDate(String(value)).replace(/\s2026 г\./, '')} stroke="#a89b8f" tick={{ fontSize: 12 }} />
+                  <YAxis domain={[0, yMax]} stroke="#a89b8f" tick={{ fontSize: 12 }} />
+                  <Line type="monotone" dataKey="score" stroke="#c9a98d" strokeWidth={3} dot={{ r: 7, fill: '#c9a98d', stroke: '#1a1820', strokeWidth: 2, cursor: 'pointer' }} activeDot={{ r: 10, cursor: 'pointer', stroke: '#f5f3f0', strokeWidth: 2 }} />
+                </LineChart>
+              </ResponsiveContainer>
+              <ChartEvaluationCard point={activeChartPoint} onClose={() => setChartPoint(null)} />
+            </>
           ) : (
             <div className="flex h-full items-center justify-center rounded-xl bg-[#2a2630]/45 text-[#a89b8f]">Для выбранного среза пока нет оценок.</div>
           )}
