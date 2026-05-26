@@ -86,6 +86,7 @@ type CreateExpenseInput = {
 type GoogleCalendarStatus = {
   configured: boolean;
   connected: boolean;
+  reconnectRequired?: boolean;
   calendarId: string;
   redirectUri: string;
   includeAllCalendars?: boolean;

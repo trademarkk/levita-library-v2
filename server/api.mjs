@@ -104,6 +104,10 @@ function getGoogleToken() {
   return db.prepare('SELECT * FROM google_calendar_tokens WHERE id = ?').get('main');
 }
 
+function deleteGoogleToken() {
+  db.prepare('DELETE FROM google_calendar_tokens WHERE id = ?').run('main');
+}
+
 function saveGoogleToken(token) {
   const existing = getGoogleToken();
   const expiresAt = Date.now() + Math.max(0, Number(token.expires_in || 0) - 60) * 1000;
@@ -135,8 +139,29 @@ async function exchangeGoogleToken(params) {
     body: new URLSearchParams(params),
   });
   const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error_description || payload.error || 'Google OAuth token request failed.');
+  if (!response.ok) {
+    const error = new Error(payload.error_description || payload.error || 'Google OAuth token request failed.');
+    error.statusCode = response.status;
+    error.googleError = payload.error || null;
+    throw error;
+  }
   return payload;
+}
+
+function isInvalidGoogleTokenError(error) {
+  const message = String(error?.message || '').toLowerCase();
+  return error?.googleError === 'invalid_grant'
+    || error?.googleError === 'invalid_token'
+    || message.includes('expired or revoked')
+    || message.includes('invalid credentials')
+    || message.includes('invalid_grant')
+    || message.includes('invalid_token');
+}
+
+function googleReconnectError(message = 'Google Calendar отключен. Подключите Google заново.') {
+  const error = new Error(message);
+  error.statusCode = 401;
+  return error;
 }
 
 async function getGoogleAccessToken() {
@@ -161,12 +186,21 @@ async function getGoogleAccessToken() {
     throw error;
   }
 
-  const refreshed = await exchangeGoogleToken({
-    client_id: config.clientId,
-    client_secret: config.clientSecret,
-    refresh_token: token.refresh_token,
-    grant_type: 'refresh_token',
-  });
+  let refreshed;
+  try {
+    refreshed = await exchangeGoogleToken({
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+      refresh_token: token.refresh_token,
+      grant_type: 'refresh_token',
+    });
+  } catch (error) {
+    if (isInvalidGoogleTokenError(error)) {
+      deleteGoogleToken();
+      throw googleReconnectError();
+    }
+    throw error;
+  }
   saveGoogleToken(refreshed);
   return refreshed.access_token;
 }
@@ -236,6 +270,7 @@ async function googleCalendarRequest(path, options = {}) {
   if (!response.ok) {
     const error = new Error(payload.error?.message || payload.error_description || 'Google Calendar request failed.');
     error.statusCode = response.status;
+    if (response.status === 401 || isInvalidGoogleTokenError(error)) deleteGoogleToken();
     throw error;
   }
   return payload;
@@ -269,6 +304,7 @@ async function googleTasksRequest(path, options = {}) {
   if (!response.ok) {
     const error = new Error(payload.error?.message || payload.error_description || 'Google Tasks request failed.');
     error.statusCode = response.status;
+    if (response.status === 401 || isInvalidGoogleTokenError(error)) deleteGoogleToken();
     throw error;
   }
   return payload;
@@ -523,9 +559,26 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === '/api/google/status' && request.method === 'GET') {
       const config = getGoogleConfig();
       const token = getGoogleToken();
+      let connected = Boolean(token?.refresh_token || token?.access_token);
+      let reconnectRequired = false;
+      if (connected) {
+        try {
+          await getGoogleAccessToken();
+          connected = Boolean(getGoogleToken()?.refresh_token || getGoogleToken()?.access_token);
+        } catch (error) {
+          if (error.statusCode === 401 || isInvalidGoogleTokenError(error)) {
+            deleteGoogleToken();
+            connected = false;
+            reconnectRequired = true;
+          } else {
+            throw error;
+          }
+        }
+      }
       send(response, 200, {
         configured: Boolean(config.clientId && config.clientSecret),
-        connected: Boolean(token?.refresh_token || token?.access_token),
+        connected,
+        reconnectRequired,
         calendarId: config.calendarId,
         includeAllCalendars: config.includeAllCalendars,
         includeTasks: config.includeTasks,

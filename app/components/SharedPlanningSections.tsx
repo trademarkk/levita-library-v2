@@ -374,7 +374,8 @@ export function CalendarSection() {
             <p className="mt-1 text-xs text-[#a89b8f]">
               {!googleCalendarStatus && 'Проверяем подключение...'}
               {googleCalendarStatus && !googleCalendarStatus.configured && 'Не настроены GOOGLE_CLIENT_ID и GOOGLE_CLIENT_SECRET.'}
-              {googleCalendarStatus?.configured && !googleCalendarStatus.connected && 'Настроен, но еще не подключен.'}
+              {googleCalendarStatus?.configured && googleCalendarStatus.reconnectRequired && 'Доступ Google истёк. Подключите календарь заново.'}
+              {googleCalendarStatus?.configured && !googleCalendarStatus.connected && !googleCalendarStatus.reconnectRequired && 'Настроен, но еще не подключен.'}
               {googleCalendarStatus?.connected && `Подключен: ${googleCalendarStatus.calendarId}`}
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
