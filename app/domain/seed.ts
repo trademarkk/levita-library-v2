@@ -151,6 +151,7 @@ export const initialState: LibraryState = {
     'Подтвердить стоимость и условия',
     'Закрыть диалог следующим шагом',
   ],
+  adminShifts: [],
   settings: {
     colorMode: 'dark',
     density: 'comfortable',

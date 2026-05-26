@@ -23,17 +23,17 @@ export function DashboardLayout({ children, role, userName = 'Сотрудник
   ].join(' ');
 
   return (
-    <div className={`min-h-screen flex flex-col lg:flex-row app-shell ${settingsClass}`}>
+    <div className={`min-h-screen flex flex-col lg:flex-row overflow-x-hidden app-shell ${settingsClass}`}>
       {/* Sidebar */}
       <motion.aside
         initial={{ x: -20, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
         transition={{ duration: 0.5 }}
-        className="w-full lg:w-72 bg-[#141218] border-b lg:border-b-0 lg:border-r border-[#c9a98d]/10 flex flex-col lg:min-h-screen"
+        className="w-full lg:sticky lg:top-0 lg:h-screen lg:w-72 bg-[#141218] border-b lg:border-b-0 lg:border-r border-[#c9a98d]/10 flex flex-col lg:overflow-y-auto"
       >
         {/* Logo */}
-        <div className="p-6 lg:p-8 border-b border-[#c9a98d]/10">
-          <Link to="/" className="flex items-center gap-2 mb-6">
+        <div className="p-4 sm:p-6 lg:p-8 border-b border-[#c9a98d]/10">
+          <Link to="/" className="flex items-center gap-2 mb-4 lg:mb-6">
             <Sparkles className="w-6 h-6 text-[#c9a98d]" />
             <span className="tracking-[0.3em] text-sm text-[#c9a98d] uppercase">LEVTIA</span>
           </Link>
@@ -61,7 +61,7 @@ export function DashboardLayout({ children, role, userName = 'Сотрудник
 
         {/* User info */}
         <div className="p-4 lg:p-6 border-t border-[#c9a98d]/10">
-          <div className="flex items-center gap-3 mb-4">
+          <div className="flex items-center gap-3 mb-3 lg:mb-4">
             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#c9a98d] to-[#b88b7a] flex items-center justify-center text-[#0f0e12]">
               {displayName.charAt(0).toUpperCase()}
             </div>

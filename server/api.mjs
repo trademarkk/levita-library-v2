@@ -35,10 +35,12 @@ const MAX_BOT_TOKEN = process.env.MAX_BOT_TOKEN || '';
 const MAX_REPORT_CHAT_ID = process.env.MAX_REPORT_CHAT_ID || '';
 const MAX_REPORT_CHAT_ID_STAVROPOLSKAYA = process.env.MAX_REPORT_CHAT_ID_STAVROPOLSKAYA || MAX_REPORT_CHAT_ID;
 const MAX_REPORT_CHAT_ID_MACHUGI = process.env.MAX_REPORT_CHAT_ID_MACHUGI || '';
+const MAX_REPORT_REMINDER_SLOTS = ['14:00', '18:00', '22:00'];
 const STORAGE_DRIVER = process.env.LEVTIA_STORAGE_DRIVER || 'sqlite';
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const useSupabase = STORAGE_DRIVER === 'supabase';
+const maxReminderTimers = new Map();
 
 mkdirSync(dataDir, { recursive: true });
 
@@ -155,6 +157,68 @@ function normalizeMaxToken(value) {
     .trim();
 }
 
+function maxStudioName(studio) {
+  return studio === 'MACHUGI' ? 'Мачуги' : 'Ставропольская';
+}
+
+function maxStudioEnvName(studio) {
+  return studio === 'MACHUGI' ? 'MAX_REPORT_CHAT_ID_MACHUGI' : 'MAX_REPORT_CHAT_ID_STAVROPOLSKAYA или MAX_REPORT_CHAT_ID';
+}
+
+function resolveMaxChatId(config, studio) {
+  return config.reportChatIds[studio] || '';
+}
+
+function ensureMaxStudioConfigured(studio = 'STAVROPOLSKAYA') {
+  const config = getMaxConfig();
+  const reportChatId = resolveMaxChatId(config, studio);
+  if (!config.botToken) {
+    const error = new Error('MAX не настроен: добавьте MAX_BOT_TOKEN.');
+    error.statusCode = 409;
+    throw error;
+  }
+  if (!reportChatId) {
+    const error = new Error(`MAX чат для студии ${maxStudioName(studio)} не настроен: добавьте ${maxStudioEnvName(studio)}.`);
+    error.statusCode = 409;
+    throw error;
+  }
+  return { config, reportChatId };
+}
+
+function reminderDateTime(date, slot, minutesBefore = 15) {
+  const [year, month, day] = String(date || '').split('-').map(Number);
+  const [hours, minutes] = String(slot || '').split(':').map(Number);
+  if (![year, month, day, hours, minutes].every(Number.isFinite)) return null;
+  return new Date(year, month - 1, day, hours, minutes - minutesBefore, 0, 0);
+}
+
+function scheduleMaxShiftReminder({ shiftId, adminName, studio, date, slot }) {
+  ensureMaxStudioConfigured(studio);
+  const scheduledFor = reminderDateTime(date, slot);
+  if (!scheduledFor) {
+    const error = new Error('Некорректная дата или время напоминания.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const delay = scheduledFor.getTime() - Date.now();
+  if (delay <= 0) return null;
+
+  const key = `${shiftId}:${date}:${slot}`;
+  const existing = maxReminderTimers.get(key);
+  if (existing) clearTimeout(existing);
+
+  const timer = setTimeout(() => {
+    maxReminderTimers.delete(key);
+    sendMaxMessage(`${adminName}, не забудь отчетик на ${slot}💛`, studio).catch((error) => {
+      console.error(`MAX reminder failed for ${key}:`, error);
+    });
+  }, delay);
+  maxReminderTimers.set(key, timer);
+
+  return { slot, scheduledFor: scheduledFor.toISOString() };
+}
+
 function formatReportDate(value) {
   const date = value ? new Date(value) : null;
   if (!date || Number.isNaN(date.getTime())) return value || '';
@@ -198,20 +262,7 @@ function maxReportText(input) {
 }
 
 async function sendMaxMessage(text, studio = 'STAVROPOLSKAYA') {
-  const config = getMaxConfig();
-  const reportChatId = config.reportChatIds[studio] || '';
-  if (!config.botToken) {
-    const error = new Error('MAX не настроен: добавьте MAX_BOT_TOKEN.');
-    error.statusCode = 409;
-    throw error;
-  }
-  if (!reportChatId) {
-    const studioName = studio === 'MACHUGI' ? 'Мачуги' : 'Ставропольская';
-    const envName = studio === 'MACHUGI' ? 'MAX_REPORT_CHAT_ID_MACHUGI' : 'MAX_REPORT_CHAT_ID_STAVROPOLSKAYA или MAX_REPORT_CHAT_ID';
-    const error = new Error(`MAX чат для студии ${studioName} не настроен: добавьте ${envName}.`);
-    error.statusCode = 409;
-    throw error;
-  }
+  const { config, reportChatId } = ensureMaxStudioConfigured(studio);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MAX_REQUEST_TIMEOUT_MS);
@@ -974,6 +1025,26 @@ const server = http.createServer(async (request, response) => {
           MACHUGI: config.reportChatIds.MACHUGI || null,
         },
       });
+      return;
+    }
+
+    if (url.pathname === '/api/max/shift-reminders' && request.method === 'POST') {
+      const body = JSON.parse(await readBody(request) || '{}');
+      if (!body.shiftId || !body.adminName || !body.date) {
+        send(response, 400, { error: 'shiftId, adminName and date are required' });
+        return;
+      }
+      const studio = body.studio === 'MACHUGI' ? 'MACHUGI' : 'STAVROPOLSKAYA';
+      const scheduled = MAX_REPORT_REMINDER_SLOTS
+        .map((slot) => scheduleMaxShiftReminder({
+          shiftId: body.shiftId,
+          adminName: body.adminName,
+          studio,
+          date: body.date,
+          slot,
+        }))
+        .filter(Boolean);
+      send(response, 200, { ok: true, scheduled });
       return;
     }
 

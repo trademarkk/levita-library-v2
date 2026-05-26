@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { DashboardLayout } from './DashboardLayout';
 import { TabNavigation } from './TabNavigation';
 import { GlassCard } from './GlassCard';
@@ -30,9 +30,10 @@ export function AdminDashboard() {
 
 function AdminWorkspace({ role, canManageTemplates = false, canManageLinks = false, canManageRefunds = false }: { role: 'ADMIN' | 'SENIOR_ADMIN'; canManageTemplates?: boolean; canManageLinks?: boolean; canManageRefunds?: boolean }) {
   const [activeTab, setActiveTab] = useState('responsibilities');
-  const { currentUser, state } = useLibrary();
+  const { currentUser, state, activeAdminShift } = useLibrary();
   const user = currentUser?.role === role ? currentUser : state.users.find((item) => item.role === role);
   const tabs = canManageRefunds ? [...adminTabs, { id: 'refunds', label: 'Возвраты' }] : adminTabs;
+  const shift = user ? activeAdminShift(user.id) : null;
 
   return (
     <DashboardLayout role={role} userName={user?.name ?? roleLabels[role]}>
@@ -42,21 +43,96 @@ function AdminWorkspace({ role, canManageTemplates = false, canManageLinks = fal
           <p className="text-[#a89b8f]">Регламенты, база знаний, чек-лист смены, звонки и рабочие таблицы.</p>
         </div>
 
-        <TabNavigation tabs={tabs} activeTab={activeTab} onTabChange={setActiveTab} />
+        {!shift ? (
+          <ShiftStartGate role={role} selectedUserId={user?.id ?? ''} />
+        ) : (
+          <>
+            <GlassCard className="mb-6">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm text-[#a89b8f]">Смена открыта</p>
+                  <p className="text-lg text-[#f5f3f0]">{shift.adminName} · {studioLabels[shift.studio]}</p>
+                </div>
+                <div className="text-sm text-[#a89b8f]">
+                  MAX-напоминания: {shift.remindersScheduledAt ? 'запланированы' : shift.reminderScheduleError ? 'ошибка' : 'ожидают постановки'}
+                </div>
+              </div>
+              {shift.reminderScheduleError && <p className="mt-3 text-sm text-[#f0c5cf]">{shift.reminderScheduleError}</p>}
+            </GlassCard>
 
-        <div className="max-w-7xl">
-          {activeTab === 'responsibilities' && <RoleContentViewer role={role} category="RESPONSIBILITY" />}
-          {activeTab === 'regulations' && <RoleContentViewer role={role} category="REGULATION" />}
-          {activeTab === 'info' && <RoleContentViewer role={role} category="IMPORTANT_INFO" />}
-          {activeTab === 'knowledge' && <RoleContentViewer role={role} category="KNOWLEDGE" />}
-          {activeTab === 'templates' && <RoleTemplatesViewer role={role} />}
-          {activeTab === 'links' && <RoleLinksViewer role={role} />}
-          {activeTab === 'checklist' && <ChecklistSection userId={user?.id ?? ''} />}
-          {activeTab === 'calls' && <CallsSection />}
-          {activeTab === 'refunds' && canManageRefunds && <RefundsSection />}
-        </div>
+            <TabNavigation tabs={tabs} activeTab={activeTab} onTabChange={setActiveTab} />
+
+            <div className="max-w-7xl">
+              {activeTab === 'responsibilities' && <RoleContentViewer role={role} category="RESPONSIBILITY" />}
+              {activeTab === 'regulations' && <RoleContentViewer role={role} category="REGULATION" />}
+              {activeTab === 'info' && <RoleContentViewer role={role} category="IMPORTANT_INFO" />}
+              {activeTab === 'knowledge' && <RoleContentViewer role={role} category="KNOWLEDGE" />}
+              {activeTab === 'templates' && <RoleTemplatesViewer role={role} />}
+              {activeTab === 'links' && <RoleLinksViewer role={role} />}
+              {activeTab === 'checklist' && <ChecklistSection userId={user?.id ?? ''} shiftStudio={shift.studio} />}
+              {activeTab === 'calls' && <CallsSection />}
+              {activeTab === 'refunds' && canManageRefunds && <RefundsSection />}
+            </div>
+          </>
+        )}
       </div>
     </DashboardLayout>
+  );
+}
+
+function ShiftStartGate({ role, selectedUserId }: { role: 'ADMIN' | 'SENIOR_ADMIN'; selectedUserId: string }) {
+  const { state, startAdminShift } = useLibrary();
+  const users = state.users.filter((item) => item.role === role && item.status === 'active');
+  const [userId, setUserId] = useState(selectedUserId || users[0]?.id || '');
+  const [studio, setStudio] = useState<Studio>('STAVROPOLSKAYA');
+  const [isStarting, setIsStarting] = useState(false);
+  const selectedUser = users.find((item) => item.id === userId) ?? null;
+
+  useEffect(() => {
+    const fallbackUserId = selectedUserId || users[0]?.id || '';
+    if (!userId && fallbackUserId) setUserId(fallbackUserId);
+  }, [selectedUserId, userId, users]);
+
+  const start = async () => {
+    if (!selectedUser || isStarting) return;
+    setIsStarting(true);
+    try {
+      await startAdminShift({ userId: selectedUser.id, adminName: selectedUser.name, studio });
+    } finally {
+      setIsStarting(false);
+    }
+  };
+
+  return (
+    <GlassCard className="max-w-3xl">
+      <div className="flex items-start gap-4">
+        <Shield className="mt-1 h-6 w-6 shrink-0 text-[#c9a98d]" />
+        <div className="flex-1">
+          <h2 className="text-2xl text-[#f5f3f0]">Перед началом смены</h2>
+          <p className="mt-2 text-[#a89b8f]">
+            Выберите администратора и студию. Без отметки смены кабинет и рабочие действия недоступны.
+          </p>
+          <div className="mt-6 grid gap-3 sm:grid-cols-2">
+            <label className="text-sm text-[#a89b8f]">
+              Администратор
+              <select value={userId} onChange={(event) => setUserId(event.target.value)} className="field mt-2">
+                {users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </select>
+            </label>
+            <label className="text-sm text-[#a89b8f]">
+              Студия
+              <select value={studio} onChange={(event) => setStudio(event.target.value as Studio)} className="field mt-2">
+                <option value="STAVROPOLSKAYA">{studioLabels.STAVROPOLSKAYA}</option>
+                <option value="MACHUGI">{studioLabels.MACHUGI}</option>
+              </select>
+            </label>
+          </div>
+          <button onClick={start} disabled={!selectedUser || isStarting} className="primary-action mt-6 disabled:cursor-not-allowed disabled:opacity-50">
+            {isStarting ? 'Открываем смену...' : 'Я на смене'}
+          </button>
+        </div>
+      </div>
+    </GlassCard>
   );
 }
 
@@ -158,7 +234,7 @@ function LinksSection({ editable }: { editable: boolean }) {
   );
 }
 
-function ChecklistSection({ userId }: { userId: string }) {
+function ChecklistSection({ userId, shiftStudio }: { userId: string; shiftStudio: Studio }) {
   const { checklistForUser, toggleChecklistItem, updateChecklistReport } = useLibrary();
   const checklist = checklistForUser(userId);
   const [reportDrafts, setReportDrafts] = useState<Record<string, Partial<ChecklistReport>>>({});
@@ -200,7 +276,7 @@ function ChecklistSection({ userId }: { userId: string }) {
 
       <div className="grid xl:grid-cols-3 gap-4">
         {checklist.reports.map((report) => {
-          const draft = { ...report, ...reportDrafts[report.slot] };
+          const draft = { ...report, studio: report.studio ?? shiftStudio, ...reportDrafts[report.slot] };
           return (
             <GlassCard key={report.slot}>
               <h3 className="text-lg text-[#f5f3f0] mb-1">{reportSlotLabels[report.slot]}</h3>
@@ -209,7 +285,7 @@ function ChecklistSection({ userId }: { userId: string }) {
                 <label className="grid grid-cols-[110px_1fr] items-center gap-2 text-sm text-[#a89b8f]">
                   <span>Студия:</span>
                   <select
-                    value={draft.studio ?? 'STAVROPOLSKAYA'}
+                    value={draft.studio ?? shiftStudio}
                     onChange={(event) => setReportStudio(report.slot, event.target.value as Studio)}
                     className="field py-1.5"
                   >

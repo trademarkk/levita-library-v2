@@ -3,6 +3,7 @@ import { adminChecklistItems, initialState } from './seed';
 import { normalizeHashtags, roleRoutes } from './labels';
 import type {
   AppSettings,
+  AdminShift,
   CalendarEvent,
   CalendarEventRecurrence,
   ChecklistControlStatus,
@@ -166,6 +167,8 @@ type LibraryContextValue = {
   addChecklistItem: (checklistId: string, label: string) => void;
   deleteChecklistItem: (checklistId: string, itemId: string) => void;
   updateChecklistReport: (checklistId: string, slot: ChecklistReportSlot, input: Partial<Omit<ChecklistReport, 'slot'>>) => Promise<void>;
+  activeAdminShift: (userId: string) => AdminShift | null;
+  startAdminShift: (input: { userId: string; adminName: string; studio: Studio }) => Promise<void>;
   createRefund: (input: Omit<RefundCase, 'id' | 'createdAt' | 'requestedAt'> & { requestedAt?: string }) => void;
   updateRefund: (id: string, input: { amount?: number; reason?: string; status?: RefundStatus; comment?: string; clientName?: string }) => void;
   addFinancialPlanRow: (month: string, title: string) => void;
@@ -420,6 +423,13 @@ function normalizeState(raw: Partial<LibraryState> | null): LibraryState {
     joinDate: user.joinDate || 'май 2026',
   })) as User[];
 
+  const adminShifts = (raw.adminShifts || []).map((shift) => ({
+    ...shift,
+    studio: shift.studio ?? DEFAULT_STUDIO,
+    remindersScheduledAt: shift.remindersScheduledAt ?? null,
+    reminderScheduleError: shift.reminderScheduleError ?? null,
+  })) as AdminShift[];
+
   const today = dateKey();
   const normalizedChecklists = (raw.checklists || [])
     .filter((checklist) => users.some((user) => user.id === checklist.assignedTo))
@@ -506,6 +516,7 @@ function normalizeState(raw: Partial<LibraryState> | null): LibraryState {
       evaluatedAt: /^\d{4}-\d{2}-\d{2}$/.test(evaluation.evaluatedAt) ? evaluation.evaluatedAt : dateKey(evaluation.evaluatedAt) || dateKey(),
       createdById: evaluation.createdById ?? null,
     })),
+    adminShifts,
     settings: { ...base.settings, ...(raw.settings || {}) },
   };
 }
@@ -602,6 +613,16 @@ async function sendMaxChecklistReport(input: {
   });
   if (!response.ok) throw new Error(await readApiError(response));
   return await response.json() as { ok: boolean; sentAt: string; messageId?: string | null };
+}
+
+async function scheduleMaxShiftReminders(input: { shiftId: string; adminName: string; studio: Studio; date: string }) {
+  const response = await fetch('/api/max/shift-reminders', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(await readApiError(response));
+  return await response.json() as { ok: boolean; scheduled: Array<{ slot: ChecklistReportSlot; scheduledFor: string }> };
 }
 
 async function fetchGoogleCalendarEvents(timeMin: string, timeMax: string) {
@@ -914,6 +935,46 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     },
     ownerChecklistReports() {
       return buildAdminChecklistReports();
+    },
+    activeAdminShift(userId) {
+      return state.adminShifts.find((shift) => shift.userId === userId && shift.date === dateKey()) ?? null;
+    },
+    async startAdminShift(input) {
+      const date = dateKey();
+      const existing = state.adminShifts.find((shift) => shift.userId === input.userId && shift.date === date);
+      const shift: AdminShift = {
+        id: existing?.id ?? newId('shift'),
+        userId: input.userId,
+        adminName: input.adminName,
+        studio: input.studio,
+        date,
+        startedAt: existing?.startedAt ?? new Date().toISOString(),
+        remindersScheduledAt: null,
+        reminderScheduleError: null,
+      };
+      update((draft) => {
+        draft.adminShifts = [
+          shift,
+          ...draft.adminShifts.filter((item) => !(item.userId === input.userId && item.date === date)),
+        ];
+      });
+      try {
+        await scheduleMaxShiftReminders({ shiftId: shift.id, adminName: shift.adminName, studio: shift.studio, date });
+        update((draft) => {
+          const stored = draft.adminShifts.find((item) => item.id === shift.id);
+          if (!stored) return;
+          stored.remindersScheduledAt = new Date().toISOString();
+          stored.reminderScheduleError = null;
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Не удалось поставить напоминания MAX.';
+        update((draft) => {
+          const stored = draft.adminShifts.find((item) => item.id === shift.id);
+          if (!stored) return;
+          stored.reminderScheduleError = message;
+          stored.remindersScheduledAt = null;
+        });
+      }
     },
     createEmployee(input) {
       update((draft) => {

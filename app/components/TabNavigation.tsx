@@ -55,7 +55,7 @@ export function TabNavigation({ tabs, activeTab, onTabChange, storageKey }: TabN
   };
 
   return (
-    <div className="flex flex-wrap gap-2 border-b border-[#c9a98d]/10 mb-8 overflow-x-auto">
+    <div className="tab-navigation flex flex-nowrap gap-2 border-b border-[#c9a98d]/10 mb-8 overflow-x-auto">
       {visibleTabs.map((tab) => (
         <button
           key={tab.id}
@@ -65,7 +65,7 @@ export function TabNavigation({ tabs, activeTab, onTabChange, storageKey }: TabN
           onDrop={() => moveTab(tab.id)}
           onDragEnd={() => setDraggedId(null)}
           onClick={() => onTabChange(tab.id)}
-          className={`relative px-4 lg:px-6 py-3 transition-all duration-300 whitespace-nowrap ${
+          className={`relative shrink-0 px-4 lg:px-6 py-3 transition-all duration-300 whitespace-nowrap ${
             activeTab === tab.id
               ? 'text-[#c9a98d]'
               : 'text-[#a89b8f] hover:text-[#f5f3f0]'

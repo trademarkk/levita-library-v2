@@ -108,6 +108,17 @@ export interface ChecklistReport {
   maxMessageId?: string | null;
 }
 
+export interface AdminShift {
+  id: string;
+  userId: string;
+  adminName: string;
+  studio: Studio;
+  date: string;
+  startedAt: string;
+  remindersScheduledAt?: string | null;
+  reminderScheduleError?: string | null;
+}
+
 export interface DailyChecklist {
   id: string;
   title: string;
@@ -224,6 +235,7 @@ export interface LibraryState {
   expenses: ExpenseRecord[];
   trainerEvaluations: TrainerEvaluationSheet[];
   callChecklist: string[];
+  adminShifts: AdminShift[];
   settings: AppSettings;
 }
 
