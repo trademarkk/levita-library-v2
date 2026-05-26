@@ -29,6 +29,14 @@ type ChartPointSelection = {
   containerWidth: number;
 };
 
+type RatingDotProps = {
+  cx?: number;
+  cy?: number;
+  payload?: TrainerEvaluationSheet;
+  selected?: boolean;
+  onSelect: (evaluation: TrainerEvaluationSheet, x: number, y: number) => void;
+};
+
 function todayKey() {
   const date = new Date();
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -161,6 +169,27 @@ function ChartEvaluationCard({ point, onClose }: { point: ChartPointSelection | 
         Открыть оценочный лист
       </a>
     </div>
+  );
+}
+
+function RatingDot({ cx, cy, payload, selected, onSelect }: RatingDotProps) {
+  if (typeof cx !== 'number' || typeof cy !== 'number' || !payload) return null;
+
+  const select = () => onSelect(payload, cx, cy);
+
+  return (
+    <g className="cursor-pointer" onMouseEnter={select} onClick={select} onFocus={select} tabIndex={0} role="button" aria-label={`Оценка ${payload.trainerName}: ${scoreLabel(payload.score)}`}>
+      <circle cx={cx} cy={cy} r={16} fill="transparent" />
+      <circle
+        cx={cx}
+        cy={cy}
+        r={selected ? 10 : 7}
+        fill="#c9a98d"
+        stroke={selected ? '#f5f3f0' : '#1a1820'}
+        strokeWidth={selected ? 2 : 2}
+        pointerEvents="none"
+      />
+    </g>
   );
 }
 
@@ -305,18 +334,14 @@ export function TrainerRatingSection() {
   const yMax = maxScore <= 10 ? 10 : Math.ceil(maxScore / 10) * 10;
   const selectedEvaluation = filtered.find((evaluation) => evaluation.id === selectedEvaluationId) ?? filtered[filtered.length - 1] ?? null;
   const activeChartPoint = chartPoint && filtered.some((evaluation) => evaluation.id === chartPoint.evaluation.id) ? chartPoint : null;
-  const selectChartPoint = (chartState?: { activeCoordinate?: { x: number; y: number }; activePayload?: Array<{ payload?: TrainerEvaluationSheet }> }) => {
-    const evaluation = chartState?.activePayload?.[0]?.payload;
-    if (!evaluation?.id) return;
+  const selectChartPoint = (evaluation: TrainerEvaluationSheet, x: number, y: number) => {
     setSelectedEvaluationId(evaluation.id);
-    if (chartState?.activeCoordinate) {
-      setChartPoint({
-        evaluation,
-        x: chartState.activeCoordinate.x,
-        y: chartState.activeCoordinate.y,
-        containerWidth: chartAreaRef.current?.clientWidth ?? 900,
-      });
-    }
+    setChartPoint({
+      evaluation,
+      x,
+      y,
+      containerWidth: chartAreaRef.current?.clientWidth ?? 900,
+    });
   };
 
   return (
@@ -391,13 +416,24 @@ export function TrainerRatingSection() {
                 <LineChart
                   data={filtered}
                   margin={{ top: 16, right: 24, left: 0, bottom: 8 }}
-                  onMouseMove={selectChartPoint}
-                  onClick={selectChartPoint}
                 >
                   <CartesianGrid stroke="rgba(201,169,141,0.12)" vertical={false} />
                   <XAxis dataKey="evaluatedAt" tickFormatter={(value) => formatDate(String(value)).replace(/\s2026 г\./, '')} stroke="#a89b8f" tick={{ fontSize: 12 }} />
                   <YAxis domain={[0, yMax]} stroke="#a89b8f" tick={{ fontSize: 12 }} />
-                  <Line type="monotone" dataKey="score" stroke="#c9a98d" strokeWidth={3} dot={{ r: 7, fill: '#c9a98d', stroke: '#1a1820', strokeWidth: 2, cursor: 'pointer' }} activeDot={{ r: 10, cursor: 'pointer', stroke: '#f5f3f0', strokeWidth: 2 }} />
+                  <Line
+                    type="monotone"
+                    dataKey="score"
+                    stroke="#c9a98d"
+                    strokeWidth={3}
+                    dot={(props) => (
+                      <RatingDot
+                        {...props}
+                        selected={props.payload?.id === selectedEvaluationId}
+                        onSelect={selectChartPoint}
+                      />
+                    )}
+                    activeDot={false}
+                  />
                 </LineChart>
               </ResponsiveContainer>
               <ChartEvaluationCard point={activeChartPoint} onClose={() => setChartPoint(null)} />
