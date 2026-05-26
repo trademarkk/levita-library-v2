@@ -126,8 +126,8 @@ function TeamSection() {
       </div>
 
       {showModal && (
-        <div className="fixed inset-0 z-50 bg-[#0f0e12]/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <GlassCard className="w-full max-w-xl">
+        <div className="fixed inset-0 z-50 bg-[#0f0e12]/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setShowModal(false)}>
+          <GlassCard className="w-full max-w-xl" onClick={(event) => event.stopPropagation()}>
             <div className="flex justify-between items-center mb-5">
               <h3 className="text-2xl text-[#f5f3f0]">{editingId ? 'Редактировать сотрудника' : 'Новый сотрудник'}</h3>
               <button onClick={() => setShowModal(false)} className="text-[#a89b8f]" aria-label="Закрыть окно"><X className="w-5 h-5" /></button>
@@ -156,8 +156,8 @@ function TeamSection() {
       )}
 
       {deleteTarget && (
-        <div className="fixed inset-0 z-50 bg-[#0f0e12]/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <GlassCard className="w-full max-w-md">
+        <div className="fixed inset-0 z-50 bg-[#0f0e12]/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setDeleteTargetId(null)}>
+          <GlassCard className="w-full max-w-md" onClick={(event) => event.stopPropagation()}>
             <div className="flex justify-between items-start gap-4 mb-5">
               <div>
                 <h3 className="text-2xl text-[#f5f3f0]">Удалить сотрудника?</h3>

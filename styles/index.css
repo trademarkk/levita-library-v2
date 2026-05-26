@@ -295,6 +295,11 @@
   box-shadow: 0 28px 70px rgb(0 0 0 / 0.42);
 }
 
+.calendar-day-popup {
+  max-height: min(42rem, calc(100vh - 2rem));
+  overflow-y: auto;
+}
+
 thead .financial-sticky-cell {
   z-index: 3;
 }

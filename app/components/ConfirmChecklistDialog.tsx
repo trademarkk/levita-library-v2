@@ -9,8 +9,8 @@ type ConfirmChecklistDialogProps = {
 
 export function ConfirmChecklistDialog({ itemLabel, onCancel, onConfirm }: ConfirmChecklistDialogProps) {
   return (
-    <div className="fixed inset-0 z-50 bg-[#0f0e12]/70 backdrop-blur-sm flex items-center justify-center p-4">
-      <GlassCard className="w-full max-w-md">
+    <div className="fixed inset-0 z-50 bg-[#0f0e12]/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={onCancel}>
+      <GlassCard className="w-full max-w-md" onClick={(event) => event.stopPropagation()}>
         <div className="flex items-start justify-between gap-4 mb-5">
           <div>
             <h3 className="text-2xl text-[#f5f3f0]">Подтвердить выполнение?</h3>

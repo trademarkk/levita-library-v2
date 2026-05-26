@@ -273,6 +273,7 @@ export function CalendarSection() {
   const [draft, setDraft] = useState<CalendarDraft>(() => emptyCalendarDraft());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<CalendarDraft>(() => emptyCalendarDraft());
+  const [dayPopupDate, setDayPopupDate] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const importedMonthsRef = useRef<Set<string>>(new Set());
@@ -286,6 +287,7 @@ export function CalendarSection() {
     return acc;
   }, {}), [monthEvents]);
   const selectedEvents = eventsByDate[selectedDate] ?? [];
+  const popupEvents = dayPopupDate ? eventsByDate[dayPopupDate] ?? [] : [];
   const editingEvent = editingId ? state.calendarEvents.find((event) => event.id === editingId) ?? null : null;
 
   useEffect(() => {
@@ -331,6 +333,7 @@ export function CalendarSection() {
   }, [googleCalendarStatus?.connected, month]);
 
   const openEvent = (event: CalendarDisplayEvent) => {
+    setDayPopupDate(null);
     setEditingId(event.sourceEventId);
   };
 
@@ -356,6 +359,11 @@ export function CalendarSection() {
   const selectCalendarDate = (date: string) => {
     setSelectedDate(date);
     setDraft((value) => ({ ...value, date }));
+  };
+
+  const openCalendarDate = (date: string) => {
+    selectCalendarDate(date);
+    setDayPopupDate(date);
   };
 
   return (
@@ -439,7 +447,7 @@ export function CalendarSection() {
                 key={date ?? `blank-${index}`}
                 type="button"
                 disabled={!date}
-                onClick={() => date && selectCalendarDate(date)}
+                onClick={() => date && openCalendarDate(date)}
                 onDragOver={(event) => date && event.preventDefault()}
                 onDrop={(event) => {
                   const id = event.dataTransfer.getData('text/calendar-event-id');
@@ -521,8 +529,8 @@ export function CalendarSection() {
       </div>
 
       {editingEvent && (
-        <div className="calendar-modal-backdrop" role="dialog" aria-modal="true">
-          <div className="calendar-modal">
+        <div className="calendar-modal-backdrop" role="dialog" aria-modal="true" onClick={() => setEditingId(null)}>
+          <div className="calendar-modal" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-xs text-[#c9a98d]">Редактирование события</p>
@@ -557,6 +565,37 @@ export function CalendarSection() {
               {editingEvent.source !== 'google-task' && <button onClick={() => void syncCalendarEventToGoogle(editingEvent.id)} className="calendar-soft-button inline-flex items-center gap-2"><RefreshCw className="w-4 h-4" />Синхронизировать</button>}
               {editingEvent.googleHtmlLink && <a href={editingEvent.googleHtmlLink} target="_blank" rel="noreferrer" className="calendar-soft-button inline-flex items-center gap-2"><ExternalLink className="w-4 h-4" />Открыть в Google</a>}
               <button onClick={() => (deleteCalendarEvent(editingEvent.id), setEditingId(null))} className="calendar-danger-button inline-flex items-center gap-2"><Trash2 className="w-4 h-4" />Удалить</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {dayPopupDate && (
+        <div className="calendar-modal-backdrop" role="dialog" aria-modal="true" onClick={() => setDayPopupDate(null)}>
+          <div className="calendar-modal calendar-day-popup" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs text-[#c9a98d]">{formatDate(dayPopupDate)}</p>
+                <h3 className="text-2xl text-[#f5f3f0]">События и задачи дня</h3>
+              </div>
+              <button onClick={() => setDayPopupDate(null)} className="calendar-icon-button" aria-label="Закрыть"><X className="w-4 h-4" /></button>
+            </div>
+            <div className="mt-5 space-y-3">
+              {popupEvents.map((event) => (
+                <CalendarEventCard
+                  key={event.displayId}
+                  event={event}
+                  onEdit={() => openEvent(event)}
+                  onSync={() => void syncCalendarEventToGoogle(event.id)}
+                  onDelete={() => {
+                    deleteCalendarEvent(event.sourceEventId);
+                    if (popupEvents.length <= 1) setDayPopupDate(null);
+                  }}
+                />
+              ))}
+              {popupEvents.length === 0 && (
+                <p className="rounded-lg bg-[#2a2630]/45 p-4 text-sm text-[#a89b8f]">На эту дату событий и задач пока нет.</p>
+              )}
             </div>
           </div>
         </div>
