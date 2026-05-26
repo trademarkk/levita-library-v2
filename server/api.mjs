@@ -27,6 +27,7 @@ function loadDotEnv() {
 loadDotEnv();
 const PORT = Number(process.env.LEVTIA_API_PORT || 4174);
 const GOOGLE_REQUEST_TIMEOUT_MS = Number(process.env.GOOGLE_REQUEST_TIMEOUT_MS || 12000);
+const GOOGLE_TASK_HISTORY_LIMIT = Number(process.env.GOOGLE_TASK_HISTORY_LIMIT || 500);
 
 mkdirSync(dataDir, { recursive: true });
 
@@ -209,6 +210,26 @@ function nextDate(date) {
   const value = new Date(`${date}T00:00:00.000Z`);
   value.setUTCDate(value.getUTCDate() + 1);
   return value.toISOString().slice(0, 10);
+}
+
+function addDays(date, offset) {
+  const value = new Date(`${date}T00:00:00.000Z`);
+  value.setUTCDate(value.getUTCDate() + offset);
+  return value.toISOString().slice(0, 10);
+}
+
+function dateRange(start, end) {
+  const days = [];
+  for (let date = start; date < end; date = addDays(date, 1)) days.push(date);
+  return days;
+}
+
+function weekdayIndex(date) {
+  return new Date(`${date}T00:00:00.000Z`).getUTCDay();
+}
+
+function daysBetween(left, right) {
+  return Math.floor((new Date(`${left}T00:00:00.000Z`).getTime() - new Date(`${right}T00:00:00.000Z`).getTime()) / 86_400_000);
 }
 
 function formatGoogleDateTime(value, timeZone) {
@@ -426,6 +447,151 @@ function normalizeGoogleTask(task, taskList) {
   };
 }
 
+function normalizeSearchText(value = '') {
+  return String(value).toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
+}
+
+function recurringTaskKey(value = '') {
+  return normalizeSearchText(value)
+    .replace(/\b([01]?\d|2[0-3])[:.]\d{2}\b/g, ' ')
+    .replace(/\b([01]?\d|2[0-3])\s*[-\u2013\u2014]\s*([01]?\d|2[0-3])\b/g, ' ')
+    .replace(/(^|\s)с(?=\s|$)/gu, ' ')
+    .replace(/[^\p{L}\p{N}:]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function inferredTaskTime(title) {
+  const normalized = normalizeSearchText(title);
+  const parsed = parseTimeRangeFromText(title);
+  if (parsed.startTime || parsed.endTime) return parsed;
+  if (normalized.includes('планерк') && normalized.includes('ук')) return { startTime: '08:40', endTime: null };
+  if (normalized.includes('планерк') && normalized.includes('администратор')) return { startTime: '10:10', endTime: null };
+  return { startTime: null, endTime: null };
+}
+
+function inferGoogleTaskRecurrence(task) {
+  const dueDate = task.due ? String(task.due).slice(0, 10) : '';
+  if (!dueDate) return null;
+  const normalized = normalizeSearchText(task.title);
+  const time = inferredTaskTime(task.title || '');
+
+  if (normalized.includes('планерк') && (normalized.includes('ук') || normalized.includes('администратор'))) {
+    return {
+      frequency: 'weekly',
+      interval: 1,
+      weekdays: [1, 2, 3, 4, 5, 6],
+      startTime: time.startTime,
+      endTime: time.endTime,
+      confidence: 'inferred-from-google-task-title',
+    };
+  }
+
+  if (normalized.includes('зум') && normalized.includes('педагог')) {
+    return {
+      frequency: 'weekly',
+      interval: 1,
+      weekdays: [weekdayIndex(dueDate)],
+      startTime: time.startTime,
+      endTime: time.endTime,
+      confidence: 'inferred-from-google-task-title',
+    };
+  }
+
+  return null;
+}
+
+function latestGoogleTask(tasks) {
+  return [...tasks].sort((left, right) => (
+    String(right.due || '').localeCompare(String(left.due || ''))
+    || String(right.updated || '').localeCompare(String(left.updated || ''))
+  ))[0] || null;
+}
+
+function inferGoogleTaskGroupRecurrence(tasks) {
+  const known = tasks
+    .map((task) => ({ task, recurrence: inferGoogleTaskRecurrence(task) }))
+    .filter((item) => item.recurrence)
+    .sort((left, right) => String(right.task.updated || '').localeCompare(String(left.task.updated || '')))[0];
+  if (known?.recurrence) return known.recurrence;
+
+  const uniqueDates = Array.from(new Set(tasks
+    .map((task) => (task.due ? String(task.due).slice(0, 10) : ''))
+    .filter(Boolean)));
+  if (uniqueDates.length < 2) return null;
+
+  const weekdayCounts = new Map();
+  for (const date of uniqueDates) {
+    const weekday = weekdayIndex(date);
+    weekdayCounts.set(weekday, (weekdayCounts.get(weekday) || 0) + 1);
+  }
+  const weekdays = Array.from(weekdayCounts.entries())
+    .filter(([, count]) => count >= 2)
+    .map(([weekday]) => weekday)
+    .sort((left, right) => left - right);
+  if (!weekdays.length) return null;
+
+  const latest = latestGoogleTask(tasks);
+  const time = inferredTaskTime(`${latest?.title || ''} ${latest?.notes || ''}`);
+  return {
+    frequency: 'weekly',
+    interval: 1,
+    weekdays,
+    startTime: time.startTime,
+    endTime: time.endTime,
+    confidence: 'inferred-from-google-task-history',
+  };
+}
+
+function createVirtualRecurringGoogleTasks(tasks, taskList, timeMin, timeMax) {
+  const groups = new Map();
+  for (const task of tasks) {
+    const dueDate = task.due ? String(task.due).slice(0, 10) : '';
+    if (!dueDate) continue;
+    const key = recurringTaskKey(task.title);
+    if (!key) continue;
+    groups.set(key, [...(groups.get(key) || []), task]);
+  }
+
+  const dates = dateRange(timeMin, timeMax);
+  return Array.from(groups.values()).flatMap((groupTasks) => {
+    const task = latestGoogleTask(groupTasks);
+    const dueDate = task?.due ? String(task.due).slice(0, 10) : '';
+    const recurrence = inferGoogleTaskGroupRecurrence(groupTasks);
+    if (!task || !dueDate || !recurrence) return [];
+
+    return dates
+      .filter((date) => {
+        if (date < dueDate) return false;
+        if (!recurrence.weekdays.includes(weekdayIndex(date))) return false;
+        if (recurrence.weekdays.length > 1) return true;
+        return daysBetween(date, dueDate) % (7 * Math.max(1, recurrence.interval || 1)) === 0;
+      })
+      .map((date) => ({
+        googleEventId: `task-recurring:${taskList.id}:${task.id}:${date}`,
+        googleHtmlLink: task.webViewLink || null,
+        title: task.title || 'Задача без названия',
+        date,
+        startTime: recurrence.startTime,
+        endTime: recurrence.endTime,
+        description: task.notes || null,
+        source: 'google-task',
+        sourceName: `${taskList.title || 'Google Tasks'} · повтор`,
+        updated: task.updated || null,
+      }));
+  });
+}
+
+function dedupeImportedEvents(events) {
+  const seen = new Set();
+  return events.filter((event) => {
+    const key = `${event.date}|${event.startTime || ''}|${event.endTime || ''}|${recurringTaskKey(event.title)}|${event.source || ''}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 async function listReadableCalendars() {
   const config = getGoogleConfig();
   if (!config.includeAllCalendars) return [{ id: config.calendarId, summary: config.calendarId }];
@@ -496,7 +662,14 @@ async function listGoogleTasksForRange(timeMin, timeMax) {
     const params = new URLSearchParams({
       dueMin: `${timeMin}T00:00:00.000Z`,
       dueMax: `${timeMax}T00:00:00.000Z`,
-      showCompleted: 'false',
+      showCompleted: 'true',
+      showDeleted: 'false',
+      showHidden: 'true',
+      showAssigned: 'true',
+      maxResults: '100',
+    });
+    const historyParams = new URLSearchParams({
+      showCompleted: 'true',
       showDeleted: 'false',
       showHidden: 'true',
       showAssigned: 'true',
@@ -512,7 +685,19 @@ async function listGoogleTasksForRange(timeMin, timeMax) {
         tasks.push(...(payload.items || []).map((task) => normalizeGoogleTask(task, taskList)).filter((task) => task.date));
         taskPageToken = payload.nextPageToken || '';
       } while (taskPageToken);
-      return tasks;
+
+      const historyTasks = [];
+      let historyPageToken = '';
+      do {
+        const pageParams = new URLSearchParams(historyParams);
+        if (historyPageToken) pageParams.set('pageToken', historyPageToken);
+        const payload = await googleTasksRequest(`/lists/${encodeURIComponent(taskList.id)}/tasks?${pageParams.toString()}`, { method: 'GET' });
+        historyTasks.push(...(payload.items || []));
+        historyPageToken = payload.nextPageToken || '';
+      } while (historyPageToken && historyTasks.length < GOOGLE_TASK_HISTORY_LIMIT);
+
+      const virtualTasks = createVirtualRecurringGoogleTasks(historyTasks.slice(0, GOOGLE_TASK_HISTORY_LIMIT), taskList, timeMin, timeMax);
+      return [...tasks, ...virtualTasks];
     }));
     return batches.flat();
   } catch (error) {
@@ -660,7 +845,7 @@ const server = http.createServer(async (request, response) => {
         listGoogleEventsForRange(timeMin, timeMax),
         listGoogleTasksForRange(timeMin, timeMax),
       ]);
-      const events = [...calendarEvents, ...taskEvents]
+      const events = dedupeImportedEvents([...calendarEvents, ...taskEvents])
         .filter((event) => event.date)
         .sort((left, right) => (
           left.date.localeCompare(right.date)

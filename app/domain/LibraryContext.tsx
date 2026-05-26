@@ -216,6 +216,10 @@ function normalizeRecurrence(input?: CalendarEventRecurrence | null): CalendarEv
   };
 }
 
+function isGoogleTaskEventId(googleEventId?: string | null) {
+  return Boolean(googleEventId?.startsWith('task:') || googleEventId?.startsWith('task-recurring:'));
+}
+
 function checklistDateKey(checklist: Pick<DailyChecklist, 'date' | 'createdAt'>) {
   if (/^\d{4}-\d{2}-\d{2}$/.test(checklist.date)) return checklist.date;
   return dateKey(checklist.date) || dateKey(checklist.createdAt);
@@ -497,7 +501,7 @@ async function readApiError(response: Response) {
 }
 
 async function saveGoogleCalendarEvent(event: CalendarEvent) {
-  if (event.source === 'google-task' || event.googleEventId?.startsWith('task:')) {
+  if (event.source === 'google-task' || isGoogleTaskEventId(event.googleEventId)) {
     throw new Error('Задачи Google импортируются только для просмотра.');
   }
   const payload = JSON.stringify({
@@ -648,7 +652,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
   };
 
   const syncGoogleEvent = async (event: CalendarEvent) => {
-    if (event.source === 'google-task' || event.googleEventId?.startsWith('task:')) return;
+    if (event.source === 'google-task' || isGoogleTaskEventId(event.googleEventId)) return;
     update((draft) => {
       const stored = draft.calendarEvents.find((item) => item.id === event.id);
       if (stored) {
@@ -1146,7 +1150,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           }
         });
       });
-      if (googleEventId && !googleEventId.startsWith('task:')) void removeGoogleCalendarEvent(googleEventId).catch(() => undefined);
+      if (googleEventId && !isGoogleTaskEventId(googleEventId)) void removeGoogleCalendarEvent(googleEventId).catch(() => undefined);
     },
     createExpenseCategory(name) {
       if (!name.trim()) return;
