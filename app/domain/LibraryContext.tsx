@@ -125,6 +125,7 @@ type LibraryContextValue = {
   currentUser: User | null;
   googleCalendarStatus: GoogleCalendarStatus | null;
   login: (email: string, password: string) => Promise<{ ok: boolean; error?: string; route?: string }>;
+  resetPassword: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   logout: () => void;
   resetDemoData: () => void;
   refreshState: () => Promise<void>;
@@ -743,6 +744,36 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       if (user.password && user.password !== password) return { ok: false, error: 'Неверный пароль.' };
       setCurrentUserId(user.id);
       return { ok: true, route: roleRoutes[user.role] };
+    },
+    async resetPassword(email, password) {
+      const databaseState = await loadDatabaseState();
+      const authState = databaseState ?? state;
+      if (databaseState) setState(databaseState);
+      const normalized = normalizeEmail(email);
+      const nextPassword = password.trim();
+      if (!normalized || !nextPassword) return { ok: false, error: 'Введите email и новый пароль.' };
+      if (nextPassword.length < 6) return { ok: false, error: 'Пароль должен быть не короче 6 символов.' };
+      const user = authState.users.find((item) => normalizeEmail(item.email) === normalized);
+      const seedUser = initialState.users.find((item) => normalizeEmail(item.email) === normalized);
+      if (!user && !seedUser) return { ok: false, error: 'Пользователь с таким email не найден.' };
+      const baseUser = user ?? seedUser;
+      if (!baseUser) return { ok: false, error: 'Пользователь с таким email не найден.' };
+      const nextState = normalizeState({
+        ...authState,
+        users: [
+          ...authState.users.filter((item) => item.id !== baseUser.id),
+          { ...baseUser, email: normalized, password: nextPassword },
+        ],
+        checklists: authState.checklists.some((checklist) => checklist.assignedTo === baseUser.id)
+          ? authState.checklists
+          : [
+              ...initialState.checklists.filter((checklist) => checklist.assignedTo === baseUser.id),
+              ...authState.checklists,
+            ],
+      });
+      setState(nextState);
+      await saveDatabaseState(nextState);
+      return { ok: true };
     },
     logout() {
       setCurrentUserId(null);

@@ -8,8 +8,11 @@ export function LoginPage() {
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [mode, setMode] = useState<'login' | 'reset'>('login');
   const [error, setError] = useState('');
-  const { login, resetDemoData } = useLibrary();
+  const [success, setSuccess] = useState('');
+  const { login, resetPassword, resetDemoData } = useLibrary();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -18,6 +21,22 @@ export function LoginPage() {
     const result = await login(email, password);
     if (!result.ok) setError(result.error ?? 'Не удалось войти.');
     else navigate(result.route ?? '/assistant');
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+
+    const result = await resetPassword(email, newPassword);
+    if (!result.ok) {
+      setError(result.error ?? 'Не удалось изменить пароль.');
+      return;
+    }
+    setPassword(newPassword);
+    setNewPassword('');
+    setMode('login');
+    setSuccess('Пароль изменён. Теперь можно войти с новым паролем.');
   };
 
   return (
@@ -56,10 +75,10 @@ export function LoginPage() {
               <span className="tracking-[0.3em] text-sm text-[#c9a98d] uppercase">LEVTIA</span>
             </div>
 
-            <h1 className="text-4xl text-center mb-3 text-[#f5f3f0]">Добро пожаловать</h1>
-            <p className="text-center text-[#a89b8f] mb-10">Войдите, чтобы открыть внутреннюю библиотеку</p>
+            <h1 className="text-4xl text-center mb-3 text-[#f5f3f0]">{mode === 'login' ? 'Добро пожаловать' : 'Восстановление пароля'}</h1>
+            <p className="text-center text-[#a89b8f] mb-10">{mode === 'login' ? 'Войдите, чтобы открыть внутреннюю библиотеку' : 'Введите почту сотрудника и новый пароль'}</p>
 
-            <form onSubmit={handleLogin} className="space-y-6">
+            <form onSubmit={mode === 'login' ? handleLogin : handleResetPassword} className="space-y-6">
               {/* Email field */}
               <div>
                 <label htmlFor="login-email" className="block text-sm mb-2 text-[#f5f3f0]">Электронная почта</label>
@@ -76,21 +95,37 @@ export function LoginPage() {
                 </div>
               </div>
 
-              {/* Password field */}
-              <div>
-                <label htmlFor="login-password" className="block text-sm mb-2 text-[#f5f3f0]">Пароль</label>
-                <div className="relative">
-                  <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#a89b8f]" />
-                  <input
-                    id="login-password"
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full bg-[#2a2630] border border-[#c9a98d]/20 rounded-lg px-12 py-3.5 text-[#f5f3f0] placeholder:text-[#a89b8f] focus:outline-none focus:border-[#c9a98d] transition-all duration-300"
-                    placeholder="••••••••"
-                  />
+              {mode === 'login' ? (
+                <div>
+                  <label htmlFor="login-password" className="block text-sm mb-2 text-[#f5f3f0]">Пароль</label>
+                  <div className="relative">
+                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#a89b8f]" />
+                    <input
+                      id="login-password"
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="w-full bg-[#2a2630] border border-[#c9a98d]/20 rounded-lg px-12 py-3.5 text-[#f5f3f0] placeholder:text-[#a89b8f] focus:outline-none focus:border-[#c9a98d] transition-all duration-300"
+                      placeholder="••••••••"
+                    />
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div>
+                  <label htmlFor="reset-password" className="block text-sm mb-2 text-[#f5f3f0]">Новый пароль</label>
+                  <div className="relative">
+                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#a89b8f]" />
+                    <input
+                      id="reset-password"
+                      type="password"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      className="w-full bg-[#2a2630] border border-[#c9a98d]/20 rounded-lg px-12 py-3.5 text-[#f5f3f0] placeholder:text-[#a89b8f] focus:outline-none focus:border-[#c9a98d] transition-all duration-300"
+                      placeholder="Минимум 6 символов"
+                    />
+                  </div>
+                </div>
+              )}
 
               {/* Error message */}
               {error && (
@@ -100,6 +135,16 @@ export function LoginPage() {
                   className="bg-[#8b3a52]/35 border border-[#8b3a52]/70 rounded-lg px-4 py-3 text-sm text-[#f5f3f0] shadow-lg shadow-[#8b3a52]/10"
                 >
                   {error}
+                </motion.div>
+              )}
+
+              {success && (
+                <motion.div
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="rounded-lg border border-[#5e6d58]/70 bg-[#5e6d58]/25 px-4 py-3 text-sm text-[#f5f3f0]"
+                >
+                  {success}
                 </motion.div>
               )}
 
@@ -116,12 +161,22 @@ export function LoginPage() {
                 type="submit"
                 className="w-full py-3.5 bg-gradient-to-r from-[#c9a98d] to-[#b88b7a] text-[#0f0e12] rounded-lg hover:shadow-2xl hover:shadow-[#c9a98d]/30 transition-all duration-500"
               >
-                Войти
+                {mode === 'login' ? 'Войти' : 'Изменить пароль'}
               </button>
             </form>
             <button
-              onClick={resetDemoData}
+              onClick={() => {
+                setMode((value) => value === 'login' ? 'reset' : 'login');
+                setError('');
+                setSuccess('');
+              }}
               className="w-full mt-4 text-sm text-[#a89b8f] hover:text-[#c9a98d] transition-colors"
+            >
+              {mode === 'login' ? 'Восстановить пароль' : 'Вернуться ко входу'}
+            </button>
+            <button
+              onClick={resetDemoData}
+              className="w-full mt-3 text-sm text-[#a89b8f] hover:text-[#c9a98d] transition-colors"
             >
               Сбросить демо-данные
             </button>

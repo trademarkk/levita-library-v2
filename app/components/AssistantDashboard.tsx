@@ -7,8 +7,8 @@ import { RoleContentViewer } from './RoleContent';
 import { CalendarSection, ExpensesSection, FinancialPlanSection } from './SharedPlanningSections';
 import { TrainerEvaluationSheetsSection, TrainerRatingSection } from './TrainerEvaluationSections';
 import { useLibrary } from '../domain/LibraryContext';
-import { formatDate, formatTime, roleLabels } from '../domain/labels';
-import type { ChecklistControlStatus } from '../domain/types';
+import { employeeStatusLabels, formatDate, formatTime, roleLabels } from '../domain/labels';
+import type { ChecklistControlStatus, EmployeeStatus, Role } from '../domain/types';
 import { BookOpen, CheckSquare, Edit2, FileText, Info, Link as LinkIcon, ListChecks, Plus, Save, Trash2, UserRound, X } from 'lucide-react';
 
 export function AssistantDashboard() {
@@ -21,6 +21,7 @@ export function AssistantDashboard() {
     { id: 'financial-plan', label: 'Финансовый план' },
     { id: 'calendar', label: 'Календарь' },
     { id: 'expenses', label: 'Расходы' },
+    { id: 'team', label: 'Команда' },
     { id: 'evaluation-sheets', label: 'Листы оценивания' },
     { id: 'trainer-rating', label: 'Рейтинг тренеров' },
     { id: 'admin-checklists', label: 'Контроль чек-листов' },
@@ -58,6 +59,7 @@ export function AssistantDashboard() {
           {activeTab === 'financial-plan' && <FinancialPlanSection />}
           {activeTab === 'calendar' && <CalendarSection />}
           {activeTab === 'expenses' && <ExpensesSection />}
+          {activeTab === 'team' && <AssistantTeamSection />}
           {activeTab === 'evaluation-sheets' && <TrainerEvaluationSheetsSection />}
           {activeTab === 'trainer-rating' && <TrainerRatingSection />}
           {activeTab === 'admin-checklists' && <AdminChecklistMonitor />}
@@ -74,6 +76,124 @@ export function AssistantDashboard() {
         </div>
       </div>
     </DashboardLayout>
+  );
+}
+
+const assistantTeamRoles: Role[] = ['SENIOR_ADMIN', 'ADMIN', 'SENIOR_TRAINER', 'TRAINER'];
+
+function AssistantTeamSection() {
+  const { state, createEmployee, updateEmployee, deleteEmployee } = useLibrary();
+  const [showModal, setShowModal] = useState(false);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ name: '', email: '', password: '', role: 'ADMIN' as Role, status: 'active' as EmployeeStatus });
+  const employees = state.users.filter((employee) => assistantTeamRoles.includes(employee.role));
+  const deleteTarget = employees.find((employee) => employee.id === deleteTargetId) ?? null;
+
+  const resetDraft = () => {
+    setDraft({ name: '', email: '', password: '', role: 'ADMIN', status: 'active' });
+    setEditingId(null);
+  };
+
+  const openCreate = () => {
+    resetDraft();
+    setShowModal(true);
+  };
+
+  const openEdit = (employee: typeof employees[number]) => {
+    setEditingId(employee.id);
+    setDraft({ name: employee.name, email: employee.email, password: employee.password, role: employee.role, status: employee.status });
+    setShowModal(true);
+  };
+
+  const save = () => {
+    if (!draft.name.trim() || !draft.email.trim() || !draft.password.trim()) return;
+    if (!assistantTeamRoles.includes(draft.role)) return;
+    if (editingId) updateEmployee(editingId, draft);
+    else createEmployee(draft);
+    setShowModal(false);
+    resetDraft();
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h2 className="text-2xl text-[#f5f3f0]">Команда</h2>
+          <p className="mt-2 text-sm text-[#a89b8f]">Ассистент управляет доступами администраторов и тренеров. Роли руководителя и ассистента здесь недоступны.</p>
+        </div>
+        <button onClick={openCreate} className="primary-action inline-flex items-center justify-center gap-2">
+          <Plus className="h-4 w-4" />
+          Добавить сотрудника
+        </button>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {employees.map((employee, idx) => (
+          <GlassCard key={employee.id} delay={idx * 0.04}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg text-[#f5f3f0]">{employee.name}</h3>
+                <p className="mt-1 text-sm text-[#c9a98d]">{roleLabels[employee.role]}</p>
+                <p className="mt-3 text-sm text-[#a89b8f]">{employee.email}</p>
+                <p className="mt-1 text-xs text-[#a89b8f]">{employeeStatusLabels[employee.status]} · c {employee.joinDate}</p>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => openEdit(employee)} className="text-[#a89b8f] hover:text-[#c9a98d]" aria-label={`Редактировать ${employee.name}`}><Edit2 className="h-4 w-4" /></button>
+                <button onClick={() => setDeleteTargetId(employee.id)} className="text-[#a89b8f] hover:text-[#8b3a52]" aria-label={`Удалить ${employee.name}`}><Trash2 className="h-4 w-4" /></button>
+              </div>
+            </div>
+          </GlassCard>
+        ))}
+        {employees.length === 0 && <GlassCard><p className="text-[#a89b8f]">В команде пока нет администраторов и тренеров.</p></GlassCard>}
+      </div>
+
+      {showModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0f0e12]/70 p-4 backdrop-blur-sm" onClick={() => setShowModal(false)}>
+          <GlassCard className="w-full max-w-xl" onClick={(event) => event.stopPropagation()}>
+            <div className="mb-5 flex items-center justify-between">
+              <h3 className="text-2xl text-[#f5f3f0]">{editingId ? 'Редактировать сотрудника' : 'Новый сотрудник'}</h3>
+              <button onClick={() => setShowModal(false)} className="text-[#a89b8f] hover:text-[#f5f3f0]" aria-label="Закрыть окно"><X className="h-5 w-5" /></button>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <input value={draft.name} onChange={(event) => setDraft((value) => ({ ...value, name: event.target.value }))} placeholder="Имя" className="field" />
+              <input value={draft.email} onChange={(event) => setDraft((value) => ({ ...value, email: event.target.value }))} placeholder="Почта" className="field" />
+              <input value={draft.password} onChange={(event) => setDraft((value) => ({ ...value, password: event.target.value }))} placeholder="Пароль" className="field" />
+              <select value={draft.role} onChange={(event) => setDraft((value) => ({ ...value, role: event.target.value as Role }))} className="field">
+                <option value="SENIOR_ADMIN">Старший администратор</option>
+                <option value="ADMIN">Администратор</option>
+                <option value="SENIOR_TRAINER">Старший тренер</option>
+                <option value="TRAINER">Тренер</option>
+              </select>
+              <select value={draft.status} onChange={(event) => setDraft((value) => ({ ...value, status: event.target.value as EmployeeStatus }))} className="field md:col-span-2">
+                <option value="active">Активен</option>
+                <option value="blocked">Заблокирован</option>
+                <option value="read-only">Только просмотр</option>
+              </select>
+            </div>
+            <button onClick={save} className="primary-action mt-4">Сохранить</button>
+          </GlassCard>
+        </div>
+      )}
+
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0f0e12]/70 p-4 backdrop-blur-sm" onClick={() => setDeleteTargetId(null)}>
+          <GlassCard className="w-full max-w-md" onClick={(event) => event.stopPropagation()}>
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-2xl text-[#f5f3f0]">Удалить сотрудника?</h3>
+                <p className="mt-2 text-[#a89b8f]">Будет удалён доступ сотрудника: {deleteTarget.name}.</p>
+              </div>
+              <button onClick={() => setDeleteTargetId(null)} className="text-[#a89b8f] hover:text-[#f5f3f0]" aria-label="Закрыть подтверждение"><X className="h-5 w-5" /></button>
+            </div>
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <button onClick={() => setDeleteTargetId(null)} className="rounded-lg border border-[#c9a98d]/20 px-4 py-2 text-[#f5f3f0] hover:bg-[#2a2630]">Отмена</button>
+              <button onClick={() => { deleteEmployee(deleteTarget.id); setDeleteTargetId(null); }} className="rounded-lg bg-[#8b3a52] px-4 py-2 text-[#f5f3f0] hover:bg-[#743044]">Удалить</button>
+            </div>
+          </GlassCard>
+        </div>
+      )}
+    </div>
   );
 }
 
