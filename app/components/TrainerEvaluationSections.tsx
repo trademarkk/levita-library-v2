@@ -97,42 +97,6 @@ function evaluationSort(left: TrainerEvaluationSheet, right: TrainerEvaluationSh
   return right.evaluatedAt.localeCompare(left.evaluatedAt) || right.createdAt.localeCompare(left.createdAt);
 }
 
-function SelectedEvaluationCard({ evaluation }: { evaluation: TrainerEvaluationSheet | null }) {
-  if (!evaluation) {
-    return (
-      <div className="rounded-xl border border-dashed border-[#c9a98d]/25 bg-[#2a2630]/30 p-4 text-sm text-[#a89b8f]">
-        Наведите на точку графика или нажмите на нее, чтобы открыть подробности оценки.
-      </div>
-    );
-  }
-
-  return (
-    <div className="rounded-xl border border-[#c9a98d]/25 bg-[#2a2630]/55 p-4">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <p className="text-xs uppercase tracking-[0.22em] text-[#c9a98d]">Выбранная оценка</p>
-          <h3 className="mt-1 text-xl text-[#f5f3f0]">{evaluation.trainerName}</h3>
-          <p className="mt-1 text-sm text-[#a89b8f]">
-            {formatDate(evaluation.evaluatedAt)} · {studioLabels[evaluation.studio]} · {evaluation.direction}
-          </p>
-          <p className="mt-3 text-sm text-[#d9d0c7]">
-            Оценка: <span className="text-[#f5f3f0]">{scoreLabel(evaluation.score)}</span>
-          </p>
-        </div>
-        <a
-          href={evaluation.sheetUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="primary-action inline-flex items-center justify-center gap-2 self-start"
-        >
-          <ExternalLink className="h-4 w-4" />
-          Открыть оценочный лист
-        </a>
-      </div>
-    </div>
-  );
-}
-
 function ChartEvaluationCard({ point, onClose }: { point: ChartPointSelection | null; onClose: () => void }) {
   if (!point) return null;
   const { evaluation, x, y, containerWidth } = point;
@@ -332,7 +296,6 @@ export function TrainerRatingSection() {
   const average = filtered.length ? filtered.reduce((sum, evaluation) => sum + evaluation.score, 0) / filtered.length : 0;
   const maxScore = Math.max(10, ...filtered.map((evaluation) => evaluation.score));
   const yMax = maxScore <= 10 ? 10 : Math.ceil(maxScore / 10) * 10;
-  const selectedEvaluation = filtered.find((evaluation) => evaluation.id === selectedEvaluationId) ?? filtered[filtered.length - 1] ?? null;
   const activeChartPoint = chartPoint && filtered.some((evaluation) => evaluation.id === chartPoint.evaluation.id) ? chartPoint : null;
   const selectChartPoint = (evaluation: TrainerEvaluationSheet, x: number, y: number) => {
     setSelectedEvaluationId(evaluation.id);
@@ -441,9 +404,6 @@ export function TrainerRatingSection() {
           ) : (
             <div className="flex h-full items-center justify-center rounded-xl bg-[#2a2630]/45 text-[#a89b8f]">Для выбранного среза пока нет оценок.</div>
           )}
-        </div>
-        <div className="mt-4">
-          <SelectedEvaluationCard evaluation={selectedEvaluation} />
         </div>
       </GlassCard>
     </div>
