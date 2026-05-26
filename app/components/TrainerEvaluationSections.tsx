@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, XAxis, YAxis } from 'recharts';
 import { ExternalLink, Pencil, Plus, Save, Trash2, X } from 'lucide-react';
 import { GlassCard } from './GlassCard';
 import { useLibrary } from '../domain/LibraryContext';
@@ -25,6 +25,16 @@ type RatingScope = 'all' | 'studio' | 'trainer';
 function todayKey() {
   const date = new Date();
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function monthKey(value: string) {
+  return value.slice(0, 7);
+}
+
+function monthLabel(value: string) {
+  const [year, month] = value.split('-').map(Number);
+  if (!year || !month) return 'Месяц не выбран';
+  return new Intl.DateTimeFormat('ru-RU', { month: 'long', year: 'numeric' }).format(new Date(year, month - 1, 1));
 }
 
 function emptyDraft(): EvaluationDraft {
@@ -70,25 +80,6 @@ function trainerNamesFrom(evaluations: TrainerEvaluationSheet[]) {
 
 function evaluationSort(left: TrainerEvaluationSheet, right: TrainerEvaluationSheet) {
   return right.evaluatedAt.localeCompare(left.evaluatedAt) || right.createdAt.localeCompare(left.createdAt);
-}
-
-function RatingTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: TrainerEvaluationSheet }> }) {
-  const item = active && payload?.[0]?.payload ? payload[0].payload : null;
-  if (!item) return null;
-
-  return (
-    <div className="pointer-events-none rounded-xl border border-[#c9a98d]/25 bg-[#1a1820]/95 p-4 text-sm shadow-2xl">
-      <p className="text-xs text-[#c9a98d]">{formatDate(item.evaluatedAt)}</p>
-      <p className="mt-1 text-[#f5f3f0]">{item.trainerName}</p>
-      <p className="text-[#a89b8f]">Оценка: {scoreLabel(item.score)}</p>
-      <p className="text-[#a89b8f]">Студия: {studioLabels[item.studio]}</p>
-      <p className="text-[#a89b8f]">Направление: {item.direction}</p>
-      <p className="mt-3 inline-flex items-center gap-1 text-xs text-[#c9a98d]">
-        <ExternalLink className="h-3 w-3" />
-        Ссылка доступна в карточке ниже графика
-      </p>
-    </div>
-  );
 }
 
 function SelectedEvaluationCard({ evaluation }: { evaluation: TrainerEvaluationSheet | null }) {
@@ -242,18 +233,24 @@ export function TrainerRatingSection() {
   const [studio, setStudio] = useState<ExpenseStudio>('STAVROPOLSKAYA');
   const trainerNames = useMemo(() => trainerNamesFrom(state.trainerEvaluations), [state.trainerEvaluations]);
   const [trainerName, setTrainerName] = useState('');
+  const availableMonths = useMemo(() => {
+    const months = Array.from(new Set(state.trainerEvaluations.map((evaluation) => monthKey(evaluation.evaluatedAt)))).sort((left, right) => right.localeCompare(left));
+    return months.length ? months : [monthKey(todayKey())];
+  }, [state.trainerEvaluations]);
+  const [selectedMonth, setSelectedMonth] = useState(() => availableMonths[0] ?? monthKey(todayKey()));
   const [selectedEvaluationId, setSelectedEvaluationId] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     const targetTrainer = trainerName || trainerNames[0] || '';
     return [...state.trainerEvaluations]
       .filter((evaluation) => {
+        if (monthKey(evaluation.evaluatedAt) !== selectedMonth) return false;
         if (scope === 'studio') return evaluation.studio === studio;
         if (scope === 'trainer') return evaluation.trainerName === targetTrainer;
         return true;
       })
       .sort((left, right) => left.evaluatedAt.localeCompare(right.evaluatedAt) || left.createdAt.localeCompare(right.createdAt));
-  }, [scope, state.trainerEvaluations, studio, trainerName, trainerNames]);
+  }, [scope, selectedMonth, state.trainerEvaluations, studio, trainerName, trainerNames]);
 
   const average = filtered.length ? filtered.reduce((sum, evaluation) => sum + evaluation.score, 0) / filtered.length : 0;
   const maxScore = Math.max(10, ...filtered.map((evaluation) => evaluation.score));
@@ -273,10 +270,22 @@ export function TrainerRatingSection() {
             <h2 className="mt-1 text-2xl text-[#f5f3f0]">Рейтинг тренеров</h2>
             <p className="mt-2 text-sm text-[#a89b8f]">График строится по оценкам из листов оценивания: X — дни, Y — оценка.</p>
           </div>
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid gap-3 md:grid-cols-4">
+            <label className="text-sm text-[#a89b8f]">
+              Месяц
+              <input
+                type="month"
+                value={selectedMonth}
+                onChange={(event) => {
+                  setSelectedMonth(event.target.value || monthKey(todayKey()));
+                  setSelectedEvaluationId(null);
+                }}
+                className="field mt-2"
+              />
+            </label>
             <label className="text-sm text-[#a89b8f]">
               Срез
-              <select value={scope} onChange={(event) => setScope(event.target.value as RatingScope)} className="field mt-2">
+              <select value={scope} onChange={(event) => { setScope(event.target.value as RatingScope); setSelectedEvaluationId(null); }} className="field mt-2">
                 <option value="all">Общий</option>
                 <option value="studio">По студии</option>
                 <option value="trainer">По тренеру</option>
@@ -284,14 +293,14 @@ export function TrainerRatingSection() {
             </label>
             <label className="text-sm text-[#a89b8f]">
               Студия
-              <select value={studio} onChange={(event) => setStudio(event.target.value as ExpenseStudio)} disabled={scope !== 'studio'} className="field mt-2 disabled:opacity-45">
+              <select value={studio} onChange={(event) => { setStudio(event.target.value as ExpenseStudio); setSelectedEvaluationId(null); }} disabled={scope !== 'studio'} className="field mt-2 disabled:opacity-45">
                 <option value="STAVROPOLSKAYA">Ставропольская</option>
                 <option value="MACHUGI">Мачуги</option>
               </select>
             </label>
             <label className="text-sm text-[#a89b8f]">
               Тренер
-              <select value={trainerName || trainerNames[0] || ''} onChange={(event) => setTrainerName(event.target.value)} disabled={scope !== 'trainer'} className="field mt-2 disabled:opacity-45">
+              <select value={trainerName || trainerNames[0] || ''} onChange={(event) => { setTrainerName(event.target.value); setSelectedEvaluationId(null); }} disabled={scope !== 'trainer'} className="field mt-2 disabled:opacity-45">
                 {trainerNames.map((name) => <option key={name} value={name}>{name}</option>)}
               </select>
             </label>
@@ -300,11 +309,12 @@ export function TrainerRatingSection() {
 
         <div className="mt-5 grid gap-3 md:grid-cols-3">
           <div className="rounded-xl border border-[#c9a98d]/15 bg-[#2a2630]/45 p-4">
-            <p className="text-xs text-[#a89b8f]">Оценок в срезе</p>
+            <p className="text-xs text-[#a89b8f]">Оценок за месяц</p>
             <p className="mt-1 text-2xl text-[#f5f3f0]">{filtered.length}</p>
+            <p className="mt-1 text-xs text-[#a89b8f]">{monthLabel(selectedMonth)}</p>
           </div>
           <div className="rounded-xl border border-[#c9a98d]/15 bg-[#2a2630]/45 p-4">
-            <p className="text-xs text-[#a89b8f]">Средняя оценка</p>
+            <p className="text-xs text-[#a89b8f]">Средняя оценка за месяц</p>
             <p className="mt-1 text-2xl text-[#f5f3f0]">{filtered.length ? scoreLabel(average) : '—'}</p>
           </div>
           <div className="rounded-xl border border-[#c9a98d]/15 bg-[#2a2630]/45 p-4">
@@ -327,8 +337,7 @@ export function TrainerRatingSection() {
                 <CartesianGrid stroke="rgba(201,169,141,0.12)" vertical={false} />
                 <XAxis dataKey="evaluatedAt" tickFormatter={(value) => formatDate(String(value)).replace(/\s2026 г\./, '')} stroke="#a89b8f" tick={{ fontSize: 12 }} />
                 <YAxis domain={[0, yMax]} stroke="#a89b8f" tick={{ fontSize: 12 }} />
-                <Tooltip content={<RatingTooltip />} />
-                <Line type="monotone" dataKey="score" stroke="#c9a98d" strokeWidth={3} dot={{ r: 5, fill: '#c9a98d', stroke: '#1a1820', strokeWidth: 2, cursor: 'pointer' }} activeDot={{ r: 7, cursor: 'pointer' }} />
+                <Line type="monotone" dataKey="score" stroke="#c9a98d" strokeWidth={3} dot={{ r: 7, fill: '#c9a98d', stroke: '#1a1820', strokeWidth: 2, cursor: 'pointer' }} activeDot={{ r: 10, cursor: 'pointer', stroke: '#f5f3f0', strokeWidth: 2 }} />
               </LineChart>
             </ResponsiveContainer>
           ) : (
