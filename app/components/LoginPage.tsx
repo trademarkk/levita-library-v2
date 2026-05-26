@@ -12,7 +12,7 @@ export function LoginPage() {
   const [mode, setMode] = useState<'login' | 'reset'>('login');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const { login, resetPassword, resetDemoData } = useLibrary();
+  const { login, resetPassword } = useLibrary();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -148,14 +148,6 @@ export function LoginPage() {
                 </motion.div>
               )}
 
-              {/* Demo hint */}
-              <div className="bg-[#c9a98d]/10 border border-[#c9a98d]/20 rounded-lg px-4 py-3 text-sm text-[#a89b8f]">
-                <p className="mb-1">Демо-доступы:</p>
-                <p>owner@levita.ru / owner123</p>
-                <p>assistant@levita.ru / assistant123</p>
-                <p>senior-admin@levita.ru / senior123, admin@levita.ru / admin123</p>
-              </div>
-
               {/* Submit button */}
               <button
                 type="submit"
@@ -173,12 +165,6 @@ export function LoginPage() {
               className="w-full mt-4 text-sm text-[#a89b8f] hover:text-[#c9a98d] transition-colors"
             >
               {mode === 'login' ? 'Восстановить пароль' : 'Вернуться ко входу'}
-            </button>
-            <button
-              onClick={resetDemoData}
-              className="w-full mt-3 text-sm text-[#a89b8f] hover:text-[#c9a98d] transition-colors"
-            >
-              Сбросить демо-данные
             </button>
 
             {/* Back to home */}
