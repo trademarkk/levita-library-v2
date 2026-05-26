@@ -44,10 +44,10 @@ export function SettingsPage() {
               <input type="checkbox" checked={state.settings.animations} onChange={(event) => updateSettings({ animations: event.target.checked })} className="w-5 h-5 accent-[#c9a98d]" />
             </label>
             <label className="flex items-center justify-between gap-4 py-3">
-              <span className="text-[#f5f3f0]">Отправка отчётов в Telegram</span>
-              <input type="checkbox" checked={state.settings.telegramReports} onChange={(event) => updateSettings({ telegramReports: event.target.checked })} className="w-5 h-5 accent-[#c9a98d]" />
+              <span className="text-[#f5f3f0]">Отправка отчётов в MAX</span>
+              <span className="rounded-full bg-[#c9a98d]/15 px-3 py-1 text-xs text-[#c9a98d]">через .env</span>
             </label>
-            <p className="text-sm text-[#a89b8f] mt-4">Интеграция с ботом пока отмечается как состояние. Подключение API Telegram будет отдельным backend-этапом.</p>
+            <p className="text-sm text-[#a89b8f] mt-4">Если в .env указаны MAX_BOT_TOKEN и MAX_REPORT_CHAT_ID, отчёт администратора отправляется в MAX при сохранении.</p>
           </GlassCard>
         </div>
       </div>

@@ -163,7 +163,7 @@ type LibraryContextValue = {
   toggleChecklistItem: (checklistId: string, itemId: string, userId?: string) => void;
   addChecklistItem: (checklistId: string, label: string) => void;
   deleteChecklistItem: (checklistId: string, itemId: string) => void;
-  updateChecklistReport: (checklistId: string, slot: ChecklistReportSlot, input: Partial<Omit<ChecklistReport, 'slot'>>) => void;
+  updateChecklistReport: (checklistId: string, slot: ChecklistReportSlot, input: Partial<Omit<ChecklistReport, 'slot'>>) => Promise<void>;
   createRefund: (input: Omit<RefundCase, 'id' | 'createdAt' | 'requestedAt'> & { requestedAt?: string }) => void;
   updateRefund: (id: string, input: { amount?: number; reason?: string; status?: RefundStatus; comment?: string; clientName?: string }) => void;
   addFinancialPlanRow: (month: string, title: string) => void;
@@ -251,7 +251,23 @@ function normalizeEmail(email: string) {
 }
 
 function blankReport(slot: ChecklistReportSlot, adminName: string): ChecklistReport {
-  return { slot, adminName, calls: '', reached: '', bookings: '', cash: '', came: '', bought: '', submittedAt: null, sentToTelegram: false, telegramSentAt: null };
+  return {
+    slot,
+    adminName,
+    calls: '',
+    reached: '',
+    bookings: '',
+    cash: '',
+    came: '',
+    bought: '',
+    submittedAt: null,
+    sentToTelegram: false,
+    telegramSentAt: null,
+    sentToMax: false,
+    maxSentAt: null,
+    maxSendError: null,
+    maxMessageId: null,
+  };
 }
 
 function createDailyChecklist(user: User): DailyChecklist {
@@ -280,11 +296,16 @@ function createDailyChecklist(user: User): DailyChecklist {
 function normalizeChecklistReportForToday(report: ChecklistReport) {
   const submittedAt = isToday(report.submittedAt) ? report.submittedAt ?? null : null;
   const telegramSentAt = isToday(report.telegramSentAt) ? report.telegramSentAt ?? null : null;
+  const maxSentAt = isToday(report.maxSentAt) ? report.maxSentAt ?? null : null;
   return {
     ...report,
     submittedAt,
     sentToTelegram: Boolean(submittedAt && (report.sentToTelegram || telegramSentAt)),
     telegramSentAt: submittedAt ? telegramSentAt : null,
+    sentToMax: Boolean(submittedAt && (report.sentToMax || maxSentAt)),
+    maxSentAt: submittedAt ? maxSentAt : null,
+    maxSendError: submittedAt ? report.maxSendError ?? null : null,
+    maxMessageId: submittedAt ? report.maxMessageId ?? null : null,
   };
 }
 
@@ -295,11 +316,16 @@ function mergeChecklistReports(left: ChecklistReport[], right: ChecklistReport[]
     const report = { ...blankReport(slot, primary?.adminName || incoming?.adminName || ''), ...primary, ...incoming };
     const submittedAt = latestIso(primary?.submittedAt, incoming?.submittedAt);
     const telegramSentAt = latestIso(primary?.telegramSentAt, incoming?.telegramSentAt);
+    const maxSentAt = latestIso(primary?.maxSentAt, incoming?.maxSentAt);
     return normalizeChecklistReportForToday({
       ...report,
       submittedAt,
       sentToTelegram: Boolean((primary?.sentToTelegram || incoming?.sentToTelegram) && submittedAt),
       telegramSentAt,
+      sentToMax: Boolean((primary?.sentToMax || incoming?.sentToMax) && submittedAt),
+      maxSentAt,
+      maxSendError: primary?.maxSendError ?? incoming?.maxSendError ?? null,
+      maxMessageId: primary?.maxMessageId ?? incoming?.maxMessageId ?? null,
     });
   });
 }
@@ -311,6 +337,10 @@ function normalizeChecklistReportForDate(report: ChecklistReport, targetDate: st
     submittedAt: report.submittedAt ?? null,
     sentToTelegram: Boolean(report.sentToTelegram),
     telegramSentAt: report.telegramSentAt ?? (report.sentToTelegram ? report.submittedAt ?? null : null),
+    sentToMax: Boolean(report.sentToMax),
+    maxSentAt: report.maxSentAt ?? (report.sentToMax ? report.submittedAt ?? null : null),
+    maxSendError: report.maxSendError ?? null,
+    maxMessageId: report.maxMessageId ?? null,
   };
 }
 
@@ -321,11 +351,16 @@ function mergeChecklistReportsForDate(left: ChecklistReport[], right: ChecklistR
     const report = { ...blankReport(slot, primary?.adminName || incoming?.adminName || ''), ...primary, ...incoming };
     const submittedAt = latestIso(primary?.submittedAt, incoming?.submittedAt);
     const telegramSentAt = latestIso(primary?.telegramSentAt, incoming?.telegramSentAt);
+    const maxSentAt = latestIso(primary?.maxSentAt, incoming?.maxSentAt);
     return normalizeChecklistReportForDate({
       ...report,
       submittedAt,
       sentToTelegram: Boolean((primary?.sentToTelegram || incoming?.sentToTelegram) && submittedAt),
       telegramSentAt,
+      sentToMax: Boolean((primary?.sentToMax || incoming?.sentToMax) && submittedAt),
+      maxSentAt,
+      maxSendError: primary?.maxSendError ?? incoming?.maxSendError ?? null,
+      maxMessageId: primary?.maxMessageId ?? incoming?.maxMessageId ?? null,
     }, targetDate);
   });
 }
@@ -408,6 +443,7 @@ function normalizeState(raw: Partial<LibraryState> | null): LibraryState {
                 ...normalizeChecklistReportForDate({
                   ...report,
                   telegramSentAt: report.telegramSentAt ?? (report.sentToTelegram ? report.submittedAt ?? null : null),
+                  maxSentAt: report.maxSentAt ?? (report.sentToMax ? report.submittedAt ?? null : null),
                 }, targetDate),
               };
             })
@@ -545,6 +581,23 @@ async function removeGoogleCalendarEvent(googleEventId: string) {
   if (!response.ok) throw new Error(await readApiError(response));
 }
 
+async function sendMaxChecklistReport(input: {
+  checklistId: string;
+  checklistDate: string;
+  assigneeName: string;
+  assigneeRole: Role;
+  slot: ChecklistReportSlot;
+  report: ChecklistReport;
+}) {
+  const response = await fetch('/api/max/reports', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(await readApiError(response));
+  return await response.json() as { ok: boolean; sentAt: string; messageId?: string | null };
+}
+
 async function fetchGoogleCalendarEvents(timeMin: string, timeMax: string) {
   const params = new URLSearchParams({ timeMin, timeMax });
   const response = await fetch(`/api/google/events?${params.toString()}`, { cache: 'no-store' });
@@ -596,6 +649,10 @@ function getReportStatus(checklist: DailyChecklist, slot: ChecklistReportSlot): 
   const telegramMinutes = getMinutes(telegramSentAt);
   const telegramSent = Boolean(telegramSentAt || report?.sentToTelegram);
   const telegramOnTime = telegramSent && telegramMinutes > -1 && telegramMinutes <= REPORT_DEADLINES[slot];
+  const maxSentAt = report?.maxSentAt || (report?.sentToMax ? completedAt : null) || telegramSentAt;
+  const maxMinutes = getMinutes(maxSentAt);
+  const maxSent = Boolean(maxSentAt || report?.sentToMax || telegramSent);
+  const maxOnTime = maxSent && maxMinutes > -1 && maxMinutes <= REPORT_DEADLINES[slot];
 
   return {
     done: onTime,
@@ -606,6 +663,10 @@ function getReportStatus(checklist: DailyChecklist, slot: ChecklistReportSlot): 
     telegramSent,
     telegramSentAt,
     telegramOnTime,
+    maxSent,
+    maxSentAt,
+    maxOnTime,
+    maxSendError: report?.maxSendError ?? null,
   };
 }
 
@@ -1067,8 +1128,12 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           checklist.reports.push(report);
         }
         report.submittedAt = item.completedAt;
-        report.sentToTelegram = Boolean(item.completed && draft.settings.telegramReports);
-        report.telegramSentAt = item.completed && draft.settings.telegramReports ? item.completedAt : null;
+        report.sentToTelegram = false;
+        report.telegramSentAt = null;
+        report.sentToMax = false;
+        report.maxSentAt = null;
+        report.maxSendError = null;
+        report.maxMessageId = null;
       });
     },
     addChecklistItem(checklistId, label) {
@@ -1084,17 +1149,37 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         if (checklist) checklist.items = checklist.items.filter((item) => item.id !== itemId);
       });
     },
-    updateChecklistReport(checklistId, slot, input) {
+    async updateChecklistReport(checklistId, slot, input) {
+      const submittedAt = new Date().toISOString();
+      const currentChecklist = state.checklists.find((item) => item.id === checklistId);
+      const currentReport = currentChecklist?.reports.find((item) => item.slot === slot);
+      const assignee = currentChecklist ? state.users.find((user) => user.id === currentChecklist.assignedTo) : null;
+      const reportForMax = {
+        ...blankReport(slot, assignee?.name ?? ''),
+        ...currentReport,
+        ...input,
+        slot,
+        submittedAt,
+        sentToTelegram: false,
+        telegramSentAt: null,
+        sentToMax: false,
+        maxSentAt: null,
+        maxSendError: null,
+        maxMessageId: null,
+      };
       update((draft) => {
         const checklist = draft.checklists.find((item) => item.id === checklistId);
         if (!checklist) return;
         const report = checklist.reports.find((item) => item.slot === slot);
         if (!report) return;
-        const submittedAt = new Date().toISOString();
         Object.assign(report, input, {
           submittedAt,
-          sentToTelegram: draft.settings.telegramReports,
-          telegramSentAt: draft.settings.telegramReports ? submittedAt : null,
+          sentToTelegram: false,
+          telegramSentAt: null,
+          sentToMax: false,
+          maxSentAt: null,
+          maxSendError: null,
+          maxMessageId: null,
         });
         const checklistItem = findReportItem(checklist, slot);
         if (checklistItem) {
@@ -1103,6 +1188,41 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           checklistItem.completedBy = currentUser?.id ?? checklist.assignedTo;
         }
       });
+      if (!currentChecklist || !assignee) return;
+      try {
+        const result = await sendMaxChecklistReport({
+          checklistId,
+          checklistDate: currentChecklist.date,
+          assigneeName: assignee.name,
+          assigneeRole: assignee.role,
+          slot,
+          report: reportForMax,
+        });
+        update((draft) => {
+          const checklist = draft.checklists.find((item) => item.id === checklistId);
+          const report = checklist?.reports.find((item) => item.slot === slot);
+          if (!report) return;
+          report.sentToMax = true;
+          report.maxSentAt = result.sentAt;
+          report.maxMessageId = result.messageId ?? null;
+          report.maxSendError = null;
+          report.sentToTelegram = true;
+          report.telegramSentAt = result.sentAt;
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Не удалось отправить отчёт в MAX.';
+        update((draft) => {
+          const checklist = draft.checklists.find((item) => item.id === checklistId);
+          const report = checklist?.reports.find((item) => item.slot === slot);
+          if (!report) return;
+          report.sentToMax = false;
+          report.maxSentAt = null;
+          report.maxMessageId = null;
+          report.maxSendError = message;
+          report.sentToTelegram = false;
+          report.telegramSentAt = null;
+        });
+      }
     },
     createRefund(input) {
       update((draft) => {

@@ -29,6 +29,10 @@ loadDotEnv();
 const PORT = Number(process.env.LEVTIA_API_PORT || 4174);
 const GOOGLE_REQUEST_TIMEOUT_MS = Number(process.env.GOOGLE_REQUEST_TIMEOUT_MS || 12000);
 const GOOGLE_TASK_HISTORY_LIMIT = Number(process.env.GOOGLE_TASK_HISTORY_LIMIT || 500);
+const MAX_REQUEST_TIMEOUT_MS = Number(process.env.MAX_REQUEST_TIMEOUT_MS || 12000);
+const MAX_API_BASE = process.env.MAX_API_BASE || 'https://platform-api.max.ru';
+const MAX_BOT_TOKEN = process.env.MAX_BOT_TOKEN || '';
+const MAX_REPORT_CHAT_ID = process.env.MAX_REPORT_CHAT_ID || '';
 const STORAGE_DRIVER = process.env.LEVTIA_STORAGE_DRIVER || 'sqlite';
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -127,6 +131,95 @@ function getGoogleConfig() {
     timeZone: process.env.GOOGLE_TIME_ZONE || 'Europe/Moscow',
     appOrigin: process.env.LEVTIA_APP_ORIGIN || 'http://127.0.0.1:5173',
   };
+}
+
+function getMaxConfig() {
+  return {
+    apiBase: MAX_API_BASE.replace(/\/+$/, ''),
+    botToken: MAX_BOT_TOKEN,
+    reportChatId: MAX_REPORT_CHAT_ID,
+  };
+}
+
+function formatReportDate(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return value || '';
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'Europe/Moscow',
+  }).format(date);
+}
+
+function formatReportTime(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('ru-RU', {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'Europe/Moscow',
+  }).format(date);
+}
+
+function maxReportText(input) {
+  const report = input.report || {};
+  const submittedAt = report.submittedAt || new Date().toISOString();
+  return [
+    `Отчёт ${input.slot || report.slot || ''}`,
+    `Дата: ${formatReportDate(input.checklistDate || submittedAt)}`,
+    `Администратор: ${report.adminName || input.assigneeName || 'Не указан'}`,
+    '',
+    `Звонки: ${report.calls || '0'}`,
+    `Дозвоны: ${report.reached || '0'}`,
+    `Записи: ${report.bookings || '0'}`,
+    `Касса: ${report.cash || '0'}`,
+    `Был: ${report.came || '0'}`,
+    `Купил: ${report.bought || '0'}`,
+    '',
+    `Время сохранения: ${formatReportTime(submittedAt)}`,
+  ].join('\n');
+}
+
+async function sendMaxMessage(text) {
+  const config = getMaxConfig();
+  if (!config.botToken || !config.reportChatId) {
+    const error = new Error('MAX не настроен: добавьте MAX_BOT_TOKEN и MAX_REPORT_CHAT_ID.');
+    error.statusCode = 409;
+    throw error;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), MAX_REQUEST_TIMEOUT_MS);
+  try {
+    const params = new URLSearchParams({ chat_id: config.reportChatId });
+    const response = await fetch(`${config.apiBase}/messages?${params.toString()}`, {
+      method: 'POST',
+      headers: {
+        Authorization: config.botToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ text, format: 'markdown', notify: true }),
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = payload.message || payload.error || payload.description || `MAX API вернул статус ${response.status}`;
+      const error = new Error(message);
+      error.statusCode = response.status;
+      throw error;
+    }
+    return payload;
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      const timeoutError = new Error('MAX API не ответил вовремя.');
+      timeoutError.statusCode = 504;
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function getGoogleToken() {
@@ -845,6 +938,31 @@ const server = http.createServer(async (request, response) => {
 
     if (url.pathname === '/api/health' && request.method === 'GET') {
       send(response, 200, { ok: true, storageDriver: STORAGE_DRIVER, dbPath: useSupabase ? null : dbPath });
+      return;
+    }
+
+    if (url.pathname === '/api/max/status' && request.method === 'GET') {
+      const config = getMaxConfig();
+      send(response, 200, {
+        configured: Boolean(config.botToken && config.reportChatId),
+        chatId: config.reportChatId || null,
+      });
+      return;
+    }
+
+    if (url.pathname === '/api/max/reports' && request.method === 'POST') {
+      const body = JSON.parse(await readBody(request) || '{}');
+      if (!body.slot || !body.report || typeof body.report !== 'object') {
+        send(response, 400, { error: 'slot and report are required' });
+        return;
+      }
+      const sentAt = new Date().toISOString();
+      const message = await sendMaxMessage(maxReportText(body));
+      send(response, 200, {
+        ok: true,
+        sentAt,
+        messageId: message.message?.id || message.id || null,
+      });
       return;
     }
 

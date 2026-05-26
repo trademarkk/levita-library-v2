@@ -420,7 +420,7 @@ function OwnerChecklistSnapshot({ report, onBack }: { report: OwnerMonitorReport
 function ControlReportCard({ slot, status }: { slot: string; status: ChecklistControlStatus }) {
   const tone = !status.submitted ? 'border-[#8b3a52]/40 bg-[#8b3a52]/10' : status.onTime ? 'border-[#5e6d58]/45 bg-[#5e6d58]/15' : 'border-[#c9a98d]/45 bg-[#c9a98d]/10';
   const submission = !status.submitted ? 'не сдан' : status.onTime ? 'сдан вовремя' : 'сдан поздно';
-  const telegram = !status.telegramSent ? 'не отправлен' : status.telegramOnTime ? 'отправлен вовремя' : 'отправлен поздно';
+  const max = !status.maxSent ? 'не отправлен' : status.maxOnTime ? 'отправлен вовремя' : 'отправлен поздно';
 
   return (
     <div className={`rounded-xl border p-4 ${tone}`}>
@@ -431,7 +431,8 @@ function ControlReportCard({ slot, status }: { slot: string; status: ChecklistCo
       <p className="text-xs text-[#a89b8f] mb-3">{status.label}</p>
       <div className="space-y-1 text-sm text-[#d8d1c8]">
         <p>Сдача: {formatTime(status.completedAt)}</p>
-        <p>Telegram: {telegram}{status.telegramSentAt ? ` · ${formatTime(status.telegramSentAt)}` : ''}</p>
+        <p>MAX: {max}{status.maxSentAt ? ` · ${formatTime(status.maxSentAt)}` : ''}</p>
+        {status.maxSendError && <p className="text-[#f0c5cf]">Ошибка MAX: {status.maxSendError}</p>}
       </div>
     </div>
   );

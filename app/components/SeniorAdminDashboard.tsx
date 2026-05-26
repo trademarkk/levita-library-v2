@@ -210,6 +210,8 @@ function ChecklistSection({ userId }: { userId: string }) {
                 <ReportInput label="Был" value={draft.came ?? ''} onChange={(value) => setReportField(report.slot, 'came', value)} />
                 <ReportInput label="Купил" value={draft.bought ?? ''} onChange={(value) => setReportField(report.slot, 'bought', value)} />
                 <button onClick={() => updateChecklistReport(checklist.id, report.slot, draft)} className="primary-action w-full">Сохранить отчёт</button>
+                {report.maxSentAt && <p className="text-xs text-[#a89b8f]">MAX отправлен: {formatTime(report.maxSentAt)}</p>}
+                {report.maxSendError && <p className="text-xs text-[#f0c5cf]">Ошибка MAX: {report.maxSendError}</p>}
               </div>
             </GlassCard>
           );

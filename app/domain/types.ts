@@ -100,6 +100,10 @@ export interface ChecklistReport {
   submittedAt?: string | null;
   sentToTelegram: boolean;
   telegramSentAt?: string | null;
+  sentToMax?: boolean;
+  maxSentAt?: string | null;
+  maxSendError?: string | null;
+  maxMessageId?: string | null;
 }
 
 export interface DailyChecklist {
@@ -239,4 +243,8 @@ export interface ChecklistControlStatus {
   telegramSent: boolean;
   telegramSentAt?: string | null;
   telegramOnTime: boolean;
+  maxSent: boolean;
+  maxSentAt?: string | null;
+  maxOnTime: boolean;
+  maxSendError?: string | null;
 }
