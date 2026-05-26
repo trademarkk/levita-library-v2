@@ -21,6 +21,7 @@ import type {
   RefundCase,
   RefundStatus,
   Role,
+  Studio,
   TaskTemplate,
   TrainerEvaluationSheet,
   UsefulContact,
@@ -39,6 +40,7 @@ const REPORT_DEADLINES: Record<ChecklistReportSlot, number> = {
   '18:00': 18 * 60,
   '22:00': 22 * 60,
 };
+const DEFAULT_STUDIO: Studio = 'STAVROPOLSKAYA';
 const CANONICAL_ADMIN_CHECKLIST_ITEMS = [
   'Проверить чистоту студии: зеркала, углы и поверхности',
   'Отправить кружок об открытии студии до 09:30',
@@ -253,6 +255,7 @@ function normalizeEmail(email: string) {
 function blankReport(slot: ChecklistReportSlot, adminName: string): ChecklistReport {
   return {
     slot,
+    studio: DEFAULT_STUDIO,
     adminName,
     calls: '',
     reached: '',
@@ -326,6 +329,7 @@ function mergeChecklistReports(left: ChecklistReport[], right: ChecklistReport[]
       maxSentAt,
       maxSendError: primary?.maxSendError ?? incoming?.maxSendError ?? null,
       maxMessageId: primary?.maxMessageId ?? incoming?.maxMessageId ?? null,
+      studio: primary?.studio ?? incoming?.studio ?? DEFAULT_STUDIO,
     });
   });
 }
@@ -341,6 +345,7 @@ function normalizeChecklistReportForDate(report: ChecklistReport, targetDate: st
     maxSentAt: report.maxSentAt ?? (report.sentToMax ? report.submittedAt ?? null : null),
     maxSendError: report.maxSendError ?? null,
     maxMessageId: report.maxMessageId ?? null,
+    studio: report.studio ?? DEFAULT_STUDIO,
   };
 }
 
@@ -361,6 +366,7 @@ function mergeChecklistReportsForDate(left: ChecklistReport[], right: ChecklistR
       maxSentAt,
       maxSendError: primary?.maxSendError ?? incoming?.maxSendError ?? null,
       maxMessageId: primary?.maxMessageId ?? incoming?.maxMessageId ?? null,
+      studio: primary?.studio ?? incoming?.studio ?? DEFAULT_STUDIO,
     }, targetDate);
   });
 }
@@ -659,6 +665,7 @@ function getReportStatus(checklist: DailyChecklist, slot: ChecklistReportSlot): 
     submitted,
     onTime,
     label: item?.label ?? REPORT_ALIASES[slot][0],
+    studio: report?.studio ?? DEFAULT_STUDIO,
     completedAt,
     telegramSent,
     telegramSentAt,
@@ -1159,6 +1166,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         ...currentReport,
         ...input,
         slot,
+        studio: input.studio ?? currentReport?.studio ?? DEFAULT_STUDIO,
         submittedAt,
         sentToTelegram: false,
         telegramSentAt: null,
@@ -1174,6 +1182,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         if (!report) return;
         Object.assign(report, input, {
           submittedAt,
+          studio: input.studio ?? report.studio ?? DEFAULT_STUDIO,
           sentToTelegram: false,
           telegramSentAt: null,
           sentToMax: false,

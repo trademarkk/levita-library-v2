@@ -7,7 +7,7 @@ import { RoleContentViewer } from './RoleContent';
 import { CalendarSection, ExpensesSection, FinancialPlanSection } from './SharedPlanningSections';
 import { TrainerEvaluationSheetsSection, TrainerRatingSection } from './TrainerEvaluationSections';
 import { useLibrary } from '../domain/LibraryContext';
-import { employeeStatusLabels, formatDate, formatTime, roleLabels } from '../domain/labels';
+import { employeeStatusLabels, formatDate, formatTime, roleLabels, studioLabels } from '../domain/labels';
 import type { ChecklistControlStatus, EmployeeStatus, Role } from '../domain/types';
 import { BookOpen, CheckSquare, Edit2, FileText, Info, Link as LinkIcon, ListChecks, Plus, Save, Trash2, UserRound, X } from 'lucide-react';
 
@@ -416,6 +416,7 @@ function ReportStatusCard({ slot, status }: { slot: string; status: ChecklistCon
       </div>
       <p className="text-xs text-[#a89b8f] mb-3">{status.label}</p>
       <div className="space-y-1 text-sm text-[#d8d1c8]">
+        <p>Студия: {studioLabels[status.studio]}</p>
         <p>Сдача: {formatTime(status.completedAt)}</p>
         <p>MAX: {max}{status.maxSentAt ? ` · ${formatTime(status.maxSentAt)}` : ''}</p>
         {status.maxSendError && <p className="text-[#f0c5cf]">Ошибка MAX: {status.maxSendError}</p>}

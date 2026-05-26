@@ -5,6 +5,7 @@ export type LinkCategory = 'WORK_TABLE' | 'TRAINING' | 'HELPFUL';
 export type RefundStatus = 'NEW' | 'IN_PROGRESS' | 'RESOLVED' | 'DECLINED';
 export type EmployeeStatus = 'active' | 'blocked' | 'read-only';
 export type ChecklistReportSlot = '14:00' | '18:00' | '22:00';
+export type Studio = 'STAVROPOLSKAYA' | 'MACHUGI';
 
 export interface User {
   id: string;
@@ -90,6 +91,7 @@ export interface ChecklistItem {
 
 export interface ChecklistReport {
   slot: ChecklistReportSlot;
+  studio?: Studio;
   adminName: string;
   calls: string;
   reached: string;
@@ -239,6 +241,7 @@ export interface ChecklistControlStatus {
   submitted: boolean;
   onTime: boolean;
   label: string;
+  studio: Studio;
   completedAt?: string | null;
   telegramSent: boolean;
   telegramSentAt?: string | null;

@@ -5,8 +5,8 @@ import { GlassCard } from './GlassCard';
 import { ConfirmChecklistDialog } from './ConfirmChecklistDialog';
 import { RoleContentViewer, RoleLinksViewer, RoleTemplatesViewer } from './RoleContent';
 import { useLibrary } from '../domain/LibraryContext';
-import { formatDate, formatTime, refundStatusLabels, reportSlotLabels, roleLabels } from '../domain/labels';
-import type { ChecklistReport, KnowledgeCategory, RefundStatus, Role } from '../domain/types';
+import { formatDate, formatTime, refundStatusLabels, reportSlotLabels, roleLabels, studioLabels } from '../domain/labels';
+import type { ChecklistReport, KnowledgeCategory, RefundStatus, Role, Studio } from '../domain/types';
 import { BookOpen, DollarSign, Edit2, FileText, Info, Link as LinkIcon, ListChecks, Phone, Plus, Save, Shield, Trash2, X } from 'lucide-react';
 
 const adminTabs = [
@@ -173,6 +173,10 @@ function ChecklistSection({ userId }: { userId: string }) {
     setReportDrafts((current) => ({ ...current, [slot]: { ...current[slot], [key]: value } }));
   };
 
+  const setReportStudio = (slot: string, studio: Studio) => {
+    setReportDrafts((current) => ({ ...current, [slot]: { ...current[slot], studio } }));
+  };
+
   return (
     <div className="space-y-5">
       <GlassCard>
@@ -202,6 +206,17 @@ function ChecklistSection({ userId }: { userId: string }) {
               <h3 className="text-lg text-[#f5f3f0] mb-1">{reportSlotLabels[report.slot]}</h3>
               <p className="text-xs text-[#a89b8f] mb-4">Последняя отправка: {formatTime(report.submittedAt)}</p>
               <div className="space-y-2">
+                <label className="grid grid-cols-[110px_1fr] items-center gap-2 text-sm text-[#a89b8f]">
+                  <span>Студия:</span>
+                  <select
+                    value={draft.studio ?? 'STAVROPOLSKAYA'}
+                    onChange={(event) => setReportStudio(report.slot, event.target.value as Studio)}
+                    className="field py-1.5"
+                  >
+                    <option value="STAVROPOLSKAYA">{studioLabels.STAVROPOLSKAYA}</option>
+                    <option value="MACHUGI">{studioLabels.MACHUGI}</option>
+                  </select>
+                </label>
                 <ReportInput label="Имя администратора" value={draft.adminName ?? ''} onChange={(value) => setReportField(report.slot, 'adminName', value)} />
                 <ReportInput label="Звонки" value={draft.calls ?? ''} onChange={(value) => setReportField(report.slot, 'calls', value)} />
                 <ReportInput label="Дозвоны" value={draft.reached ?? ''} onChange={(value) => setReportField(report.slot, 'reached', value)} />

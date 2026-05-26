@@ -44,6 +44,7 @@ const assistantChecklistItems = [
 function createReport(slot: ChecklistReportSlot, adminName: string) {
   return {
     slot,
+    studio: 'STAVROPOLSKAYA',
     adminName,
     calls: '',
     reached: '',
@@ -54,6 +55,10 @@ function createReport(slot: ChecklistReportSlot, adminName: string) {
     submittedAt: null,
     sentToTelegram: false,
     telegramSentAt: null,
+    sentToMax: false,
+    maxSentAt: null,
+    maxSendError: null,
+    maxMessageId: null,
   };
 }
 

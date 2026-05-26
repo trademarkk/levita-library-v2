@@ -1,4 +1,4 @@
-import type { ChecklistReportSlot, EmployeeStatus, RefundStatus, Role } from './types';
+import type { ChecklistReportSlot, EmployeeStatus, RefundStatus, Role, Studio } from './types';
 
 export const roleLabels: Record<Role, string> = {
   OWNER: 'Руководитель',
@@ -35,6 +35,11 @@ export const reportSlotLabels: Record<ChecklistReportSlot, string> = {
   '14:00': 'Отчет 14:00',
   '18:00': 'Отчет 18:00',
   '22:00': 'Отчет 22:00',
+};
+
+export const studioLabels: Record<Studio, string> = {
+  STAVROPOLSKAYA: 'Ставропольская',
+  MACHUGI: 'Мачуги',
 };
 
 export function formatDate(value: string | Date) {

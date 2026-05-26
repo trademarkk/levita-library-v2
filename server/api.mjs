@@ -33,6 +33,8 @@ const MAX_REQUEST_TIMEOUT_MS = Number(process.env.MAX_REQUEST_TIMEOUT_MS || 1200
 const MAX_API_BASE = process.env.MAX_API_BASE || 'https://platform-api.max.ru';
 const MAX_BOT_TOKEN = process.env.MAX_BOT_TOKEN || '';
 const MAX_REPORT_CHAT_ID = process.env.MAX_REPORT_CHAT_ID || '';
+const MAX_REPORT_CHAT_ID_STAVROPOLSKAYA = process.env.MAX_REPORT_CHAT_ID_STAVROPOLSKAYA || MAX_REPORT_CHAT_ID;
+const MAX_REPORT_CHAT_ID_MACHUGI = process.env.MAX_REPORT_CHAT_ID_MACHUGI || '';
 const STORAGE_DRIVER = process.env.LEVTIA_STORAGE_DRIVER || 'sqlite';
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -134,10 +136,14 @@ function getGoogleConfig() {
 }
 
 function getMaxConfig() {
+  const stavropolskayaChatId = MAX_REPORT_CHAT_ID_STAVROPOLSKAYA || MAX_REPORT_CHAT_ID;
   return {
     apiBase: MAX_API_BASE.replace(/\/+$/, ''),
     botToken: normalizeMaxToken(MAX_BOT_TOKEN),
-    reportChatId: MAX_REPORT_CHAT_ID,
+    reportChatIds: {
+      STAVROPOLSKAYA: stavropolskayaChatId,
+      MACHUGI: MAX_REPORT_CHAT_ID_MACHUGI,
+    },
   };
 }
 
@@ -173,8 +179,10 @@ function formatReportTime(value) {
 function maxReportText(input) {
   const report = input.report || {};
   const submittedAt = report.submittedAt || new Date().toISOString();
+  const studio = report.studio === 'MACHUGI' ? 'Мачуги' : 'Ставропольская';
   return [
     `Отчёт ${input.slot || report.slot || ''}`,
+    `Студия: ${studio}`,
     `Дата: ${formatReportDate(input.checklistDate || submittedAt)}`,
     `Администратор: ${report.adminName || input.assigneeName || 'Не указан'}`,
     '',
@@ -189,10 +197,18 @@ function maxReportText(input) {
   ].join('\n');
 }
 
-async function sendMaxMessage(text) {
+async function sendMaxMessage(text, studio = 'STAVROPOLSKAYA') {
   const config = getMaxConfig();
-  if (!config.botToken || !config.reportChatId) {
-    const error = new Error('MAX не настроен: добавьте MAX_BOT_TOKEN и MAX_REPORT_CHAT_ID.');
+  const reportChatId = config.reportChatIds[studio] || '';
+  if (!config.botToken) {
+    const error = new Error('MAX не настроен: добавьте MAX_BOT_TOKEN.');
+    error.statusCode = 409;
+    throw error;
+  }
+  if (!reportChatId) {
+    const studioName = studio === 'MACHUGI' ? 'Мачуги' : 'Ставропольская';
+    const envName = studio === 'MACHUGI' ? 'MAX_REPORT_CHAT_ID_MACHUGI' : 'MAX_REPORT_CHAT_ID_STAVROPOLSKAYA или MAX_REPORT_CHAT_ID';
+    const error = new Error(`MAX чат для студии ${studioName} не настроен: добавьте ${envName}.`);
     error.statusCode = 409;
     throw error;
   }
@@ -200,7 +216,7 @@ async function sendMaxMessage(text) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MAX_REQUEST_TIMEOUT_MS);
   try {
-    const params = new URLSearchParams({ chat_id: config.reportChatId });
+    const params = new URLSearchParams({ chat_id: reportChatId });
     const response = await fetch(`${config.apiBase}/messages?${params.toString()}`, {
       method: 'POST',
       headers: {
@@ -952,8 +968,11 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === '/api/max/status' && request.method === 'GET') {
       const config = getMaxConfig();
       send(response, 200, {
-        configured: Boolean(config.botToken && config.reportChatId),
-        chatId: config.reportChatId || null,
+        configured: Boolean(config.botToken && config.reportChatIds.STAVROPOLSKAYA),
+        chatIds: {
+          STAVROPOLSKAYA: config.reportChatIds.STAVROPOLSKAYA || null,
+          MACHUGI: config.reportChatIds.MACHUGI || null,
+        },
       });
       return;
     }
@@ -965,7 +984,8 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       const sentAt = new Date().toISOString();
-      const message = await sendMaxMessage(maxReportText(body));
+      const studio = body.report?.studio === 'MACHUGI' ? 'MACHUGI' : 'STAVROPOLSKAYA';
+      const message = await sendMaxMessage(maxReportText(body), studio);
       send(response, 200, {
         ok: true,
         sentAt,
