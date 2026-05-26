@@ -136,9 +136,17 @@ function getGoogleConfig() {
 function getMaxConfig() {
   return {
     apiBase: MAX_API_BASE.replace(/\/+$/, ''),
-    botToken: MAX_BOT_TOKEN,
+    botToken: normalizeMaxToken(MAX_BOT_TOKEN),
     reportChatId: MAX_REPORT_CHAT_ID,
   };
+}
+
+function normalizeMaxToken(value) {
+  return String(value || '')
+    .trim()
+    .replace(/^Authorization:\s*/i, '')
+    .replace(/^Bearer\s+/i, '')
+    .trim();
 }
 
 function formatReportDate(value) {
