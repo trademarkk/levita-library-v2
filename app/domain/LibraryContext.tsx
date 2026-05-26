@@ -22,6 +22,7 @@ import type {
   RefundStatus,
   Role,
   TaskTemplate,
+  TrainerEvaluationSheet,
   UsefulContact,
   User,
 } from './types';
@@ -82,6 +83,8 @@ type CreateExpenseInput = {
   studio: ExpenseStudio;
   comment?: string;
 };
+
+type TrainerEvaluationInput = Omit<TrainerEvaluationSheet, 'id' | 'createdAt' | 'createdById'>;
 
 type GoogleCalendarStatus = {
   configured: boolean;
@@ -178,6 +181,9 @@ type LibraryContextValue = {
   createExpense: (input: CreateExpenseInput) => void;
   updateExpense: (id: string, input: Partial<CreateExpenseInput>) => void;
   deleteExpense: (id: string) => void;
+  createTrainerEvaluation: (input: TrainerEvaluationInput) => void;
+  updateTrainerEvaluation: (id: string, input: Partial<TrainerEvaluationInput>) => void;
+  deleteTrainerEvaluation: (id: string) => void;
   updateSettings: (input: Partial<AppSettings>) => void;
 };
 
@@ -451,6 +457,12 @@ function normalizeState(raw: Partial<LibraryState> | null): LibraryState {
     })),
     expenseCategories: raw.expenseCategories || base.expenseCategories,
     expenses: raw.expenses || base.expenses,
+    trainerEvaluations: (raw.trainerEvaluations || base.trainerEvaluations).map((evaluation) => ({
+      ...evaluation,
+      score: Number(evaluation.score) || 0,
+      evaluatedAt: /^\d{4}-\d{2}-\d{2}$/.test(evaluation.evaluatedAt) ? evaluation.evaluatedAt : dateKey(evaluation.evaluatedAt) || dateKey(),
+      createdById: evaluation.createdById ?? null,
+    })),
     settings: { ...base.settings, ...(raw.settings || {}) },
   };
 }
@@ -1178,6 +1190,38 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     deleteExpense(id) {
       update((draft) => {
         draft.expenses = draft.expenses.filter((expense) => expense.id !== id);
+      });
+    },
+    createTrainerEvaluation(input) {
+      if (!input.trainerName.trim() || !input.direction.trim() || !input.sheetUrl.trim() || !input.evaluatedAt) return;
+      update((draft) => {
+        draft.trainerEvaluations.unshift({
+          id: newId('trainer-evaluation'),
+          trainerName: input.trainerName.trim(),
+          studio: input.studio,
+          direction: input.direction.trim(),
+          score: Number(input.score) || 0,
+          evaluatedAt: input.evaluatedAt,
+          sheetUrl: input.sheetUrl.trim(),
+          createdAt: new Date().toISOString(),
+          createdById: currentUser?.id ?? null,
+        });
+      });
+    },
+    updateTrainerEvaluation(id, input) {
+      update((draft) => {
+        const evaluation = draft.trainerEvaluations.find((item) => item.id === id);
+        if (!evaluation) return;
+        Object.assign(evaluation, input);
+        evaluation.trainerName = evaluation.trainerName.trim();
+        evaluation.direction = evaluation.direction.trim();
+        evaluation.sheetUrl = evaluation.sheetUrl.trim();
+        evaluation.score = Number(evaluation.score) || 0;
+      });
+    },
+    deleteTrainerEvaluation(id) {
+      update((draft) => {
+        draft.trainerEvaluations = draft.trainerEvaluations.filter((evaluation) => evaluation.id !== id);
       });
     },
     updateSettings(input) {

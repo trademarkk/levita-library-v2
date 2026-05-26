@@ -173,6 +173,18 @@ export interface CalendarEvent {
 export type ExpenseStudio = 'STAVROPOLSKAYA' | 'MACHUGI';
 export type ExpenseAccount = 'RS_SBER' | 'TOCHKA' | 'CREDIT';
 
+export interface TrainerEvaluationSheet {
+  id: string;
+  trainerName: string;
+  studio: ExpenseStudio;
+  direction: string;
+  score: number;
+  evaluatedAt: string;
+  sheetUrl: string;
+  createdAt: string;
+  createdById?: string | null;
+}
+
 export interface ExpenseCategory {
   id: string;
   name: string;
@@ -204,6 +216,7 @@ export interface LibraryState {
   calendarEvents: CalendarEvent[];
   expenseCategories: ExpenseCategory[];
   expenses: ExpenseRecord[];
+  trainerEvaluations: TrainerEvaluationSheet[];
   callChecklist: string[];
   settings: AppSettings;
 }

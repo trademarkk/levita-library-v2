@@ -134,6 +134,11 @@ export const initialState: LibraryState = {
     { id: 'expense-category-3', name: 'Хозяйственные расходы', createdAt: now },
   ],
   expenses: [],
+  trainerEvaluations: [
+    { id: 'trainer-evaluation-1', trainerName: 'Алина Старший Тренер', studio: 'STAVROPOLSKAYA', direction: 'Балет', score: 8.7, evaluatedAt: '2026-05-07', sheetUrl: 'https://docs.google.com/spreadsheets/', createdAt: now, createdById: 'user-owner' },
+    { id: 'trainer-evaluation-2', trainerName: 'Мила Тренер', studio: 'MACHUGI', direction: 'Растяжка', score: 9.1, evaluatedAt: '2026-05-14', sheetUrl: 'https://docs.google.com/spreadsheets/', createdAt: now, createdById: 'user-assistant' },
+    { id: 'trainer-evaluation-3', trainerName: 'Мила Тренер', studio: 'MACHUGI', direction: 'Балет', score: 8.4, evaluatedAt: '2026-05-21', sheetUrl: 'https://docs.google.com/spreadsheets/', createdAt: now, createdById: 'user-senior-trainer' },
+  ],
   callChecklist: [
     'Поздороваться и назвать студию',
     'Уточнить цель клиента',

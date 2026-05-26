@@ -24,4 +24,13 @@ export default defineConfig({
       '/api': 'http://127.0.0.1:4174',
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          charts: ['recharts'],
+        },
+      },
+    },
+  },
 })

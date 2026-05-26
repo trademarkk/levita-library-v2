@@ -4,6 +4,7 @@ import { GlassCard } from './GlassCard';
 import { TabNavigation } from './TabNavigation';
 import { ConfirmChecklistDialog } from './ConfirmChecklistDialog';
 import { RoleContentViewer, RoleLinksViewer, RoleTemplatesViewer } from './RoleContent';
+import { TrainerEvaluationSheetsSection, TrainerRatingSection } from './TrainerEvaluationSections';
 import { useLibrary } from '../domain/LibraryContext';
 import { roleLabels } from '../domain/labels';
 import type { Role } from '../domain/types';
@@ -37,6 +38,8 @@ const roleContent = {
       { id: 'knowledge', label: 'База знаний' },
       { id: 'templates', label: 'Шаблоны сообщений' },
       { id: 'links', label: 'Рабочие ссылки' },
+      { id: 'evaluation-sheets', label: 'Листы оценивания' },
+      { id: 'trainer-rating', label: 'Рейтинг тренеров' },
       { id: 'checklist', label: 'Чек-лист' },
     ],
   },
@@ -49,6 +52,7 @@ const roleContent = {
       { id: 'knowledge', label: 'База знаний' },
       { id: 'templates', label: 'Шаблоны сообщений' },
       { id: 'links', label: 'Рабочие ссылки' },
+      { id: 'trainer-rating', label: 'Рейтинг тренеров' },
       { id: 'checklist', label: 'Чек-лист' },
     ],
   },
@@ -76,6 +80,8 @@ export function RoleDashboard({ role }: RoleDashboardProps) {
           {activeTab === 'knowledge' && <RoleContentViewer role={role} category="KNOWLEDGE" />}
           {activeTab === 'templates' && <RoleTemplatesViewer role={role} />}
           {activeTab === 'links' && <RoleLinksViewer role={role} />}
+          {activeTab === 'evaluation-sheets' && <TrainerEvaluationSheetsSection />}
+          {activeTab === 'trainer-rating' && <TrainerRatingSection />}
           {activeTab === 'checklist' && <RoleChecklist userId={user?.id ?? ''} />}
         </div>
       </div>

@@ -4,6 +4,7 @@ import { TabNavigation } from './TabNavigation';
 import { GlassCard } from './GlassCard';
 import { OwnerLinksManager, OwnerRoleContentManager, OwnerTemplatesManager } from './RoleContent';
 import { CalendarSection, ExpensesSection, FinancialPlanSection } from './SharedPlanningSections';
+import { TrainerEvaluationSheetsSection, TrainerRatingSection } from './TrainerEvaluationSections';
 import { useLibrary } from '../domain/LibraryContext';
 import { employeeStatusLabels, formatDate, formatTime, refundStatusLabels, roleLabels } from '../domain/labels';
 import type { ChecklistControlStatus, EmployeeStatus, KnowledgeCategory, RefundStatus, Role } from '../domain/types';
@@ -14,6 +15,8 @@ const tabs = [
   { id: 'financial-plan', label: 'Финансовый план' },
   { id: 'calendar', label: 'Календарь' },
   { id: 'expenses', label: 'Расходы' },
+  { id: 'evaluation-sheets', label: 'Листы оценивания' },
+  { id: 'trainer-rating', label: 'Рейтинг тренеров' },
   { id: 'responsibilities', label: 'Обязанности' },
   { id: 'regulations', label: 'Регламенты' },
   { id: 'info', label: 'Важная информация' },
@@ -53,6 +56,8 @@ export function OwnerDashboard() {
           {activeTab === 'financial-plan' && <FinancialPlanSection />}
           {activeTab === 'calendar' && <CalendarSection />}
           {activeTab === 'expenses' && <ExpensesSection />}
+          {activeTab === 'evaluation-sheets' && <TrainerEvaluationSheetsSection />}
+          {activeTab === 'trainer-rating' && <TrainerRatingSection />}
           {activeTab === 'responsibilities' && <OwnerRoleContentManager category="RESPONSIBILITY" />}
           {activeTab === 'regulations' && <OwnerRoleContentManager category="REGULATION" />}
           {activeTab === 'info' && <OwnerRoleContentManager category="IMPORTANT_INFO" />}

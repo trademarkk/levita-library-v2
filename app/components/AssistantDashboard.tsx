@@ -5,6 +5,7 @@ import { GlassCard } from './GlassCard';
 import { ConfirmChecklistDialog } from './ConfirmChecklistDialog';
 import { RoleContentViewer } from './RoleContent';
 import { CalendarSection, ExpensesSection, FinancialPlanSection } from './SharedPlanningSections';
+import { TrainerEvaluationSheetsSection, TrainerRatingSection } from './TrainerEvaluationSections';
 import { useLibrary } from '../domain/LibraryContext';
 import { formatDate, formatTime, roleLabels } from '../domain/labels';
 import type { ChecklistControlStatus } from '../domain/types';
@@ -20,6 +21,8 @@ export function AssistantDashboard() {
     { id: 'financial-plan', label: 'Финансовый план' },
     { id: 'calendar', label: 'Календарь' },
     { id: 'expenses', label: 'Расходы' },
+    { id: 'evaluation-sheets', label: 'Листы оценивания' },
+    { id: 'trainer-rating', label: 'Рейтинг тренеров' },
     { id: 'admin-checklists', label: 'Контроль чек-листов' },
     { id: 'responsibilities', label: 'Обязанности' },
     { id: 'regulations', label: 'Регламенты' },
@@ -55,6 +58,8 @@ export function AssistantDashboard() {
           {activeTab === 'financial-plan' && <FinancialPlanSection />}
           {activeTab === 'calendar' && <CalendarSection />}
           {activeTab === 'expenses' && <ExpensesSection />}
+          {activeTab === 'evaluation-sheets' && <TrainerEvaluationSheetsSection />}
+          {activeTab === 'trainer-rating' && <TrainerRatingSection />}
           {activeTab === 'admin-checklists' && <AdminChecklistMonitor />}
           {activeTab === 'responsibilities' && <RoleContentViewer role="ASSISTANT" category="RESPONSIBILITY" />}
           {activeTab === 'regulations' && <RoleContentViewer role="ASSISTANT" category="REGULATION" />}
