@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { createClient } from '@supabase/supabase-js';
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const dataDir = join(rootDir, 'data');
@@ -28,32 +29,59 @@ loadDotEnv();
 const PORT = Number(process.env.LEVTIA_API_PORT || 4174);
 const GOOGLE_REQUEST_TIMEOUT_MS = Number(process.env.GOOGLE_REQUEST_TIMEOUT_MS || 12000);
 const GOOGLE_TASK_HISTORY_LIMIT = Number(process.env.GOOGLE_TASK_HISTORY_LIMIT || 500);
+const STORAGE_DRIVER = process.env.LEVTIA_STORAGE_DRIVER || 'sqlite';
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const useSupabase = STORAGE_DRIVER === 'supabase';
 
 mkdirSync(dataDir, { recursive: true });
 
-const db = new DatabaseSync(dbPath);
-db.exec(`
-  CREATE TABLE IF NOT EXISTS app_state (
-    id TEXT PRIMARY KEY,
-    payload TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  );
+if (useSupabase && (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY)) {
+  throw new Error('Supabase storage requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.');
+}
 
-  CREATE TABLE IF NOT EXISTS google_calendar_tokens (
-    id TEXT PRIMARY KEY,
-    access_token TEXT NOT NULL,
-    refresh_token TEXT,
-    expires_at INTEGER NOT NULL,
-    scope TEXT,
-    token_type TEXT,
-    updated_at TEXT NOT NULL
-  );
+const db = useSupabase ? null : new DatabaseSync(dbPath);
+const supabase = useSupabase
+  ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    })
+  : null;
 
-  CREATE TABLE IF NOT EXISTS google_oauth_states (
-    state TEXT PRIMARY KEY,
-    created_at INTEGER NOT NULL
-  );
-`);
+if (db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS app_state (
+      id TEXT PRIMARY KEY,
+      payload TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS google_calendar_tokens (
+      id TEXT PRIMARY KEY,
+      access_token TEXT NOT NULL,
+      refresh_token TEXT,
+      expires_at INTEGER NOT NULL,
+      scope TEXT,
+      token_type TEXT,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS google_oauth_states (
+      state TEXT PRIMARY KEY,
+      created_at INTEGER NOT NULL
+    );
+  `);
+}
+
+async function supabaseSingle(query, action) {
+  const { data, error } = await query;
+  if (error) throw new Error(`Supabase ${action} failed: ${error.message}`);
+  return data ?? null;
+}
+
+async function supabaseRun(query, action) {
+  const { error } = await query;
+  if (error) throw new Error(`Supabase ${action} failed: ${error.message}`);
+}
 
 function readBody(request) {
   return new Promise((resolve, reject) => {
@@ -101,17 +129,40 @@ function getGoogleConfig() {
   };
 }
 
-function getGoogleToken() {
+async function getGoogleToken() {
+  if (useSupabase) {
+    return supabaseSingle(
+      supabase.from('google_calendar_tokens').select('*').eq('id', 'main').maybeSingle(),
+      'select google token',
+    );
+  }
   return db.prepare('SELECT * FROM google_calendar_tokens WHERE id = ?').get('main');
 }
 
-function deleteGoogleToken() {
+async function deleteGoogleToken() {
+  if (useSupabase) {
+    await supabaseRun(supabase.from('google_calendar_tokens').delete().eq('id', 'main'), 'delete google token');
+    return;
+  }
   db.prepare('DELETE FROM google_calendar_tokens WHERE id = ?').run('main');
 }
 
-function saveGoogleToken(token) {
-  const existing = getGoogleToken();
+async function saveGoogleToken(token) {
+  const existing = await getGoogleToken();
   const expiresAt = Date.now() + Math.max(0, Number(token.expires_in || 0) - 60) * 1000;
+  const payload = {
+    id: 'main',
+    access_token: token.access_token,
+    refresh_token: token.refresh_token || existing?.refresh_token || null,
+    expires_at: expiresAt,
+    scope: token.scope || existing?.scope || null,
+    token_type: token.token_type || existing?.token_type || 'Bearer',
+    updated_at: new Date().toISOString(),
+  };
+  if (useSupabase) {
+    await supabaseRun(supabase.from('google_calendar_tokens').upsert(payload, { onConflict: 'id' }), 'upsert google token');
+    return;
+  }
   db.prepare(`
     INSERT INTO google_calendar_tokens (id, access_token, refresh_token, expires_at, scope, token_type, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -123,13 +174,13 @@ function saveGoogleToken(token) {
       token_type = excluded.token_type,
       updated_at = excluded.updated_at
   `).run(
-    'main',
-    token.access_token,
-    token.refresh_token || existing?.refresh_token || null,
-    expiresAt,
-    token.scope || existing?.scope || null,
-    token.token_type || existing?.token_type || 'Bearer',
-    new Date().toISOString(),
+    payload.id,
+    payload.access_token,
+    payload.refresh_token,
+    payload.expires_at,
+    payload.scope,
+    payload.token_type,
+    payload.updated_at,
   );
 }
 
@@ -173,7 +224,7 @@ async function getGoogleAccessToken() {
     throw error;
   }
 
-  const token = getGoogleToken();
+  const token = await getGoogleToken();
   if (!token?.access_token) {
     const error = new Error('Google Calendar не подключен.');
     error.statusCode = 409;
@@ -197,12 +248,12 @@ async function getGoogleAccessToken() {
     });
   } catch (error) {
     if (isInvalidGoogleTokenError(error)) {
-      deleteGoogleToken();
+      await deleteGoogleToken();
       throw googleReconnectError();
     }
     throw error;
   }
-  saveGoogleToken(refreshed);
+  await saveGoogleToken(refreshed);
   return refreshed.access_token;
 }
 
@@ -291,7 +342,7 @@ async function googleCalendarRequest(path, options = {}) {
   if (!response.ok) {
     const error = new Error(payload.error?.message || payload.error_description || 'Google Calendar request failed.');
     error.statusCode = response.status;
-    if (response.status === 401 || isInvalidGoogleTokenError(error)) deleteGoogleToken();
+    if (response.status === 401 || isInvalidGoogleTokenError(error)) await deleteGoogleToken();
     throw error;
   }
   return payload;
@@ -325,7 +376,7 @@ async function googleTasksRequest(path, options = {}) {
   if (!response.ok) {
     const error = new Error(payload.error?.message || payload.error_description || 'Google Tasks request failed.');
     error.statusCode = response.status;
-    if (response.status === 401 || isInvalidGoogleTokenError(error)) deleteGoogleToken();
+    if (response.status === 401 || isInvalidGoogleTokenError(error)) await deleteGoogleToken();
     throw error;
   }
   return payload;
@@ -706,7 +757,18 @@ async function listGoogleTasksForRange(timeMin, timeMax) {
   }
 }
 
-function getState() {
+async function getState() {
+  if (useSupabase) {
+    const row = await supabaseSingle(
+      supabase.from('app_state').select('payload, updated_at').eq('id', 'main').maybeSingle(),
+      'select app state',
+    );
+    if (!row) return null;
+    return {
+      state: row.payload,
+      updatedAt: row.updated_at,
+    };
+  }
   const selectState = db.prepare('SELECT payload, updated_at FROM app_state WHERE id = ?');
   const row = selectState.get('main');
   if (!row) return null;
@@ -716,8 +778,15 @@ function getState() {
   };
 }
 
-function saveState(state) {
+async function saveState(state) {
   const updatedAt = new Date().toISOString();
+  if (useSupabase) {
+    await supabaseRun(
+      supabase.from('app_state').upsert({ id: 'main', payload: state, updated_at: updatedAt }, { onConflict: 'id' }),
+      'upsert app state',
+    );
+    return { state, updatedAt };
+  }
   const upsertState = db.prepare(`
     INSERT INTO app_state (id, payload, updated_at)
     VALUES (?, ?, ?)
@@ -725,6 +794,44 @@ function saveState(state) {
   `);
   upsertState.run('main', JSON.stringify(state), updatedAt);
   return { state, updatedAt };
+}
+
+async function resetState() {
+  if (useSupabase) {
+    await supabaseRun(supabase.from('app_state').delete().eq('id', 'main'), 'delete app state');
+    return;
+  }
+  db.prepare('DELETE FROM app_state WHERE id = ?').run('main');
+}
+
+async function cleanupGoogleOAuthStates(beforeTimestamp) {
+  if (useSupabase) {
+    await supabaseRun(supabase.from('google_oauth_states').delete().lt('created_at', beforeTimestamp), 'cleanup google oauth states');
+    return;
+  }
+  db.prepare('DELETE FROM google_oauth_states WHERE created_at < ?').run(beforeTimestamp);
+}
+
+async function createGoogleOAuthState(state, createdAt) {
+  if (useSupabase) {
+    await supabaseRun(supabase.from('google_oauth_states').insert({ state, created_at: createdAt }), 'insert google oauth state');
+    return;
+  }
+  db.prepare('INSERT INTO google_oauth_states (state, created_at) VALUES (?, ?)').run(state, createdAt);
+}
+
+async function consumeGoogleOAuthState(state) {
+  if (useSupabase) {
+    const savedState = await supabaseSingle(
+      supabase.from('google_oauth_states').select('state').eq('state', state).maybeSingle(),
+      'select google oauth state',
+    );
+    if (savedState) await supabaseRun(supabase.from('google_oauth_states').delete().eq('state', state), 'delete google oauth state');
+    return savedState;
+  }
+  const savedState = db.prepare('SELECT state FROM google_oauth_states WHERE state = ?').get(state);
+  if (savedState) db.prepare('DELETE FROM google_oauth_states WHERE state = ?').run(state);
+  return savedState;
 }
 
 const server = http.createServer(async (request, response) => {
@@ -737,22 +844,23 @@ const server = http.createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', `http://${request.headers.host}`);
 
     if (url.pathname === '/api/health' && request.method === 'GET') {
-      send(response, 200, { ok: true, dbPath });
+      send(response, 200, { ok: true, storageDriver: STORAGE_DRIVER, dbPath: useSupabase ? null : dbPath });
       return;
     }
 
     if (url.pathname === '/api/google/status' && request.method === 'GET') {
       const config = getGoogleConfig();
-      const token = getGoogleToken();
+      const token = await getGoogleToken();
       let connected = Boolean(token?.refresh_token || token?.access_token);
       let reconnectRequired = false;
       if (connected) {
         try {
           await getGoogleAccessToken();
-          connected = Boolean(getGoogleToken()?.refresh_token || getGoogleToken()?.access_token);
+          const refreshedToken = await getGoogleToken();
+          connected = Boolean(refreshedToken?.refresh_token || refreshedToken?.access_token);
         } catch (error) {
           if (error.statusCode === 401 || isInvalidGoogleTokenError(error)) {
-            deleteGoogleToken();
+            await deleteGoogleToken();
             connected = false;
             reconnectRequired = true;
           } else {
@@ -780,8 +888,8 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       const state = randomUUID();
-      db.prepare('DELETE FROM google_oauth_states WHERE created_at < ?').run(Date.now() - 10 * 60 * 1000);
-      db.prepare('INSERT INTO google_oauth_states (state, created_at) VALUES (?, ?)').run(state, Date.now());
+      await cleanupGoogleOAuthStates(Date.now() - 10 * 60 * 1000);
+      await createGoogleOAuthState(state, Date.now());
       const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
       authUrl.searchParams.set('client_id', config.clientId);
       authUrl.searchParams.set('redirect_uri', config.redirectUri);
@@ -802,12 +910,11 @@ const server = http.createServer(async (request, response) => {
       const config = getGoogleConfig();
       const state = url.searchParams.get('state');
       const code = url.searchParams.get('code');
-      const savedState = state ? db.prepare('SELECT state FROM google_oauth_states WHERE state = ?').get(state) : null;
+      const savedState = state ? await consumeGoogleOAuthState(state) : null;
       if (!code || !state || !savedState) {
         redirect(response, `${config.appOrigin}/settings?google=error`);
         return;
       }
-      db.prepare('DELETE FROM google_oauth_states WHERE state = ?').run(state);
       const token = await exchangeGoogleToken({
         client_id: config.clientId,
         client_secret: config.clientSecret,
@@ -815,7 +922,7 @@ const server = http.createServer(async (request, response) => {
         redirect_uri: config.redirectUri,
         grant_type: 'authorization_code',
       });
-      saveGoogleToken(token);
+      await saveGoogleToken(token);
       redirect(response, `${config.appOrigin}/settings?google=connected`);
       return;
     }
@@ -881,7 +988,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (url.pathname === '/api/state' && request.method === 'GET') {
-      send(response, 200, getState() ?? { state: null, updatedAt: null });
+      send(response, 200, await getState() ?? { state: null, updatedAt: null });
       return;
     }
 
@@ -892,13 +999,12 @@ const server = http.createServer(async (request, response) => {
         send(response, 400, { error: 'state is required' });
         return;
       }
-      send(response, 200, saveState(parsed.state));
+      send(response, 200, await saveState(parsed.state));
       return;
     }
 
     if (url.pathname === '/api/reset' && request.method === 'POST') {
-      const deleteState = db.prepare('DELETE FROM app_state WHERE id = ?');
-      deleteState.run('main');
+      await resetState();
       send(response, 200, { ok: true });
       return;
     }
@@ -911,5 +1017,5 @@ const server = http.createServer(async (request, response) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`LEVTIA Library API: http://127.0.0.1:${PORT}`);
-  console.log(`SQLite DB: ${dbPath}`);
+  console.log(useSupabase ? 'Storage: Supabase' : `SQLite DB: ${dbPath}`);
 });
