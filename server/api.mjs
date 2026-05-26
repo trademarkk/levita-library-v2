@@ -36,16 +36,18 @@ const MAX_REPORT_CHAT_ID = process.env.MAX_REPORT_CHAT_ID || '';
 const MAX_REPORT_CHAT_ID_STAVROPOLSKAYA = process.env.MAX_REPORT_CHAT_ID_STAVROPOLSKAYA || MAX_REPORT_CHAT_ID;
 const MAX_REPORT_CHAT_ID_MACHUGI = process.env.MAX_REPORT_CHAT_ID_MACHUGI || '';
 const MAX_REPORT_REMINDER_SLOTS = ['14:00', '18:00', '22:00'];
+const CRON_SECRET = process.env.CRON_SECRET || '';
 const STORAGE_DRIVER = process.env.LEVTIA_STORAGE_DRIVER || 'sqlite';
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const useSupabase = STORAGE_DRIVER === 'supabase';
-const maxReminderTimers = new Map();
-
-mkdirSync(dataDir, { recursive: true });
 
 if (useSupabase && (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY)) {
   throw new Error('Supabase storage requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.');
+}
+
+if (!useSupabase) {
+  mkdirSync(dataDir, { recursive: true });
 }
 
 const db = useSupabase ? null : new DatabaseSync(dbPath);
@@ -77,6 +79,26 @@ if (db) {
       state TEXT PRIMARY KEY,
       created_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS max_reminders (
+      id TEXT PRIMARY KEY,
+      shift_id TEXT NOT NULL,
+      admin_name TEXT NOT NULL,
+      studio TEXT NOT NULL CHECK (studio IN ('STAVROPOLSKAYA', 'MACHUGI')),
+      report_slot TEXT NOT NULL CHECK (report_slot IN ('14:00', '18:00', '22:00')),
+      scheduled_at TEXT NOT NULL,
+      message_text TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'sent', 'failed')),
+      sent_at TEXT,
+      error TEXT,
+      max_message_id TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS max_reminders_status_scheduled_idx
+      ON max_reminders (status, scheduled_at);
   `);
 }
 
@@ -189,10 +211,10 @@ function reminderDateTime(date, slot, minutesBefore = 15) {
   const [year, month, day] = String(date || '').split('-').map(Number);
   const [hours, minutes] = String(slot || '').split(':').map(Number);
   if (![year, month, day, hours, minutes].every(Number.isFinite)) return null;
-  return new Date(year, month - 1, day, hours, minutes - minutesBefore, 0, 0);
+  return new Date(Date.UTC(year, month - 1, day, hours - 3, minutes - minutesBefore, 0, 0));
 }
 
-function scheduleMaxShiftReminder({ shiftId, adminName, studio, date, slot }) {
+function buildMaxShiftReminder({ shiftId, adminName, studio, date, slot }) {
   ensureMaxStudioConfigured(studio);
   const scheduledFor = reminderDateTime(date, slot);
   if (!scheduledFor) {
@@ -201,22 +223,20 @@ function scheduleMaxShiftReminder({ shiftId, adminName, studio, date, slot }) {
     throw error;
   }
 
-  const delay = scheduledFor.getTime() - Date.now();
-  if (delay <= 0) return null;
-
-  const key = `${shiftId}:${date}:${slot}`;
-  const existing = maxReminderTimers.get(key);
-  if (existing) clearTimeout(existing);
-
-  const timer = setTimeout(() => {
-    maxReminderTimers.delete(key);
-    sendMaxMessage(`${adminName}, не забудь отчетик на ${slot}💛`, studio).catch((error) => {
-      console.error(`MAX reminder failed for ${key}:`, error);
-    });
-  }, delay);
-  maxReminderTimers.set(key, timer);
-
-  return { slot, scheduledFor: scheduledFor.toISOString() };
+  const now = new Date().toISOString();
+  return {
+    id: `${shiftId}:${date}:${slot}`,
+    shiftId,
+    adminName,
+    studio,
+    reportSlot: slot,
+    scheduledAt: scheduledFor.toISOString(),
+    messageText: `${adminName}, не забудь отчетик на ${slot}💛`,
+    status: 'pending',
+    attempts: 0,
+    createdAt: now,
+    updatedAt: now,
+  };
 }
 
 function formatReportDate(value) {
@@ -295,6 +315,211 @@ async function sendMaxMessage(text, studio = 'STAVROPOLSKAYA') {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function reminderRowToModel(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    shiftId: row.shift_id ?? row.shiftId,
+    adminName: row.admin_name ?? row.adminName,
+    studio: row.studio === 'MACHUGI' ? 'MACHUGI' : 'STAVROPOLSKAYA',
+    reportSlot: row.report_slot ?? row.reportSlot,
+    scheduledAt: row.scheduled_at ?? row.scheduledAt,
+    messageText: row.message_text ?? row.messageText,
+    status: row.status,
+    sentAt: row.sent_at ?? row.sentAt ?? null,
+    error: row.error ?? null,
+    maxMessageId: row.max_message_id ?? row.maxMessageId ?? null,
+    attempts: Number(row.attempts || 0),
+    createdAt: row.created_at ?? row.createdAt,
+    updatedAt: row.updated_at ?? row.updatedAt,
+  };
+}
+
+function reminderModelToRow(reminder) {
+  return {
+    id: reminder.id,
+    shift_id: reminder.shiftId,
+    admin_name: reminder.adminName,
+    studio: reminder.studio,
+    report_slot: reminder.reportSlot,
+    scheduled_at: reminder.scheduledAt,
+    message_text: reminder.messageText,
+    status: reminder.status,
+    sent_at: reminder.sentAt ?? null,
+    error: reminder.error ?? null,
+    max_message_id: reminder.maxMessageId ?? null,
+    attempts: reminder.attempts ?? 0,
+    created_at: reminder.createdAt,
+    updated_at: reminder.updatedAt,
+  };
+}
+
+async function insertMaxReminders(reminders) {
+  if (!reminders.length) return [];
+  if (useSupabase) {
+    await supabaseRun(
+      supabase
+        .from('max_reminders')
+        .upsert(reminders.map(reminderModelToRow), { onConflict: 'id', ignoreDuplicates: true }),
+      'upsert max reminders',
+    );
+    return reminders;
+  }
+
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO max_reminders (
+      id, shift_id, admin_name, studio, report_slot, scheduled_at, message_text,
+      status, sent_at, error, max_message_id, attempts, created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const reminder of reminders) {
+    const row = reminderModelToRow(reminder);
+    insert.run(
+      row.id,
+      row.shift_id,
+      row.admin_name,
+      row.studio,
+      row.report_slot,
+      row.scheduled_at,
+      row.message_text,
+      row.status,
+      row.sent_at,
+      row.error,
+      row.max_message_id,
+      row.attempts,
+      row.created_at,
+      row.updated_at,
+    );
+  }
+  return reminders;
+}
+
+async function createMaxShiftReminders(input) {
+  const studio = input.studio === 'MACHUGI' ? 'MACHUGI' : 'STAVROPOLSKAYA';
+  ensureMaxStudioConfigured(studio);
+  const now = Date.now();
+  const reminders = MAX_REPORT_REMINDER_SLOTS
+    .map((slot) => buildMaxShiftReminder({ ...input, studio, slot }))
+    .filter((reminder) => new Date(reminder.scheduledAt).getTime() > now);
+  await insertMaxReminders(reminders);
+  return reminders.map((reminder) => ({
+    slot: reminder.reportSlot,
+    scheduledFor: reminder.scheduledAt,
+    status: reminder.status,
+  }));
+}
+
+async function claimDueMaxReminders(limit = 25) {
+  const now = new Date().toISOString();
+  if (useSupabase) {
+    const { data, error } = await supabase
+      .from('max_reminders')
+      .select('*')
+      .eq('status', 'pending')
+      .lte('scheduled_at', now)
+      .order('scheduled_at', { ascending: true })
+      .limit(limit);
+    if (error) throw new Error(`Supabase select max reminders failed: ${error.message}`);
+    const claimed = [];
+    for (const row of data || []) {
+      const reminder = reminderRowToModel(row);
+      const { data: updated, error: updateError } = await supabase
+        .from('max_reminders')
+        .update({ status: 'processing', attempts: reminder.attempts + 1, updated_at: now })
+        .eq('id', reminder.id)
+        .eq('status', 'pending')
+        .select('*')
+        .maybeSingle();
+      if (updateError) throw new Error(`Supabase claim max reminder failed: ${updateError.message}`);
+      if (updated) claimed.push(reminderRowToModel(updated));
+    }
+    return claimed;
+  }
+
+  const rows = db.prepare(`
+    SELECT * FROM max_reminders
+    WHERE status = 'pending' AND scheduled_at <= ?
+    ORDER BY scheduled_at ASC
+    LIMIT ?
+  `).all(now, limit);
+  const reminders = rows.map(reminderRowToModel);
+  const claim = db.prepare(`
+    UPDATE max_reminders
+    SET status = 'processing', attempts = attempts + 1, updated_at = ?
+    WHERE id = ? AND status = 'pending'
+  `);
+  return reminders.filter((reminder) => claim.run(now, reminder.id).changes > 0);
+}
+
+async function markMaxReminderSent(id, messageId) {
+  const now = new Date().toISOString();
+  if (useSupabase) {
+    await supabaseRun(
+      supabase
+        .from('max_reminders')
+        .update({ status: 'sent', sent_at: now, error: null, max_message_id: messageId || null, updated_at: now })
+        .eq('id', id),
+      'mark max reminder sent',
+    );
+    return;
+  }
+  db.prepare(`
+    UPDATE max_reminders
+    SET status = 'sent', sent_at = ?, error = NULL, max_message_id = ?, updated_at = ?
+    WHERE id = ?
+  `).run(now, messageId || null, now, id);
+}
+
+async function markMaxReminderFailed(id, errorMessage) {
+  const now = new Date().toISOString();
+  if (useSupabase) {
+    await supabaseRun(
+      supabase
+        .from('max_reminders')
+        .update({ status: 'failed', error: errorMessage, updated_at: now })
+        .eq('id', id),
+      'mark max reminder failed',
+    );
+    return;
+  }
+  db.prepare(`
+    UPDATE max_reminders
+    SET status = 'failed', error = ?, updated_at = ?
+    WHERE id = ?
+  `).run(errorMessage, now, id);
+}
+
+async function runMaxReminderJob() {
+  const reminders = await claimDueMaxReminders();
+  const results = [];
+  for (const reminder of reminders) {
+    try {
+      const message = await sendMaxMessage(reminder.messageText, reminder.studio);
+      const messageId = message.message?.id || message.id || null;
+      await markMaxReminderSent(reminder.id, messageId);
+      results.push({ id: reminder.id, status: 'sent', messageId });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown MAX reminder error';
+      await markMaxReminderFailed(reminder.id, message);
+      results.push({ id: reminder.id, status: 'failed', error: message });
+    }
+  }
+  return {
+    ok: true,
+    processed: results.length,
+    sent: results.filter((item) => item.status === 'sent').length,
+    failed: results.filter((item) => item.status === 'failed').length,
+    results,
+  };
+}
+
+function isCronAuthorized(request, url) {
+  if (!CRON_SECRET) return true;
+  const header = request.headers.authorization || request.headers.Authorization || '';
+  return header === `Bearer ${CRON_SECRET}` || url.searchParams.get('secret') === CRON_SECRET;
 }
 
 async function getGoogleToken() {
@@ -1002,7 +1227,7 @@ async function consumeGoogleOAuthState(state) {
   return savedState;
 }
 
-const server = http.createServer(async (request, response) => {
+export async function handleApiRequest(request, response) {
   try {
     if (request.method === 'OPTIONS') {
       send(response, 204, {});
@@ -1034,17 +1259,22 @@ const server = http.createServer(async (request, response) => {
         send(response, 400, { error: 'shiftId, adminName and date are required' });
         return;
       }
-      const studio = body.studio === 'MACHUGI' ? 'MACHUGI' : 'STAVROPOLSKAYA';
-      const scheduled = MAX_REPORT_REMINDER_SLOTS
-        .map((slot) => scheduleMaxShiftReminder({
-          shiftId: body.shiftId,
-          adminName: body.adminName,
-          studio,
-          date: body.date,
-          slot,
-        }))
-        .filter(Boolean);
+      const scheduled = await createMaxShiftReminders({
+        shiftId: body.shiftId,
+        adminName: body.adminName,
+        studio: body.studio,
+        date: body.date,
+      });
       send(response, 200, { ok: true, scheduled });
+      return;
+    }
+
+    if (url.pathname === '/api/jobs/max-reminders' && (request.method === 'GET' || request.method === 'POST')) {
+      if (!isCronAuthorized(request, url)) {
+        send(response, 401, { error: 'Unauthorized cron request' });
+        return;
+      }
+      send(response, 200, await runMaxReminderJob());
       return;
     }
 
@@ -1230,9 +1460,13 @@ const server = http.createServer(async (request, response) => {
   } catch (error) {
     send(response, error.statusCode || 500, { error: error instanceof Error ? error.message : 'Unknown server error' });
   }
-});
+}
 
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`LEVTIA Library API: http://127.0.0.1:${PORT}`);
-  console.log(useSupabase ? 'Storage: Supabase' : `SQLite DB: ${dbPath}`);
-});
+const server = http.createServer(handleApiRequest);
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  server.listen(PORT, '127.0.0.1', () => {
+    console.log(`LEVTIA Library API: http://127.0.0.1:${PORT}`);
+    console.log(useSupabase ? 'Storage: Supabase' : `SQLite DB: ${dbPath}`);
+  });
+}
