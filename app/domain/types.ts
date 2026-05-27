@@ -11,10 +11,39 @@ export interface User {
   id: string;
   name: string;
   email: string;
-  password: string;
+  password?: string;
+  passwordHash?: string;
   role: Role;
   status: EmployeeStatus;
   joinDate: string;
+  createdAt: string;
+}
+
+export type AuditAction =
+  | 'auth.login'
+  | 'auth.password_reset'
+  | 'shift.start'
+  | 'employee.create'
+  | 'employee.update'
+  | 'employee.delete'
+  | 'checklist.item_toggle'
+  | 'checklist.report_update'
+  | 'content.create'
+  | 'content.update'
+  | 'content.delete'
+  | 'finance.update'
+  | 'calendar.update';
+
+export interface AuditEntry {
+  id: string;
+  action: AuditAction;
+  entityType: string;
+  entityId?: string | null;
+  entityLabel: string;
+  description?: string | null;
+  actorId?: string | null;
+  actorName: string;
+  actorRole?: Role | null;
   createdAt: string;
 }
 
@@ -236,6 +265,7 @@ export interface LibraryState {
   trainerEvaluations: TrainerEvaluationSheet[];
   callChecklist: string[];
   adminShifts: AdminShift[];
+  auditLog: AuditEntry[];
   settings: AppSettings;
 }
 

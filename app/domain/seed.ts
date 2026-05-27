@@ -152,6 +152,7 @@ export const initialState: LibraryState = {
     'Закрыть диалог следующим шагом',
   ],
   adminShifts: [],
+  auditLog: [],
   settings: {
     colorMode: 'dark',
     density: 'comfortable',

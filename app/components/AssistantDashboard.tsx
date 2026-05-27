@@ -102,14 +102,17 @@ function AssistantTeamSection() {
 
   const openEdit = (employee: typeof employees[number]) => {
     setEditingId(employee.id);
-    setDraft({ name: employee.name, email: employee.email, password: employee.password, role: employee.role, status: employee.status });
+    setDraft({ name: employee.name, email: employee.email, password: '', role: employee.role, status: employee.status });
     setShowModal(true);
   };
 
   const save = () => {
-    if (!draft.name.trim() || !draft.email.trim() || !draft.password.trim()) return;
+    if (!draft.name.trim() || !draft.email.trim() || (!editingId && !draft.password.trim())) return;
     if (!assistantTeamRoles.includes(draft.role)) return;
-    if (editingId) updateEmployee(editingId, draft);
+    if (editingId) {
+      const input = draft.password.trim() ? draft : { name: draft.name, email: draft.email, role: draft.role, status: draft.status };
+      updateEmployee(editingId, input);
+    }
     else createEmployee(draft);
     setShowModal(false);
     resetDraft();

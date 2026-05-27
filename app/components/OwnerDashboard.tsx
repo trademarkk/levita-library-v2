@@ -8,9 +8,12 @@ import { TrainerEvaluationSheetsSection, TrainerRatingSection } from './TrainerE
 import { useLibrary } from '../domain/LibraryContext';
 import { employeeStatusLabels, formatDate, formatTime, refundStatusLabels, roleLabels, studioLabels } from '../domain/labels';
 import type { ChecklistControlStatus, EmployeeStatus, KnowledgeCategory, RefundStatus, Role } from '../domain/types';
-import { AlertCircle, DollarSign, Edit2, FileText, Info, Link as LinkIcon, ListChecks, Plus, Save, Trash2, X } from 'lucide-react';
+import { Activity, AlertCircle, Clock3, DollarSign, Edit2, FileText, Info, Link as LinkIcon, ListChecks, Plus, Save, ShieldCheck, Trash2, X } from 'lucide-react';
 
 const tabs = [
+  { id: 'control-center', label: 'Центр контроля' },
+  { id: 'shift-journal', label: 'Журнал смен' },
+  { id: 'audit', label: 'Аудит действий' },
   { id: 'team', label: 'Команда' },
   { id: 'financial-plan', label: 'Финансовый план' },
   { id: 'calendar', label: 'Календарь' },
@@ -30,7 +33,7 @@ const tabs = [
 ];
 
 export function OwnerDashboard() {
-  const [activeTab, setActiveTab] = useState('team');
+  const [activeTab, setActiveTab] = useState('control-center');
   const { currentUser, state, refreshState } = useLibrary();
   const owner = currentUser?.role === 'OWNER' ? currentUser : state.users.find((user) => user.role === 'OWNER');
 
@@ -52,6 +55,9 @@ export function OwnerDashboard() {
         />
 
         <div className="max-w-7xl">
+          {activeTab === 'control-center' && <ControlCenterSection />}
+          {activeTab === 'shift-journal' && <ShiftJournalSection />}
+          {activeTab === 'audit' && <AuditLogSection />}
           {activeTab === 'team' && <TeamSection />}
           {activeTab === 'financial-plan' && <FinancialPlanSection />}
           {activeTab === 'calendar' && <CalendarSection />}
@@ -74,6 +80,213 @@ export function OwnerDashboard() {
   );
 }
 
+function ControlCenterSection() {
+  const { state, ownerChecklistReports, refreshState } = useLibrary();
+  const today = localDateKey();
+  const reports = ownerChecklistReports();
+  const todayReports = reports.filter((report) => localDateKey(report.checklist.date) === today);
+  const lateReports = todayReports.flatMap((report) => [
+    { slot: '14:00', report, status: report.report14 },
+    { slot: '18:00', report, status: report.report18 },
+    { slot: '22:00', report, status: report.report22 },
+  ]).filter((item) => item.status.submitted && !item.status.onTime);
+  const missingReports = todayReports.flatMap((report) => [
+    { slot: '14:00', report, status: report.report14 },
+    { slot: '18:00', report, status: report.report18 },
+    { slot: '22:00', report, status: report.report22 },
+  ]).filter((item) => !item.status.submitted);
+  const todayShifts = state.adminShifts.filter((shift) => shift.date === today);
+  const activeRefunds = state.refunds.filter((refund) => refund.status === 'NEW' || refund.status === 'IN_PROGRESS');
+  const activeTasks = state.tasks.filter((task) => task.status !== 'completed');
+  const urgentTasks = activeTasks.filter((task) => {
+    if (!task.deadline) return false;
+    const diff = Math.ceil((new Date(`${task.deadline}T00:00:00`).getTime() - Date.now()) / 86_400_000);
+    return diff <= 3;
+  });
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+        <div>
+          <h2 className="text-2xl text-[#f5f3f0]">Центр контроля</h2>
+          <p className="mt-2 text-sm text-[#a89b8f]">Оперативная сводка по сменам, отчётам, задачам и возвратам.</p>
+        </div>
+        <button onClick={() => void refreshState()} className="primary-action inline-flex items-center gap-2">
+          <Activity className="h-4 w-4" />
+          Обновить из базы
+        </button>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <StatCard value={todayShifts.length} label="Смен открыто сегодня" />
+        <StatCard value={missingReports.length} label="Отчётов не сдано" />
+        <StatCard value={lateReports.length} label="Сдано с опозданием" />
+        <StatCard value={urgentTasks.length} label="Срочных задач" />
+      </div>
+
+      <div className="grid gap-5 xl:grid-cols-2">
+        <GlassCard>
+          <div className="mb-4 flex items-center gap-3">
+            <AlertCircle className="h-5 w-5 text-[#c9a98d]" />
+            <h3 className="text-xl text-[#f5f3f0]">Что требует внимания</h3>
+          </div>
+          <div className="space-y-3">
+            {missingReports.slice(0, 8).map((item) => (
+              <ControlRow
+                key={`${item.report.checklist.id}-${item.slot}`}
+                title={`${item.report.assignee.name} · отчёт ${item.slot}`}
+                meta={`Не сдан · ${roleLabels[item.report.assignee.role]}`}
+                tone="danger"
+              />
+            ))}
+            {lateReports.slice(0, 8).map((item) => (
+              <ControlRow
+                key={`late-${item.report.checklist.id}-${item.slot}`}
+                title={`${item.report.assignee.name} · отчёт ${item.slot}`}
+                meta={`Сдан поздно: ${formatTime(item.status.completedAt)}`}
+                tone="warning"
+              />
+            ))}
+            {activeRefunds.slice(0, 5).map((refund) => (
+              <ControlRow key={refund.id} title={`Возврат: ${refund.clientName}`} meta={`${refund.amount.toLocaleString('ru-RU')} ₽ · ${refundStatusLabels[refund.status]}`} tone="warning" />
+            ))}
+            {!missingReports.length && !lateReports.length && !activeRefunds.length && (
+              <p className="text-sm text-[#a89b8f]">Критичных событий сейчас нет.</p>
+            )}
+          </div>
+        </GlassCard>
+
+        <GlassCard>
+          <div className="mb-4 flex items-center gap-3">
+            <Clock3 className="h-5 w-5 text-[#c9a98d]" />
+            <h3 className="text-xl text-[#f5f3f0]">Сегодняшние смены</h3>
+          </div>
+          <div className="space-y-3">
+            {todayShifts.map((shift) => {
+              const user = state.users.find((item) => item.id === shift.userId);
+              return (
+                <ControlRow
+                  key={shift.id}
+                  title={shift.adminName}
+                  meta={`${studioLabels[shift.studio]} · ${formatTime(shift.startedAt)} · ${user ? roleLabels[user.role] : 'Администратор'}`}
+                  tone={shift.reminderScheduleError ? 'danger' : 'ok'}
+                />
+              );
+            })}
+            {!todayShifts.length && <p className="text-sm text-[#a89b8f]">Сегодня смены ещё не открывались.</p>}
+          </div>
+        </GlassCard>
+      </div>
+    </div>
+  );
+}
+
+function ShiftJournalSection() {
+  const { state } = useLibrary();
+  const shifts = [...state.adminShifts].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-2xl text-[#f5f3f0]">Журнал смен</h2>
+        <p className="mt-2 text-sm text-[#a89b8f]">История открытия смен администраторами и статус постановки MAX-напоминаний.</p>
+      </div>
+      <div className="space-y-3">
+        {shifts.map((shift) => {
+          const user = state.users.find((item) => item.id === shift.userId);
+          return (
+            <GlassCard key={shift.id}>
+              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h3 className="text-lg text-[#f5f3f0]">{shift.adminName}</h3>
+                  <p className="mt-1 text-sm text-[#a89b8f]">{user ? roleLabels[user.role] : 'Администратор'} · {studioLabels[shift.studio]}</p>
+                </div>
+                <div className="grid gap-2 text-sm text-[#d8d1c8] md:text-right">
+                  <span>{formatDate(shift.date)} · {formatTime(shift.startedAt)}</span>
+                  <span className={shift.reminderScheduleError ? 'text-[#f0c5cf]' : 'text-[#d8e0d2]'}>
+                    {shift.reminderScheduleError ? `MAX: ${shift.reminderScheduleError}` : shift.remindersScheduledAt ? `MAX-напоминания: ${formatTime(shift.remindersScheduledAt)}` : 'MAX-напоминания ожидают'}
+                  </span>
+                </div>
+              </div>
+            </GlassCard>
+          );
+        })}
+        {!shifts.length && <GlassCard><p className="text-[#a89b8f]">Журнал смен пока пуст.</p></GlassCard>}
+      </div>
+    </div>
+  );
+}
+
+function AuditLogSection() {
+  const { state } = useLibrary();
+  const entries = [...(state.auditLog || [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-2xl text-[#f5f3f0]">Аудит действий</h2>
+        <p className="mt-2 text-sm text-[#a89b8f]">Последние системные действия: входы, смены, сотрудники, чек-листы и отчёты.</p>
+      </div>
+      <div className="space-y-3">
+        {entries.map((entry) => (
+          <GlassCard key={entry.id}>
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div className="flex gap-3">
+                <ShieldCheck className="mt-1 h-5 w-5 text-[#c9a98d]" />
+                <div>
+                  <h3 className="text-[#f5f3f0]">{entry.entityLabel}</h3>
+                  <p className="mt-1 text-sm text-[#a89b8f]">{auditActionLabel(entry.action)} · {entry.description}</p>
+                  <p className="mt-2 text-xs text-[#c9a98d]">{entry.actorName}{entry.actorRole ? ` · ${roleLabels[entry.actorRole]}` : ''}</p>
+                </div>
+              </div>
+              <span className="text-sm text-[#a89b8f]">{formatDate(entry.createdAt)} · {formatTime(entry.createdAt)}</span>
+            </div>
+          </GlassCard>
+        ))}
+        {!entries.length && <GlassCard><p className="text-[#a89b8f]">Аудит пока пуст. Новые действия будут появляться здесь автоматически.</p></GlassCard>}
+      </div>
+    </div>
+  );
+}
+
+function auditActionLabel(action: string) {
+  const labels: Record<string, string> = {
+    'auth.login': 'Вход',
+    'auth.password_reset': 'Смена пароля',
+    'shift.start': 'Открытие смены',
+    'employee.create': 'Создание сотрудника',
+    'employee.update': 'Редактирование сотрудника',
+    'employee.delete': 'Удаление сотрудника',
+    'checklist.item_toggle': 'Пункт чек-листа',
+    'checklist.report_update': 'Отчёт чек-листа',
+    'content.create': 'Создание контента',
+    'content.update': 'Редактирование контента',
+    'content.delete': 'Удаление контента',
+    'finance.update': 'Финансы',
+    'calendar.update': 'Календарь',
+  };
+  return labels[action] ?? action;
+}
+
+function localDateKey(value?: string | Date | null) {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) return '';
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function ControlRow({ title, meta, tone }: { title: string; meta: string; tone: 'ok' | 'warning' | 'danger' }) {
+  const toneClass = tone === 'ok' ? 'bg-[#5e6d58]/18 text-[#d8e0d2]' : tone === 'warning' ? 'bg-[#c9a98d]/18 text-[#c9a98d]' : 'bg-[#8b3a52]/20 text-[#f0c5cf]';
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-lg bg-[#2a2630]/55 p-3">
+      <div>
+        <p className="text-sm text-[#f5f3f0]">{title}</p>
+        <p className="mt-1 text-xs text-[#a89b8f]">{meta}</p>
+      </div>
+      <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${toneClass}`} />
+    </div>
+  );
+}
+
 function TeamSection() {
   const { state, createEmployee, updateEmployee, deleteEmployee } = useLibrary();
   const [showModal, setShowModal] = useState(false);
@@ -90,13 +303,16 @@ function TeamSection() {
 
   const openEdit = (employee: typeof state.users[number]) => {
     setEditingId(employee.id);
-    setDraft({ name: employee.name, email: employee.email, password: employee.password, role: employee.role, status: employee.status });
+    setDraft({ name: employee.name, email: employee.email, password: '', role: employee.role, status: employee.status });
     setShowModal(true);
   };
 
   const save = () => {
-    if (!draft.name.trim() || !draft.email.trim() || !draft.password.trim()) return;
-    if (editingId) updateEmployee(editingId, draft);
+    if (!draft.name.trim() || !draft.email.trim() || (!editingId && !draft.password.trim())) return;
+    if (editingId) {
+      const input = draft.password.trim() ? draft : { name: draft.name, email: draft.email, role: draft.role, status: draft.status };
+      updateEmployee(editingId, input);
+    }
     else createEmployee(draft);
     setShowModal(false);
   };

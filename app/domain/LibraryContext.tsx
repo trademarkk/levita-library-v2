@@ -4,6 +4,7 @@ import { normalizeHashtags, roleRoutes } from './labels';
 import type {
   AppSettings,
   AdminShift,
+  AuditAction,
   CalendarEvent,
   CalendarEventRecurrence,
   ChecklistControlStatus,
@@ -417,7 +418,8 @@ function normalizeState(raw: Partial<LibraryState> | null): LibraryState {
   const users = raw.users.map((user) => ({
     ...user,
     email: normalizeEmail(user.email || ''),
-    password: user.password || 'demo',
+    password: user.password ?? '',
+    passwordHash: user.passwordHash ?? undefined,
     status: user.status === 'on-leave' ? 'blocked' : user.status || 'active',
     createdAt: user.createdAt || new Date().toISOString(),
     joinDate: user.joinDate || 'май 2026',
@@ -517,6 +519,7 @@ function normalizeState(raw: Partial<LibraryState> | null): LibraryState {
       createdById: evaluation.createdById ?? null,
     })),
     adminShifts,
+    auditLog: (raw.auditLog || base.auditLog || []).slice(0, 500),
     settings: { ...base.settings, ...(raw.settings || {}) },
   };
 }
@@ -564,6 +567,26 @@ async function saveDatabaseState(state: LibraryState) {
 async function readApiError(response: Response) {
   const payload = await response.json().catch(() => ({}));
   return typeof payload.error === 'string' ? payload.error : 'Операция не выполнена.';
+}
+
+async function loginOnServer(email: string, password: string) {
+  const response = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!response.ok) return { ok: false as const, error: await readApiError(response) };
+  return await response.json() as { ok: true; user: User; route: string };
+}
+
+async function resetPasswordOnServer(email: string, password: string) {
+  const response = await fetch('/api/auth/reset-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!response.ok) return { ok: false as const, error: await readApiError(response) };
+  return await response.json() as { ok: true };
 }
 
 async function saveGoogleCalendarEvent(event: CalendarEvent) {
@@ -734,6 +757,31 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     [currentUserId, state.users],
   );
 
+  const pushAudit = (
+    draft: LibraryState,
+    action: AuditAction,
+    entityType: string,
+    entityLabel: string,
+    options: { entityId?: string | null; description?: string | null; actor?: User | null } = {},
+  ) => {
+    const actor = options.actor ?? currentUser;
+    draft.auditLog = [
+      {
+        id: newId('audit'),
+        action,
+        entityType,
+        entityId: options.entityId ?? null,
+        entityLabel,
+        description: options.description ?? null,
+        actorId: actor?.id ?? null,
+        actorName: actor?.name ?? 'Система',
+        actorRole: actor?.role ?? null,
+        createdAt: new Date().toISOString(),
+      },
+      ...(draft.auditLog || []),
+    ].slice(0, 500);
+  };
+
   const update = (mutator: (draft: LibraryState) => void, persist = true) => {
     setState((current) => {
       const draft = cloneState(current);
@@ -807,61 +855,47 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     currentUser,
     googleCalendarStatus,
     async login(email, password) {
-      const databaseState = await loadDatabaseState();
-      const authState = databaseState ?? state;
-      if (databaseState) setState(databaseState);
       const normalized = normalizeEmail(email);
       if (!normalized || !password.trim()) return { ok: false, error: 'Введите email и пароль.' };
-      let user = authState.users.find((item) => normalizeEmail(item.email) === normalized);
-      const seedUser = initialState.users.find((item) => normalizeEmail(item.email) === normalized);
-      if (!user && seedUser) {
-        if (seedUser.password !== password) return { ok: false, error: 'Неверный пароль.' };
-        user = seedUser;
-        const nextState = normalizeState({
-          ...authState,
-          users: [seedUser, ...authState.users.filter((item) => item.id !== seedUser.id)],
-          checklists: [
-            ...initialState.checklists.filter((checklist) => checklist.assignedTo === seedUser.id),
-            ...authState.checklists.filter((checklist) => checklist.assignedTo !== seedUser.id),
-          ],
+      let result = await loginOnServer(normalized, password);
+      if (!result.ok) {
+        const databaseState = await loadDatabaseState();
+        if (!databaseState) await saveDatabaseState(state);
+        result = await loginOnServer(normalized, password);
+      }
+      if (!result.ok) return result;
+      const databaseState = await loadDatabaseState();
+      if (databaseState) {
+        const nextState = normalizeState(databaseState);
+        pushAudit(nextState, 'auth.login', 'user', result.user.name, {
+          entityId: result.user.id,
+          description: 'Вход в приложение через серверную авторизацию.',
+          actor: result.user,
         });
         setState(nextState);
         void saveDatabaseState(nextState);
       }
-      if (!user) return { ok: false, error: 'Пользователь с таким email не найден.' };
-      if (user.status === 'blocked') return { ok: false, error: 'Доступ сотрудника заблокирован.' };
-      if (user.password && user.password !== password) return { ok: false, error: 'Неверный пароль.' };
-      setCurrentUserId(user.id);
-      return { ok: true, route: roleRoutes[user.role] };
+      setCurrentUserId(result.user.id);
+      return { ok: true, route: result.route ?? roleRoutes[result.user.role] };
     },
     async resetPassword(email, password) {
-      const databaseState = await loadDatabaseState();
-      const authState = databaseState ?? state;
-      if (databaseState) setState(databaseState);
       const normalized = normalizeEmail(email);
       const nextPassword = password.trim();
       if (!normalized || !nextPassword) return { ok: false, error: 'Введите email и новый пароль.' };
       if (nextPassword.length < 6) return { ok: false, error: 'Пароль должен быть не короче 6 символов.' };
-      const user = authState.users.find((item) => normalizeEmail(item.email) === normalized);
-      const seedUser = initialState.users.find((item) => normalizeEmail(item.email) === normalized);
-      if (!user && !seedUser) return { ok: false, error: 'Пользователь с таким email не найден.' };
-      const baseUser = user ?? seedUser;
-      if (!baseUser) return { ok: false, error: 'Пользователь с таким email не найден.' };
-      const nextState = normalizeState({
-        ...authState,
-        users: [
-          ...authState.users.filter((item) => item.id !== baseUser.id),
-          { ...baseUser, email: normalized, password: nextPassword },
-        ],
-        checklists: authState.checklists.some((checklist) => checklist.assignedTo === baseUser.id)
-          ? authState.checklists
-          : [
-              ...initialState.checklists.filter((checklist) => checklist.assignedTo === baseUser.id),
-              ...authState.checklists,
-            ],
-      });
-      setState(nextState);
-      await saveDatabaseState(nextState);
+      const result = await resetPasswordOnServer(normalized, nextPassword);
+      if (!result.ok) return result;
+      const databaseState = await loadDatabaseState();
+      if (databaseState) {
+        const user = databaseState.users.find((item) => normalizeEmail(item.email) === normalized);
+        pushAudit(databaseState, 'auth.password_reset', 'user', user?.name ?? normalized, {
+          entityId: user?.id ?? null,
+          description: 'Пароль изменён через форму восстановления.',
+          actor: user ?? currentUser,
+        });
+        setState(databaseState);
+        void saveDatabaseState(databaseState);
+      }
       return { ok: true };
     },
     logout() {
@@ -957,6 +991,10 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           shift,
           ...draft.adminShifts.filter((item) => !(item.userId === input.userId && item.date === date)),
         ];
+        pushAudit(draft, 'shift.start', 'adminShift', `${input.adminName} · ${date}`, {
+          entityId: shift.id,
+          description: `Смена открыта. Студия: ${input.studio === 'MACHUGI' ? 'Мачуги' : 'Ставропольская'}.`,
+        });
       });
       try {
         await scheduleMaxShiftReminders({ shiftId: shift.id, adminName: shift.adminName, studio: shift.studio, date });
@@ -992,6 +1030,10 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         if (user.role === 'ADMIN' || user.role === 'SENIOR_ADMIN' || user.role === 'ASSISTANT') {
           draft.checklists.unshift(createDailyChecklist(user));
         }
+        pushAudit(draft, 'employee.create', 'user', user.name, {
+          entityId: user.id,
+          description: `Создан сотрудник с ролью ${user.role}.`,
+        });
       });
     },
     updateEmployee(id, input) {
@@ -999,6 +1041,10 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         const user = draft.users.find((item) => item.id === id);
         if (!user) return;
         Object.assign(user, input, input.email ? { email: normalizeEmail(input.email) } : {});
+        pushAudit(draft, 'employee.update', 'user', user.name, {
+          entityId: user.id,
+          description: 'Карточка сотрудника обновлена.',
+        });
       });
     },
     deleteEmployee(id) {
@@ -1007,6 +1053,10 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         if (!user || user.role === 'OWNER') return;
         draft.users = draft.users.filter((item) => item.id !== id);
         draft.checklists = draft.checklists.filter((item) => item.assignedTo !== id);
+        pushAudit(draft, 'employee.delete', 'user', user.name, {
+          entityId: user.id,
+          description: 'Сотрудник удалён из команды.',
+        });
       });
     },
     addCallChecklistItem(label) {
@@ -1048,6 +1098,10 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       update((draft) => {
         draft.tasks.unshift({ id: taskId, role: 'ASSISTANT', status: 'pending', createdAt: new Date().toISOString(), calendarEventId, ...input });
         if (calendarEvent) draft.calendarEvents.unshift(calendarEvent);
+        pushAudit(draft, 'content.create', 'task', input.title, {
+          entityId: taskId,
+          description: 'Создана важная задача.',
+        });
       });
       if (calendarEvent) void syncGoogleEvent(calendarEvent);
     },
@@ -1057,6 +1111,10 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         const task = draft.tasks.find((item) => item.id === id);
         if (!task) return;
         Object.assign(task, input);
+        pushAudit(draft, 'content.update', 'task', task.title, {
+          entityId: task.id,
+          description: 'Обновлена важная задача.',
+        });
         if (task.addToCalendar && task.deadline) {
           if (task.calendarEventId) {
             const event = draft.calendarEvents.find((item) => item.id === task.calendarEventId);
@@ -1084,34 +1142,48 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     },
     createTemplate(input) {
       update((draft) => {
-        draft.templates.unshift({ id: newId('template'), createdAt: new Date().toISOString(), createdById: input.createdById ?? currentUser?.id ?? 'system', purpose: input.purpose || null, title: input.title, body: input.body, role: input.role });
+        const id = newId('template');
+        draft.templates.unshift({ id, createdAt: new Date().toISOString(), createdById: input.createdById ?? currentUser?.id ?? 'system', purpose: input.purpose || null, title: input.title, body: input.body, role: input.role });
+        pushAudit(draft, 'content.create', 'template', input.title, { entityId: id, description: 'Создан шаблон сообщения.' });
       });
     },
     updateTemplate(id, input) {
       update((draft) => {
         const template = draft.templates.find((item) => item.id === id);
-        if (template) Object.assign(template, input);
+        if (template) {
+          Object.assign(template, input);
+          pushAudit(draft, 'content.update', 'template', template.title, { entityId: template.id, description: 'Обновлён шаблон сообщения.' });
+        }
       });
     },
     deleteTemplate(id) {
       update((draft) => {
+        const template = draft.templates.find((item) => item.id === id);
         draft.templates = draft.templates.filter((template) => template.id !== id);
+        if (template) pushAudit(draft, 'content.delete', 'template', template.title, { entityId: template.id, description: 'Удалён шаблон сообщения.' });
       });
     },
     createLink(input) {
       update((draft) => {
-        draft.links.unshift({ id: newId('link'), title: input.title, url: input.url, category: input.category ?? 'HELPFUL', role: input.role, description: input.description || null, createdAt: new Date().toISOString() });
+        const id = newId('link');
+        draft.links.unshift({ id, title: input.title, url: input.url, category: input.category ?? 'HELPFUL', role: input.role, description: input.description || null, createdAt: new Date().toISOString() });
+        pushAudit(draft, 'content.create', 'link', input.title, { entityId: id, description: 'Создана рабочая ссылка.' });
       });
     },
     updateLink(id, input) {
       update((draft) => {
         const link = draft.links.find((item) => item.id === id);
-        if (link) Object.assign(link, input);
+        if (link) {
+          Object.assign(link, input);
+          pushAudit(draft, 'content.update', 'link', link.title, { entityId: link.id, description: 'Обновлена рабочая ссылка.' });
+        }
       });
     },
     deleteLink(id) {
       update((draft) => {
+        const link = draft.links.find((item) => item.id === id);
         draft.links = draft.links.filter((link) => link.id !== id);
+        if (link) pushAudit(draft, 'content.delete', 'link', link.title, { entityId: link.id, description: 'Удалена рабочая ссылка.' });
       });
     },
     createDocumentTemplate(input) {
@@ -1148,7 +1220,9 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     },
     createKnowledge(input) {
       update((draft) => {
-        draft.knowledge.unshift({ id: newId('knowledge'), title: input.title, content: input.content, role: input.role, category: input.category, hashtags: normalizeHashtags(input.hashtags ?? '') || null, isActual: input.isActual ?? true, searchable: true, createdAt: new Date().toISOString() });
+        const id = newId('knowledge');
+        draft.knowledge.unshift({ id, title: input.title, content: input.content, role: input.role, category: input.category, hashtags: normalizeHashtags(input.hashtags ?? '') || null, isActual: input.isActual ?? true, searchable: true, createdAt: new Date().toISOString() });
+        pushAudit(draft, 'content.create', 'knowledge', input.title, { entityId: id, description: 'Создана карточка контента.' });
       });
     },
     updateKnowledge(id, input) {
@@ -1156,11 +1230,14 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         const entry = draft.knowledge.find((item) => item.id === id);
         if (!entry) return;
         Object.assign(entry, input, input.hashtags !== undefined ? { hashtags: normalizeHashtags(input.hashtags) } : {});
+        pushAudit(draft, 'content.update', 'knowledge', entry.title, { entityId: entry.id, description: 'Обновлена карточка контента.' });
       });
     },
     deleteKnowledge(id) {
       update((draft) => {
+        const entry = draft.knowledge.find((item) => item.id === id);
         draft.knowledge = draft.knowledge.filter((item) => item.id !== id);
+        if (entry) pushAudit(draft, 'content.delete', 'knowledge', entry.title, { entityId: entry.id, description: 'Удалена карточка контента.' });
       });
     },
     createImportantInfo(title, content, hashtags) {
@@ -1202,6 +1279,11 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         report.maxSentAt = null;
         report.maxSendError = null;
         report.maxMessageId = null;
+        const assignee = draft.users.find((user) => user.id === checklist.assignedTo);
+        pushAudit(draft, 'checklist.item_toggle', 'checklist', checklist.title, {
+          entityId: checklist.id,
+          description: `${item.completed ? 'Отмечен' : 'Снят'} пункт "${item.label}" для ${assignee?.name ?? checklist.assignedTo}.`,
+        });
       });
     },
     addChecklistItem(checklistId, label) {
@@ -1257,6 +1339,10 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           checklistItem.completedAt = submittedAt;
           checklistItem.completedBy = currentUser?.id ?? checklist.assignedTo;
         }
+        pushAudit(draft, 'checklist.report_update', 'checklistReport', `Отчёт ${slot}`, {
+          entityId: checklist.id,
+          description: `Сохранён отчёт ${slot} для ${assignee?.name ?? checklist.assignedTo}.`,
+        });
       });
       if (!currentChecklist || !assignee) return;
       try {
@@ -1313,19 +1399,28 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           plan = { month, rows: [] };
           draft.financialPlans.push(plan);
         }
-        plan.rows.push({ id: newId('financial-row'), title, payments: {} });
+        const id = newId('financial-row');
+        plan.rows.push({ id, title, payments: {} });
+        pushAudit(draft, 'finance.update', 'financialPlan', title, { entityId: id, description: `Добавлен платёж в финансовый план ${month}.` });
       });
     },
     updateFinancialPlanRow(month, rowId, title) {
       update((draft) => {
         const row = draft.financialPlans.find((item) => item.month === month)?.rows.find((item) => item.id === rowId);
-        if (row) row.title = title;
+        if (row) {
+          row.title = title;
+          pushAudit(draft, 'finance.update', 'financialPlan', row.title, { entityId: row.id, description: `Платёж обновлён в финансовом плане ${month}.` });
+        }
       });
     },
     deleteFinancialPlanRow(month, rowId) {
       update((draft) => {
         const plan = draft.financialPlans.find((item) => item.month === month);
-        if (plan) plan.rows = plan.rows.filter((row) => row.id !== rowId);
+        if (plan) {
+          const row = plan.rows.find((item) => item.id === rowId);
+          plan.rows = plan.rows.filter((row) => row.id !== rowId);
+          if (row) pushAudit(draft, 'finance.update', 'financialPlan', row.title, { entityId: row.id, description: `Платёж удалён из финансового плана ${month}.` });
+        }
       });
     },
     updateFinancialPlanCell(month, rowId, date, value) {
@@ -1339,6 +1434,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         if (!row) return;
         if (value.trim()) row.payments[date] = value;
         else delete row.payments[date];
+        pushAudit(draft, 'finance.update', 'financialPlan', row.title, { entityId: row.id, description: `Обновлена ячейка ${date} в финансовом плане ${month}.` });
       });
     },
     createCalendarEvent(input) {
@@ -1358,6 +1454,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       };
       update((draft) => {
         draft.calendarEvents.unshift(event);
+        pushAudit(draft, 'calendar.update', 'calendarEvent', event.title, { entityId: event.id, description: 'Создано событие календаря.' });
       });
       void syncGoogleEvent(event);
     },
@@ -1368,6 +1465,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         if (event) {
           Object.assign(event, input, input.recurrence !== undefined ? { recurrence: normalizeRecurrence(input.recurrence) } : {});
           eventToSync = { ...event };
+          pushAudit(draft, 'calendar.update', 'calendarEvent', event.title, { entityId: event.id, description: 'Обновлено событие календаря.' });
         }
       });
       if (eventToSync) void syncGoogleEvent(eventToSync);
@@ -1375,6 +1473,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     deleteCalendarEvent(id) {
       const googleEventId = state.calendarEvents.find((event) => event.id === id)?.googleEventId;
       update((draft) => {
+        const event = draft.calendarEvents.find((event) => event.id === id);
         draft.calendarEvents = draft.calendarEvents.filter((event) => event.id !== id);
         draft.tasks.forEach((task) => {
           if (task.calendarEventId === id) {
@@ -1382,6 +1481,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
             task.addToCalendar = false;
           }
         });
+        if (event) pushAudit(draft, 'calendar.update', 'calendarEvent', event.title, { entityId: event.id, description: 'Удалено событие календаря.' });
       });
       if (googleEventId && !isGoogleTaskEventId(googleEventId)) void removeGoogleCalendarEvent(googleEventId).catch(() => undefined);
     },
@@ -1399,18 +1499,25 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     },
     createExpense(input) {
       update((draft) => {
-        draft.expenses.unshift({ id: newId('expense'), date: input.date, amount: input.amount, account: input.account, category: input.category, studio: input.studio, comment: input.comment || null, createdAt: new Date().toISOString() });
+        const id = newId('expense');
+        draft.expenses.unshift({ id, date: input.date, amount: input.amount, account: input.account, category: input.category, studio: input.studio, comment: input.comment || null, createdAt: new Date().toISOString() });
+        pushAudit(draft, 'finance.update', 'expense', input.category, { entityId: id, description: `Добавлен расход ${input.amount.toLocaleString('ru-RU')} ₽.` });
       });
     },
     updateExpense(id, input) {
       update((draft) => {
         const expense = draft.expenses.find((item) => item.id === id);
-        if (expense) Object.assign(expense, input);
+        if (expense) {
+          Object.assign(expense, input);
+          pushAudit(draft, 'finance.update', 'expense', expense.category, { entityId: expense.id, description: 'Обновлён расход.' });
+        }
       });
     },
     deleteExpense(id) {
       update((draft) => {
+        const expense = draft.expenses.find((item) => item.id === id);
         draft.expenses = draft.expenses.filter((expense) => expense.id !== id);
+        if (expense) pushAudit(draft, 'finance.update', 'expense', expense.category, { entityId: expense.id, description: 'Удалён расход.' });
       });
     },
     createTrainerEvaluation(input) {

@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -178,6 +178,43 @@ function normalizeMaxToken(value) {
     .replace(/^Authorization:\s*/i, '')
     .replace(/^Bearer\s+/i, '')
     .trim();
+}
+
+function normalizeEmail(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function roleRoute(role) {
+  return {
+    OWNER: '/owner',
+    ASSISTANT: '/assistant',
+    SENIOR_ADMIN: '/senior-admin',
+    ADMIN: '/admin',
+    SENIOR_TRAINER: '/senior-trainer',
+    TRAINER: '/trainer',
+  }[role] || '/login';
+}
+
+function hashPassword(password) {
+  const salt = randomBytes(16).toString('hex');
+  const hash = pbkdf2Sync(password, salt, 210_000, 32, 'sha256').toString('hex');
+  return `pbkdf2_sha256$210000$${salt}$${hash}`;
+}
+
+function verifyPassword(password, storedHash) {
+  if (!storedHash || !String(storedHash).startsWith('pbkdf2_sha256$')) return false;
+  const [, iterationsRaw, salt, expectedHash] = String(storedHash).split('$');
+  const iterations = Number(iterationsRaw);
+  if (!iterations || !salt || !expectedHash) return false;
+  const actual = pbkdf2Sync(password, salt, iterations, 32, 'sha256');
+  const expected = Buffer.from(expectedHash, 'hex');
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+function publicUser(user) {
+  if (!user) return null;
+  const { password, passwordHash, ...safeUser } = user;
+  return safeUser;
 }
 
 function maxStudioName(studio) {
@@ -1203,20 +1240,45 @@ async function getState() {
 
 async function saveState(state) {
   const updatedAt = new Date().toISOString();
+  const existing = await getState();
+  const stateToSave = prepareStateForStorage(state, existing?.state);
   if (useSupabase) {
     await supabaseRun(
-      supabase.from('app_state').upsert({ id: 'main', payload: state, updated_at: updatedAt }, { onConflict: 'id' }),
+      supabase.from('app_state').upsert({ id: 'main', payload: stateToSave, updated_at: updatedAt }, { onConflict: 'id' }),
       'upsert app state',
     );
-    return { state, updatedAt };
+    return { state: sanitizeStateForClient(stateToSave), updatedAt };
   }
   const upsertState = db.prepare(`
     INSERT INTO app_state (id, payload, updated_at)
     VALUES (?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at
   `);
-  upsertState.run('main', JSON.stringify(state), updatedAt);
-  return { state, updatedAt };
+  upsertState.run('main', JSON.stringify(stateToSave), updatedAt);
+  return { state: sanitizeStateForClient(stateToSave), updatedAt };
+}
+
+function prepareStateForStorage(state, existingState = null) {
+  if (!state || typeof state !== 'object') return state;
+  const existingHashes = new Map((existingState?.users || []).map((user) => [user.id, user.passwordHash]));
+  return {
+    ...state,
+    users: (state.users || []).map((user) => {
+      const password = String(user.password || '');
+      const passwordHash = user.passwordHash || existingHashes.get(user.id) || (password ? hashPassword(password) : undefined);
+      const { password: _password, ...safeUser } = user;
+      return passwordHash ? { ...safeUser, passwordHash } : safeUser;
+    }),
+    auditLog: (state.auditLog || []).slice(0, 500),
+  };
+}
+
+function sanitizeStateForClient(state) {
+  if (!state || typeof state !== 'object') return state;
+  return {
+    ...state,
+    users: (state.users || []).map(publicUser),
+  };
 }
 
 async function resetState() {
@@ -1280,6 +1342,80 @@ export async function handleApiRequest(request, response) {
           MACHUGI: config.reportChatIds.MACHUGI || null,
         },
       });
+      return;
+    }
+
+    if (url.pathname === '/api/auth/login' && request.method === 'POST') {
+      const body = JSON.parse(await readBody(request) || '{}');
+      const email = normalizeEmail(body.email);
+      const password = String(body.password || '');
+      if (!email || !password.trim()) {
+        send(response, 400, { error: 'Введите email и пароль.' });
+        return;
+      }
+
+      const payload = await getState();
+      const state = payload?.state;
+      const user = state?.users?.find((item) => normalizeEmail(item.email) === email);
+      if (!user) {
+        send(response, 404, { error: 'Пользователь с таким email не найден.' });
+        return;
+      }
+      if (user.status === 'blocked') {
+        send(response, 403, { error: 'Доступ сотрудника заблокирован.' });
+        return;
+      }
+
+      const hashOk = verifyPassword(password, user.passwordHash);
+      const legacyOk = !user.passwordHash && user.password && user.password === password;
+      if (!hashOk && !legacyOk) {
+        send(response, 401, { error: 'Неверный пароль.' });
+        return;
+      }
+
+      if (legacyOk) {
+        const nextState = {
+          ...state,
+          users: state.users.map((item) => item.id === user.id
+            ? { ...item, password: '', passwordHash: hashPassword(password) }
+            : item),
+        };
+        await saveState(nextState);
+      }
+
+      send(response, 200, { ok: true, user: publicUser(user), route: roleRoute(user.role) });
+      return;
+    }
+
+    if (url.pathname === '/api/auth/reset-password' && request.method === 'POST') {
+      const body = JSON.parse(await readBody(request) || '{}');
+      const email = normalizeEmail(body.email);
+      const password = String(body.password || '').trim();
+      if (!email || !password) {
+        send(response, 400, { error: 'Введите email и новый пароль.' });
+        return;
+      }
+      if (password.length < 6) {
+        send(response, 400, { error: 'Пароль должен быть не короче 6 символов.' });
+        return;
+      }
+
+      const payload = await getState();
+      const state = payload?.state;
+      const user = state?.users?.find((item) => normalizeEmail(item.email) === email);
+      if (!user) {
+        send(response, 404, { error: 'Пользователь с таким email не найден.' });
+        return;
+      }
+
+      const nextState = {
+        ...state,
+        users: state.users.map((item) => item.id === user.id
+          ? { ...item, password: '', passwordHash: hashPassword(password) }
+          : item),
+      };
+      await saveState(nextState);
+      send(response, 200, { ok: true });
       return;
     }
 
@@ -1465,7 +1601,8 @@ export async function handleApiRequest(request, response) {
     }
 
     if (url.pathname === '/api/state' && request.method === 'GET') {
-      send(response, 200, await getState() ?? { state: null, updatedAt: null });
+      const payload = await getState();
+      send(response, 200, payload ? { ...payload, state: sanitizeStateForClient(payload.state) } : { state: null, updatedAt: null });
       return;
     }
 
