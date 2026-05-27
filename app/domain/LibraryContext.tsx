@@ -16,6 +16,8 @@ import type {
   ExpenseAccount,
   ExpenseStudio,
   EmployeeStatus,
+  FinancialPlanMonth,
+  FinancialPlanRow,
   HelpfulLink,
   KnowledgeCategory,
   KnowledgeEntry,
@@ -44,6 +46,7 @@ const REPORT_DEADLINES: Record<ChecklistReportSlot, number> = {
   '22:00': 22 * 60,
 };
 const DEFAULT_STUDIO: Studio = 'STAVROPOLSKAYA';
+const FINANCIAL_PLAN_FORWARD_MONTHS = 36;
 const CANONICAL_ADMIN_CHECKLIST_ITEMS = [
   'Проверить чистоту студии: зеркала, углы и поверхности',
   'Отправить кружок об открытии студии до 09:30',
@@ -217,6 +220,68 @@ function dateKey(value?: string | Date | null) {
   const date = value ? new Date(value) : new Date();
   if (Number.isNaN(date.getTime())) return '';
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function addFinancialPlanMonths(month: string, offset: number) {
+  const [year, monthIndex] = month.split('-').map(Number);
+  const date = new Date(year, monthIndex - 1 + offset, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function daysInFinancialPlanMonth(month: string) {
+  const [year, monthIndex] = month.split('-').map(Number);
+  return new Date(year, monthIndex, 0).getDate();
+}
+
+function clampFinancialPlanDate(targetMonth: string, sourceDate: string) {
+  const sourceDay = Number(sourceDate.slice(8, 10));
+  const day = Math.min(Number.isFinite(sourceDay) ? sourceDay : 1, daysInFinancialPlanMonth(targetMonth));
+  return `${targetMonth}-${String(day).padStart(2, '0')}`;
+}
+
+function ensureFinancialPlan(draft: LibraryState, month: string): FinancialPlanMonth {
+  let plan = draft.financialPlans.find((item) => item.month === month);
+  if (!plan) {
+    plan = { month, rows: [] };
+    draft.financialPlans.push(plan);
+  }
+  return plan;
+}
+
+function ensureFinancialPlanRow(plan: FinancialPlanMonth, sourceRow: FinancialPlanRow): FinancialPlanRow {
+  let row = plan.rows.find((item) => item.id === sourceRow.id);
+  if (!row) {
+    row = { id: sourceRow.id, title: sourceRow.title, payments: {} };
+    plan.rows.push(row);
+  }
+  return row;
+}
+
+function normalizeFinancialPlans(plans: FinancialPlanMonth[]): FinancialPlanMonth[] {
+  const normalized = { financialPlans: cloneState(plans) } as LibraryState;
+  const sourceRowsById = new Map<string, { month: string; row: FinancialPlanRow }>();
+  [...plans]
+    .sort((left, right) => left.month.localeCompare(right.month))
+    .forEach((plan) => {
+      plan.rows.forEach((row) => {
+        if (!sourceRowsById.has(row.id)) sourceRowsById.set(row.id, { month: plan.month, row });
+      });
+    });
+  const sourceRows = Array.from(sourceRowsById.values());
+  sourceRows.forEach(({ month, row }) => {
+    for (let index = 0; index <= FINANCIAL_PLAN_FORWARD_MONTHS; index += 1) {
+      const targetMonth = addFinancialPlanMonths(month, index);
+      const targetPlan = ensureFinancialPlan(normalized, targetMonth);
+      const targetRow = ensureFinancialPlanRow(targetPlan, row);
+      targetRow.title = targetRow.title || row.title;
+      Object.entries(row.payments || {}).forEach(([date, value]) => {
+        if (!date.startsWith(month) || !String(value).trim()) return;
+        const targetDate = index === 0 ? date : clampFinancialPlanDate(targetMonth, date);
+        if (targetRow.payments[targetDate] === undefined) targetRow.payments[targetDate] = value;
+      });
+    }
+  });
+  return normalized.financialPlans.sort((left, right) => left.month.localeCompare(right.month));
 }
 
 function normalizeRecurrence(input?: CalendarEventRecurrence | null): CalendarEventRecurrence | null {
@@ -501,7 +566,7 @@ function normalizeState(raw: Partial<LibraryState> | null): LibraryState {
     documentTemplates: raw.documentTemplates || base.documentTemplates,
     usefulContacts: raw.usefulContacts || base.usefulContacts,
     knowledge: (raw.knowledge || base.knowledge).map((entry) => ({ ...entry, businessModel: normalizeBusinessModel(entry.businessModel) })),
-    financialPlans: raw.financialPlans || base.financialPlans,
+    financialPlans: normalizeFinancialPlans(raw.financialPlans || base.financialPlans),
     calendarEvents: (raw.calendarEvents || base.calendarEvents).map((event) => ({
       ...event,
       startTime: event.startTime ?? null,
@@ -1400,19 +1465,24 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     addFinancialPlanRow(month, title) {
       if (!title.trim()) return;
       update((draft) => {
-        let plan = draft.financialPlans.find((item) => item.month === month);
-        if (!plan) {
-          plan = { month, rows: [] };
-          draft.financialPlans.push(plan);
-        }
         const id = newId('financial-row');
-        plan.rows.push({ id, title, payments: {} });
+        const sourceRow: FinancialPlanRow = { id, title: title.trim(), payments: {} };
+        for (let index = 0; index <= FINANCIAL_PLAN_FORWARD_MONTHS; index += 1) {
+          const targetMonth = addFinancialPlanMonths(month, index);
+          ensureFinancialPlanRow(ensureFinancialPlan(draft, targetMonth), sourceRow);
+        }
         pushAudit(draft, 'finance.update', 'financialPlan', title, { entityId: id, description: `Добавлен платёж в финансовый план ${month}.` });
       });
     },
     updateFinancialPlanRow(month, rowId, title) {
       update((draft) => {
-        const row = draft.financialPlans.find((item) => item.month === month)?.rows.find((item) => item.id === rowId);
+        const rows = draft.financialPlans
+          .filter((item) => item.month >= month)
+          .flatMap((item) => item.rows.filter((row) => row.id === rowId));
+        rows.forEach((row) => {
+          row.title = title;
+        });
+        const row = rows[0];
         if (row) {
           row.title = title;
           pushAudit(draft, 'finance.update', 'financialPlan', row.title, { entityId: row.id, description: `Платёж обновлён в финансовом плане ${month}.` });
@@ -1424,6 +1494,9 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         const plan = draft.financialPlans.find((item) => item.month === month);
         if (plan) {
           const row = plan.rows.find((item) => item.id === rowId);
+          draft.financialPlans.forEach((item) => {
+            if (item.month >= month) item.rows = item.rows.filter((row) => row.id !== rowId);
+          });
           plan.rows = plan.rows.filter((row) => row.id !== rowId);
           if (row) pushAudit(draft, 'finance.update', 'financialPlan', row.title, { entityId: row.id, description: `Платёж удалён из финансового плана ${month}.` });
         }
@@ -1431,15 +1504,17 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     },
     updateFinancialPlanCell(month, rowId, date, value) {
       update((draft) => {
-        let plan = draft.financialPlans.find((item) => item.month === month);
-        if (!plan) {
-          plan = { month, rows: [] };
-          draft.financialPlans.push(plan);
-        }
+        const plan = ensureFinancialPlan(draft, month);
         const row = plan.rows.find((item) => item.id === rowId);
         if (!row) return;
-        if (value.trim()) row.payments[date] = value;
-        else delete row.payments[date];
+        for (let index = 0; index <= FINANCIAL_PLAN_FORWARD_MONTHS; index += 1) {
+          const targetMonth = addFinancialPlanMonths(month, index);
+          const targetPlan = ensureFinancialPlan(draft, targetMonth);
+          const targetRow = ensureFinancialPlanRow(targetPlan, row);
+          const targetDate = index === 0 ? date : clampFinancialPlanDate(targetMonth, date);
+          if (value.trim()) targetRow.payments[targetDate] = value;
+          else delete targetRow.payments[targetDate];
+        }
         pushAudit(draft, 'finance.update', 'financialPlan', row.title, { entityId: row.id, description: `Обновлена ячейка ${date} в финансовом плане ${month}.` });
       });
     },

@@ -214,7 +214,7 @@ export function FinancialPlanSection() {
         <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
           <div>
             <h2 className="text-2xl text-[#f5f3f0]">Финансовый план</h2>
-            <p className="text-sm text-[#a89b8f] mt-1">Общая таблица ассистента и руководителя. Данные сохраняются отдельно по каждому месяцу.</p>
+            <p className="text-sm text-[#a89b8f] mt-1">Общая таблица ассистента и руководителя. Новый платёж и его даты автоматически повторяются в будущих месяцах.</p>
           </div>
           <label className="text-sm text-[#a89b8f]">
             Месяц
