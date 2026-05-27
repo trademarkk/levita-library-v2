@@ -458,6 +458,14 @@ button:not(:disabled) {
   cursor: pointer;
 }
 
+.app-shell {
+  background: #141218;
+}
+
+.theme-light.app-shell {
+  background: #fffaf4;
+}
+
 .theme-light main {
   background: linear-gradient(135deg, #fbf7f1 0%, #f1e7dc 52%, #e6d3c1 100%) !important;
 }
