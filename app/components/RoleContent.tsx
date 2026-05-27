@@ -4,7 +4,7 @@ import { GlassCard } from './GlassCard';
 import { TabNavigation } from './TabNavigation';
 import { useLibrary } from '../domain/LibraryContext';
 import { formatDate, roleLabels } from '../domain/labels';
-import type { HelpfulLink, KnowledgeCategory, KnowledgeEntry, LinkCategory, Role } from '../domain/types';
+import type { BusinessModelScope, HelpfulLink, KnowledgeCategory, KnowledgeEntry, LinkCategory, Role } from '../domain/types';
 
 export const managedRoles: Role[] = ['ASSISTANT', 'ADMIN', 'SENIOR_ADMIN', 'TRAINER', 'SENIOR_TRAINER'];
 
@@ -50,10 +50,84 @@ function roleTabs(label: string) {
   return managedRoles.map((role) => ({ id: role, label: `${label} ${roleContentLabels[role]}` }));
 }
 
+const businessModelLabels: Record<BusinessModelScope, string> = {
+  SUBSCRIPTION: 'Подписки',
+  MEMBERSHIP: 'Абонементы',
+  ALL: 'Для всех',
+};
+
+const businessModelHelp: Record<BusinessModelScope, string> = {
+  SUBSCRIPTION: 'Подписная модель Мачуги',
+  MEMBERSHIP: 'Абонементы 3/6/12 месяцев',
+  ALL: 'Подходит обеим моделям',
+};
+
+const businessModelOptions: BusinessModelScope[] = ['SUBSCRIPTION', 'MEMBERSHIP', 'ALL'];
+
+function supportsBusinessModel(category: KnowledgeCategory) {
+  return category === 'REGULATION' || category === 'IMPORTANT_INFO' || category === 'KNOWLEDGE';
+}
+
+function businessModelMatches(value: BusinessModelScope | undefined, filter: BusinessModelScope) {
+  const scope = value ?? 'ALL';
+  if (filter === 'ALL') return scope === 'ALL';
+  return scope === filter || scope === 'ALL';
+}
+
+function BusinessModelBadge({ value }: { value?: BusinessModelScope }) {
+  const scope = value ?? 'ALL';
+  const tone = scope === 'SUBSCRIPTION'
+    ? 'border-[#6f9cc7]/35 bg-[#456785]/24 text-[#c8def1]'
+    : scope === 'MEMBERSHIP'
+      ? 'border-[#c9a98d]/35 bg-[#c9a98d]/16 text-[#dec8b6]'
+      : 'border-[#7a8a70]/35 bg-[#5e6d58]/28 text-[#d8e0d2]';
+  return (
+    <span className={`inline-flex w-fit rounded-full border px-2.5 py-1 text-xs ${tone}`}>
+      {businessModelLabels[scope]}
+    </span>
+  );
+}
+
+function BusinessModelSelect({ value, onChange }: { value: BusinessModelScope; onChange: (value: BusinessModelScope) => void }) {
+  return (
+    <select value={value} onChange={(event) => onChange(event.target.value as BusinessModelScope)} className="field">
+      {businessModelOptions.map((option) => (
+        <option key={option} value={option}>{businessModelLabels[option]} - {businessModelHelp[option]}</option>
+      ))}
+    </select>
+  );
+}
+
+function BusinessModelFilter({ value, onChange }: { value: BusinessModelScope; onChange: (value: BusinessModelScope) => void }) {
+  return (
+    <div className="mb-5 flex flex-wrap gap-2">
+      {businessModelOptions.map((option) => {
+        const active = value === option;
+        return (
+          <button
+            key={option}
+            type="button"
+            onClick={() => onChange(option)}
+            className={`rounded-full border px-4 py-2 text-sm transition-colors ${active ? 'border-[#c9a98d] bg-[#c9a98d]/24 text-[#f5f3f0]' : 'border-[#c9a98d]/15 text-[#a89b8f] hover:bg-[#2a2630]'}`}
+          >
+            {businessModelLabels[option]}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function RoleContentViewer({ role, category }: { role: Role; category: KnowledgeCategory }) {
   const { state } = useLibrary();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const entries = state.knowledge.filter((entry) => entry.role === role && entry.category === category);
+  const [businessModelFilter, setBusinessModelFilter] = useState<BusinessModelScope>('ALL');
+  const hasBusinessModelFilter = supportsBusinessModel(category);
+  const entries = state.knowledge.filter((entry) => (
+    entry.role === role
+    && entry.category === category
+    && (!hasBusinessModelFilter || businessModelMatches(entry.businessModel, businessModelFilter))
+  ));
   const selected = entries.find((entry) => entry.id === selectedId) ?? null;
 
   if (selected && (category === 'REGULATION' || category === 'KNOWLEDGE')) {
@@ -65,6 +139,7 @@ export function RoleContentViewer({ role, category }: { role: Role; category: Kn
         <GlassCard>
           <p className="text-xs text-[#c9a98d] mb-2">{categoryLabels[category]}</p>
           <h2 className="text-2xl text-[#f5f3f0] mb-4">{selected.title}</h2>
+          <div className="mb-4"><BusinessModelBadge value={selected.businessModel} /></div>
           <p className="text-[#a89b8f] leading-relaxed whitespace-pre-line">{selected.content}</p>
         </GlassCard>
       </div>
@@ -89,6 +164,8 @@ export function RoleContentViewer({ role, category }: { role: Role; category: Kn
   }
 
   return (
+    <>
+    {hasBusinessModelFilter && <BusinessModelFilter value={businessModelFilter} onChange={(value) => { setBusinessModelFilter(value); setSelectedId(null); }} />}
     <div className="grid md:grid-cols-2 gap-5">
       {entries.length === 0 && <GlassCard><p className="text-[#a89b8f]">{categoryEmpty[category]}</p></GlassCard>}
       {entries.map((entry, index) => (
@@ -97,6 +174,7 @@ export function RoleContentViewer({ role, category }: { role: Role; category: Kn
             {category === 'REGULATION' ? <Shield className="w-5 h-5 text-[#c9a98d] mt-1" /> : category === 'KNOWLEDGE' ? <BookOpen className="w-5 h-5 text-[#c9a98d] mt-1" /> : <Info className="w-5 h-5 text-[#c9a98d] mt-1" />}
             <div className="flex-1">
               <h3 className="text-xl text-[#f5f3f0]">{entry.title}</h3>
+              <div className="mt-2"><BusinessModelBadge value={entry.businessModel} /></div>
               {category === 'IMPORTANT_INFO' && (
                 <div className="mt-2 flex flex-wrap gap-2 text-xs">
                   <span className="rounded-full bg-[#c9a98d]/15 px-2 py-1 text-[#c9a98d]">{formatDate(entry.createdAt)}</span>
@@ -116,15 +194,18 @@ export function RoleContentViewer({ role, category }: { role: Role; category: Kn
         </GlassCard>
       ))}
     </div>
+    </>
   );
 }
 
 export function RoleTemplatesViewer({ role }: { role: Role }) {
   const { state } = useLibrary();
-  const templates = state.templates.filter((template) => template.role === role);
+  const [businessModelFilter, setBusinessModelFilter] = useState<BusinessModelScope>('ALL');
+  const templates = state.templates.filter((template) => template.role === role && businessModelMatches(template.businessModel, businessModelFilter));
 
   return (
     <div className="space-y-4">
+      <BusinessModelFilter value={businessModelFilter} onChange={setBusinessModelFilter} />
       {templates.length === 0 && <GlassCard><p className="text-[#a89b8f]">Для этой роли пока нет шаблонов сообщений.</p></GlassCard>}
       {templates.map((template, index) => (
         <GlassCard key={template.id} delay={index * 0.05}>
@@ -132,7 +213,10 @@ export function RoleTemplatesViewer({ role }: { role: Role }) {
             <FileText className="w-5 h-5 text-[#c9a98d] mt-1" />
             <div>
               <h3 className="text-lg text-[#f5f3f0]">{template.title}</h3>
-              <p className="text-xs text-[#c9a98d] mt-1">{template.purpose}</p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <BusinessModelBadge value={template.businessModel} />
+                <p className="text-xs text-[#c9a98d]">{template.purpose}</p>
+              </div>
               <p className="text-sm text-[#a89b8f] mt-3 whitespace-pre-line">{template.body}</p>
             </div>
           </div>
@@ -169,27 +253,29 @@ export function OwnerRoleContentManager({ category }: { category: KnowledgeCateg
   const { state, createKnowledge, updateKnowledge, deleteKnowledge } = useLibrary();
   const [activeRole, setActiveRole] = useState<Role>('ASSISTANT');
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState({ title: '', content: '', isActual: true });
+  const [draft, setDraft] = useState({ title: '', content: '', isActual: true, businessModel: 'ALL' as BusinessModelScope });
   const entries = state.knowledge.filter((entry) => entry.role === activeRole && entry.category === category);
+  const hasBusinessModel = supportsBusinessModel(category);
   const selectedTabs = useMemo(() => tabsFor(category), [category]);
   const titlePlaceholder = category === 'RESPONSIBILITY' ? 'Новая обязанность' : 'Название';
   const contentPlaceholder = category === 'REGULATION' ? 'Текст регламента' : category === 'KNOWLEDGE' ? 'Описание и содержимое' : 'Текст информации';
 
   const resetDraft = () => {
     setEditingId(null);
-    setDraft({ title: '', content: '', isActual: true });
+    setDraft({ title: '', content: '', isActual: true, businessModel: 'ALL' });
   };
 
   const startEdit = (entry: KnowledgeEntry) => {
     setEditingId(entry.id);
-    setDraft({ title: entry.title, content: entry.content, isActual: entry.isActual !== false });
+    setDraft({ title: entry.title, content: entry.content, isActual: entry.isActual !== false, businessModel: entry.businessModel ?? 'ALL' });
   };
 
   const save = () => {
     if (!draft.title.trim()) return;
     const content = category === 'RESPONSIBILITY' ? draft.content || draft.title : draft.content;
-    if (editingId) updateKnowledge(editingId, { ...draft, content, role: activeRole, category });
-    else createKnowledge({ ...draft, content, role: activeRole, category });
+    const businessModel = hasBusinessModel ? draft.businessModel : 'ALL';
+    if (editingId) updateKnowledge(editingId, { ...draft, businessModel, content, role: activeRole, category });
+    else createKnowledge({ ...draft, businessModel, content, role: activeRole, category });
     resetDraft();
   };
 
@@ -200,6 +286,9 @@ export function OwnerRoleContentManager({ category }: { category: KnowledgeCateg
         <h3 className="text-xl text-[#f5f3f0] mb-4">{editingId ? 'Редактировать' : 'Добавить'}: {roleLabels[activeRole]}</h3>
         <div className="grid md:grid-cols-2 gap-3">
           <input value={draft.title} onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))} placeholder={titlePlaceholder} className="field" />
+          {hasBusinessModel && (
+            <BusinessModelSelect value={draft.businessModel} onChange={(businessModel) => setDraft((value) => ({ ...value, businessModel }))} />
+          )}
           {category === 'IMPORTANT_INFO' && (
             <select value={draft.isActual ? 'actual' : 'archived'} onChange={(event) => setDraft((value) => ({ ...value, isActual: event.target.value === 'actual' }))} className="field">
               <option value="actual">Актуально</option>
@@ -221,6 +310,7 @@ export function OwnerRoleContentManager({ category }: { category: KnowledgeCateg
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h3 className="text-lg text-[#f5f3f0]">{entry.title}</h3>
+                {hasBusinessModel && <div className="mt-2"><BusinessModelBadge value={entry.businessModel} /></div>}
                 {category === 'IMPORTANT_INFO' && (
                   <p className="text-xs text-[#c9a98d] mt-1">{formatDate(entry.createdAt)} · {entry.isActual === false ? 'не актуально' : 'актуально'}</p>
                 )}
@@ -242,12 +332,12 @@ export function OwnerTemplatesManager() {
   const { state, createTemplate, updateTemplate, deleteTemplate } = useLibrary();
   const [activeRole, setActiveRole] = useState<Role>('ASSISTANT');
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState({ title: '', purpose: '', body: '' });
+  const [draft, setDraft] = useState({ title: '', purpose: '', body: '', businessModel: 'ALL' as BusinessModelScope });
   const templates = state.templates.filter((template) => template.role === activeRole);
 
   const reset = () => {
     setEditingId(null);
-    setDraft({ title: '', purpose: '', body: '' });
+    setDraft({ title: '', purpose: '', body: '', businessModel: 'ALL' });
   };
 
   const save = () => {
@@ -265,6 +355,7 @@ export function OwnerTemplatesManager() {
         <div className="grid md:grid-cols-2 gap-3">
           <input value={draft.title} onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))} placeholder="Название шаблона" className="field" />
           <input value={draft.purpose} onChange={(event) => setDraft((value) => ({ ...value, purpose: event.target.value }))} placeholder="Назначение" className="field" />
+          <BusinessModelSelect value={draft.businessModel} onChange={(businessModel) => setDraft((value) => ({ ...value, businessModel }))} />
           <textarea value={draft.body} onChange={(event) => setDraft((value) => ({ ...value, body: event.target.value }))} placeholder="Текст шаблона" className="field md:col-span-2 min-h-28" />
         </div>
         <button onClick={save} className="primary-action mt-4 flex items-center gap-2"><Plus className="w-4 h-4" />Сохранить</button>
@@ -275,11 +366,14 @@ export function OwnerTemplatesManager() {
             <div className="flex justify-between gap-4">
               <div>
                 <h3 className="text-lg text-[#f5f3f0]">{template.title}</h3>
-                <p className="text-xs text-[#c9a98d] mt-1">{template.purpose}</p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <BusinessModelBadge value={template.businessModel} />
+                  <p className="text-xs text-[#c9a98d]">{template.purpose}</p>
+                </div>
                 <p className="text-sm text-[#a89b8f] mt-3 whitespace-pre-line">{template.body}</p>
               </div>
               <div className="flex gap-2">
-                <button onClick={() => { setEditingId(template.id); setDraft({ title: template.title, purpose: template.purpose ?? '', body: template.body }); }} className="text-[#a89b8f] hover:text-[#c9a98d]"><Edit2 className="w-4 h-4" /></button>
+                <button onClick={() => { setEditingId(template.id); setDraft({ title: template.title, purpose: template.purpose ?? '', body: template.body, businessModel: template.businessModel ?? 'ALL' }); }} className="text-[#a89b8f] hover:text-[#c9a98d]"><Edit2 className="w-4 h-4" /></button>
                 <button onClick={() => deleteTemplate(template.id)} className="text-[#a89b8f] hover:text-[#8b3a52]"><Trash2 className="w-4 h-4" /></button>
               </div>
             </div>

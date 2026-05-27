@@ -6,6 +6,7 @@ export type RefundStatus = 'NEW' | 'IN_PROGRESS' | 'RESOLVED' | 'DECLINED';
 export type EmployeeStatus = 'active' | 'blocked' | 'read-only';
 export type ChecklistReportSlot = '14:00' | '18:00' | '22:00';
 export type Studio = 'STAVROPOLSKAYA' | 'MACHUGI';
+export type BusinessModelScope = 'SUBSCRIPTION' | 'MEMBERSHIP' | 'ALL';
 
 export interface User {
   id: string;
@@ -66,6 +67,7 @@ export interface ResponseTemplate {
   title: string;
   body: string;
   role: Role;
+  businessModel?: BusinessModelScope;
   purpose?: string | null;
   createdById: string;
   createdAt: string;
@@ -104,6 +106,7 @@ export interface KnowledgeEntry {
   content: string;
   role: Role;
   category: KnowledgeCategory;
+  businessModel?: BusinessModelScope;
   hashtags?: string | null;
   isActual?: boolean;
   searchable: boolean;

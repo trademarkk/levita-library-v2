@@ -5,6 +5,7 @@ import type {
   AppSettings,
   AdminShift,
   AuditAction,
+  BusinessModelScope,
   CalendarEvent,
   CalendarEventRecurrence,
   ChecklistControlStatus,
@@ -146,8 +147,8 @@ type LibraryContextValue = {
   createTask: (input: Pick<TaskTemplate, 'title' | 'period' | 'description' | 'priority'> & Partial<Pick<TaskTemplate, 'deadline' | 'addToCalendar'>>) => void;
   updateTask: (id: string, input: Partial<Pick<TaskTemplate, 'title' | 'period' | 'description' | 'priority' | 'status' | 'deadline' | 'addToCalendar'>>) => void;
   toggleTask: (id: string) => void;
-  createTemplate: (input: { title: string; body: string; role: Role; purpose?: string; createdById?: string }) => void;
-  updateTemplate: (id: string, input: Partial<{ title: string; body: string; role: Role; purpose: string }>) => void;
+  createTemplate: (input: { title: string; body: string; role: Role; businessModel?: BusinessModelScope; purpose?: string; createdById?: string }) => void;
+  updateTemplate: (id: string, input: Partial<{ title: string; body: string; role: Role; purpose: string; businessModel: BusinessModelScope }>) => void;
   deleteTemplate: (id: string) => void;
   createLink: (input: { title: string; url: string; description?: string; role: Role; category?: HelpfulLink['category'] }) => void;
   updateLink: (id: string, input: Partial<Pick<HelpfulLink, 'title' | 'url' | 'description' | 'role' | 'category'>>) => void;
@@ -158,8 +159,8 @@ type LibraryContextValue = {
   createUsefulContact: (input: Omit<UsefulContact, 'id' | 'createdAt'>) => void;
   updateUsefulContact: (id: string, input: Partial<Omit<UsefulContact, 'id' | 'createdAt'>>) => void;
   deleteUsefulContact: (id: string) => void;
-  createKnowledge: (input: { title: string; content: string; role: Role; category: KnowledgeCategory; hashtags?: string; isActual?: boolean }) => void;
-  updateKnowledge: (id: string, input: Partial<Pick<KnowledgeEntry, 'title' | 'content' | 'hashtags' | 'role' | 'category' | 'isActual'>>) => void;
+  createKnowledge: (input: { title: string; content: string; role: Role; category: KnowledgeCategory; businessModel?: BusinessModelScope; hashtags?: string; isActual?: boolean }) => void;
+  updateKnowledge: (id: string, input: Partial<Pick<KnowledgeEntry, 'title' | 'content' | 'hashtags' | 'role' | 'category' | 'isActual' | 'businessModel'>>) => void;
   deleteKnowledge: (id: string) => void;
   createImportantInfo: (title: string, content: string, hashtags?: string) => void;
   updateImportantInfo: (id: string, input: Partial<Pick<KnowledgeEntry, 'title' | 'content' | 'hashtags'>>) => void;
@@ -202,6 +203,10 @@ function cloneState(state: LibraryState): LibraryState {
 
 function newId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function normalizeBusinessModel(value?: string | null): BusinessModelScope {
+  return value === 'SUBSCRIPTION' || value === 'MEMBERSHIP' || value === 'ALL' ? value : 'ALL';
 }
 
 function startOfTodayIso() {
@@ -491,10 +496,11 @@ function normalizeState(raw: Partial<LibraryState> | null): LibraryState {
     users,
     checklists,
     tasks: (raw.tasks || base.tasks).map((task) => ({ ...task, ownerUserId: undefined })),
-    templates: (raw.templates || base.templates).map((template) => ({ ...template, ownerUserId: undefined })),
+    templates: (raw.templates || base.templates).map((template) => ({ ...template, ownerUserId: undefined, businessModel: normalizeBusinessModel(template.businessModel) })),
     links: (raw.links || base.links).map((link) => ({ ...link, ownerUserId: undefined })),
     documentTemplates: raw.documentTemplates || base.documentTemplates,
     usefulContacts: raw.usefulContacts || base.usefulContacts,
+    knowledge: (raw.knowledge || base.knowledge).map((entry) => ({ ...entry, businessModel: normalizeBusinessModel(entry.businessModel) })),
     financialPlans: raw.financialPlans || base.financialPlans,
     calendarEvents: (raw.calendarEvents || base.calendarEvents).map((event) => ({
       ...event,
@@ -1143,7 +1149,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     createTemplate(input) {
       update((draft) => {
         const id = newId('template');
-        draft.templates.unshift({ id, createdAt: new Date().toISOString(), createdById: input.createdById ?? currentUser?.id ?? 'system', purpose: input.purpose || null, title: input.title, body: input.body, role: input.role });
+        draft.templates.unshift({ id, createdAt: new Date().toISOString(), createdById: input.createdById ?? currentUser?.id ?? 'system', purpose: input.purpose || null, title: input.title, body: input.body, role: input.role, businessModel: normalizeBusinessModel(input.businessModel) });
         pushAudit(draft, 'content.create', 'template', input.title, { entityId: id, description: 'Создан шаблон сообщения.' });
       });
     },
@@ -1221,7 +1227,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     createKnowledge(input) {
       update((draft) => {
         const id = newId('knowledge');
-        draft.knowledge.unshift({ id, title: input.title, content: input.content, role: input.role, category: input.category, hashtags: normalizeHashtags(input.hashtags ?? '') || null, isActual: input.isActual ?? true, searchable: true, createdAt: new Date().toISOString() });
+        draft.knowledge.unshift({ id, title: input.title, content: input.content, role: input.role, category: input.category, businessModel: normalizeBusinessModel(input.businessModel), hashtags: normalizeHashtags(input.hashtags ?? '') || null, isActual: input.isActual ?? true, searchable: true, createdAt: new Date().toISOString() });
         pushAudit(draft, 'content.create', 'knowledge', input.title, { entityId: id, description: 'Создана карточка контента.' });
       });
     },
@@ -1242,7 +1248,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     },
     createImportantInfo(title, content, hashtags) {
       update((draft) => {
-        draft.knowledge.unshift({ id: newId('knowledge'), title, content, role: 'ADMIN', category: 'IMPORTANT_INFO', hashtags: normalizeHashtags(hashtags ?? '') || null, searchable: true, createdAt: new Date().toISOString() });
+        draft.knowledge.unshift({ id: newId('knowledge'), title, content, role: 'ADMIN', category: 'IMPORTANT_INFO', businessModel: 'ALL', hashtags: normalizeHashtags(hashtags ?? '') || null, searchable: true, createdAt: new Date().toISOString() });
       });
     },
     updateImportantInfo(id, input) {
