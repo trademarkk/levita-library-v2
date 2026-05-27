@@ -57,8 +57,8 @@ const businessModelLabels: Record<BusinessModelScope, string> = {
 };
 
 const businessModelHelp: Record<BusinessModelScope, string> = {
-  SUBSCRIPTION: 'Подписная модель Мачуги',
-  MEMBERSHIP: 'Абонементы 3/6/12 месяцев',
+  SUBSCRIPTION: 'Подписная модель',
+  MEMBERSHIP: 'Абонементная модель',
   ALL: 'Подходит обеим моделям',
 };
 
