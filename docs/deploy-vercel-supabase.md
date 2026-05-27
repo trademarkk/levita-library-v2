@@ -31,6 +31,7 @@ MAX_REQUEST_TIMEOUT_MS=12000
 MAX_API_BASE=https://platform-api.max.ru
 
 CRON_SECRET=generate-a-random-secret
+MAX_REMINDER_RETENTION_DAYS=20
 
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
@@ -68,3 +69,4 @@ GOOGLE_INCLUDE_TASKS=true
 - 21:45 по Москве для отчета 22:00
 
 Cron endpoint каждую минуту забирает pending-напоминания из Supabase, отправляет их в MAX и помечает как `sent` или `failed`.
+После каждого запуска cron также удаляет из `max_reminders` отправленные и ошибочные записи старше `MAX_REMINDER_RETENTION_DAYS` дней, чтобы бесплатный тариф Supabase не забивался служебной историей.

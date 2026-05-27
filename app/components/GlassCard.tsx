@@ -18,7 +18,7 @@ export function GlassCard({ children, className = '', delay = 0, onClick }: Glas
       onClick={onClick}
     >
       <div className="absolute inset-0 bg-gradient-to-b from-[#c9a98d]/5 to-transparent rounded-xl blur-xl group-hover:blur-2xl transition-all duration-500"></div>
-      <div className="relative bg-[#1a1820]/60 backdrop-blur-xl border border-[#c9a98d]/20 rounded-xl p-6 hover:border-[#c9a98d]/40 transition-all duration-500">
+      <div className="glass-card-surface relative bg-[#1a1820]/60 backdrop-blur-xl border border-[#c9a98d]/20 rounded-xl p-6 hover:border-[#c9a98d]/40 transition-all duration-500">
         {children}
       </div>
     </motion.div>

@@ -55,20 +55,21 @@ export function TabNavigation({ tabs, activeTab, onTabChange, storageKey }: TabN
   };
 
   return (
-    <div className="tab-navigation flex flex-nowrap gap-2 border-b border-[#c9a98d]/10 mb-8 overflow-x-auto">
+    <div className="tab-navigation flex flex-nowrap lg:flex-wrap gap-2 border-b border-[#c9a98d]/10 mb-8 overflow-x-auto lg:overflow-visible pb-2 lg:pb-3">
       {visibleTabs.map((tab) => (
         <button
           key={tab.id}
           draggable
+          aria-current={activeTab === tab.id ? 'page' : undefined}
           onDragStart={() => setDraggedId(tab.id)}
           onDragOver={(event) => event.preventDefault()}
           onDrop={() => moveTab(tab.id)}
           onDragEnd={() => setDraggedId(null)}
           onClick={() => onTabChange(tab.id)}
-          className={`relative shrink-0 px-4 lg:px-6 py-3 transition-all duration-300 whitespace-nowrap ${
+          className={`relative shrink-0 rounded-lg border px-4 lg:px-5 py-2.5 transition-all duration-300 whitespace-nowrap ${
             activeTab === tab.id
-              ? 'text-[#c9a98d]'
-              : 'text-[#a89b8f] hover:text-[#f5f3f0]'
+              ? 'border-[#c9a98d]/55 bg-[#c9a98d]/18 text-[#f5f3f0] shadow-[0_10px_30px_rgba(201,169,141,0.14)]'
+              : 'border-transparent text-[#a89b8f] hover:border-[#c9a98d]/20 hover:bg-[#2a2630]/55 hover:text-[#f5f3f0]'
           } ${draggedId === tab.id ? 'opacity-50' : ''}`}
           title="Можно перетащить вкладку"
         >
@@ -76,7 +77,7 @@ export function TabNavigation({ tabs, activeTab, onTabChange, storageKey }: TabN
           {activeTab === tab.id && (
             <motion.div
               layoutId="activeTab"
-              className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-[#c9a98d] to-[#b88b7a]"
+              className="absolute inset-x-3 bottom-1 h-0.5 rounded-full bg-gradient-to-r from-[#c9a98d] to-[#b88b7a]"
               transition={{ type: 'spring', bounce: 0.2, duration: 0.6 }}
             />
           )}

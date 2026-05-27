@@ -37,6 +37,7 @@ const MAX_REPORT_CHAT_ID_STAVROPOLSKAYA = process.env.MAX_REPORT_CHAT_ID_STAVROP
 const MAX_REPORT_CHAT_ID_MACHUGI = process.env.MAX_REPORT_CHAT_ID_MACHUGI || '';
 const MAX_REPORT_REMINDER_SLOTS = ['14:00', '18:00', '22:00'];
 const CRON_SECRET = process.env.CRON_SECRET || '';
+const MAX_REMINDER_RETENTION_DAYS = Number(process.env.MAX_REMINDER_RETENTION_DAYS || 20);
 const STORAGE_DRIVER = process.env.LEVTIA_STORAGE_DRIVER || 'sqlite';
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -492,6 +493,33 @@ async function markMaxReminderFailed(id, errorMessage) {
   `).run(errorMessage, now, id);
 }
 
+function maxReminderCleanupCutoff() {
+  const days = Number.isFinite(MAX_REMINDER_RETENTION_DAYS) && MAX_REMINDER_RETENTION_DAYS > 0
+    ? MAX_REMINDER_RETENTION_DAYS
+    : 20;
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+async function cleanupOldMaxReminders() {
+  const cutoff = maxReminderCleanupCutoff();
+  if (useSupabase) {
+    const { data, error } = await supabase
+      .from('max_reminders')
+      .delete()
+      .in('status', ['sent', 'failed'])
+      .lt('scheduled_at', cutoff)
+      .select('id');
+    if (error) throw new Error(`Supabase cleanup max reminders failed: ${error.message}`);
+    return { deleted: data?.length ?? 0, cutoff };
+  }
+
+  const result = db.prepare(`
+    DELETE FROM max_reminders
+    WHERE status IN ('sent', 'failed') AND scheduled_at < ?
+  `).run(cutoff);
+  return { deleted: result.changes ?? 0, cutoff };
+}
+
 async function runMaxReminderJob() {
   const reminders = await claimDueMaxReminders();
   const results = [];
@@ -507,11 +535,13 @@ async function runMaxReminderJob() {
       results.push({ id: reminder.id, status: 'failed', error: message });
     }
   }
+  const cleanup = await cleanupOldMaxReminders();
   return {
     ok: true,
     processed: results.length,
     sent: results.filter((item) => item.status === 'sent').length,
     failed: results.filter((item) => item.status === 'failed').length,
+    cleanup,
     results,
   };
 }
