@@ -274,8 +274,8 @@ function ChecklistSection({ userId, shiftStudio }: { userId: string; shiftStudio
         </div>
       </GlassCard>
 
-      <div className="grid xl:grid-cols-3 gap-4">
-        {checklist.reports.map((report) => {
+      <div className="grid xl:grid-cols-2 gap-4">
+        {checklist.reports.filter((report) => report.slot !== '22:00').map((report) => {
           const draft = { ...report, studio: report.studio ?? shiftStudio, ...reportDrafts[report.slot] };
           return (
             <GlassCard key={report.slot}>

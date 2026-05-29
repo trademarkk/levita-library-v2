@@ -35,7 +35,8 @@ const MAX_BOT_TOKEN = process.env.MAX_BOT_TOKEN || '';
 const MAX_REPORT_CHAT_ID = process.env.MAX_REPORT_CHAT_ID || '';
 const MAX_REPORT_CHAT_ID_STAVROPOLSKAYA = process.env.MAX_REPORT_CHAT_ID_STAVROPOLSKAYA || MAX_REPORT_CHAT_ID;
 const MAX_REPORT_CHAT_ID_MACHUGI = process.env.MAX_REPORT_CHAT_ID_MACHUGI || '';
-const MAX_REPORT_REMINDER_SLOTS = ['14:00', '18:00', '22:00'];
+const MAX_REPORT_REMINDER_SLOTS = ['14:00', '18:00'];
+const MAX_REPORT_REPEAT_MINUTES = 15;
 const CRON_SECRET = process.env.CRON_SECRET || '';
 const MAX_REMINDER_RETENTION_DAYS = Number(process.env.MAX_REMINDER_RETENTION_DAYS || 20);
 const STORAGE_DRIVER = process.env.LEVTIA_STORAGE_DRIVER || 'sqlite';
@@ -252,23 +253,32 @@ function reminderDateTime(date, slot, minutesBefore = 15) {
   return new Date(Date.UTC(year, month - 1, day, hours - 3, minutes - minutesBefore, 0, 0));
 }
 
-function buildMaxShiftReminder({ shiftId, adminName, studio, date, slot }) {
+function reportDeadlineDateTime(date, slot) {
+  return reminderDateTime(date, slot, 0);
+}
+
+function maxReminderId(shiftId, date, slot, scheduledAt) {
+  return `${shiftId}:${date}:${slot}:${scheduledAt.replace(/[:.]/g, '-')}`;
+}
+
+function buildMaxShiftReminder({ shiftId, adminName, studio, date, slot, scheduledAt }) {
   ensureMaxStudioConfigured(studio);
-  const scheduledFor = reminderDateTime(date, slot);
-  if (!scheduledFor) {
+  const scheduledFor = scheduledAt ? new Date(scheduledAt) : reminderDateTime(date, slot);
+  if (!scheduledFor || Number.isNaN(scheduledFor.getTime())) {
     const error = new Error('Некорректная дата или время напоминания.');
     error.statusCode = 400;
     throw error;
   }
 
   const now = new Date().toISOString();
+  const scheduledIso = scheduledFor.toISOString();
   return {
-    id: `${shiftId}:${date}:${slot}`,
+    id: maxReminderId(shiftId, date, slot, scheduledIso),
     shiftId,
     adminName,
     studio,
     reportSlot: slot,
-    scheduledAt: scheduledFor.toISOString(),
+    scheduledAt: scheduledIso,
     messageText: `${adminName}, не забудь отчетик на ${slot}💛`,
     status: 'pending',
     attempts: 0,
@@ -435,13 +445,63 @@ async function insertMaxReminders(reminders) {
   return reminders;
 }
 
+function stateDateKey(value) {
+  if (/^\d{4}-\d{2}-\d{2}/.test(String(value || ''))) return String(value).slice(0, 10);
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return String(value || '').slice(0, 10);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function isReminderReportSubmitted(reminder, appState) {
+  const shift = (appState?.adminShifts || []).find((item) => item.id === reminder.shiftId);
+  const checklist = (appState?.checklists || []).find((item) => (
+    item.assignedTo === shift?.userId
+    && stateDateKey(item.date) === shift?.date
+  ));
+  const report = checklist?.reports?.find((item) => item.slot === reminder.reportSlot);
+  return Boolean(report?.submittedAt || report?.sentToMax || report?.maxSentAt);
+}
+
+function reminderDayEnd(date) {
+  const [year, month, day] = String(date || '').split('-').map(Number);
+  if (![year, month, day].every(Number.isFinite)) return null;
+  return new Date(Date.UTC(year, month - 1, day, 20, 59, 59, 999));
+}
+
+function nextFollowUpReminder(reminder) {
+  const shiftDate = reminder.shiftId ? reminder.id.split(':')[1] : '';
+  const date = shiftDate || String(reminder.scheduledAt || '').slice(0, 10);
+  const deadline = reportDeadlineDateTime(date, reminder.reportSlot);
+  const dayEnd = reminderDayEnd(date);
+  if (!deadline || !dayEnd) return null;
+  const nextTime = new Date(Math.max(Date.now(), deadline.getTime()) + MAX_REPORT_REPEAT_MINUTES * 60 * 1000);
+  if (nextTime.getTime() > dayEnd.getTime()) return null;
+  return buildMaxShiftReminder({
+    shiftId: reminder.shiftId,
+    adminName: reminder.adminName,
+    studio: reminder.studio,
+    date,
+    slot: reminder.reportSlot,
+    scheduledAt: nextTime.toISOString(),
+  });
+}
+
 async function createMaxShiftReminders(input) {
   const studio = input.studio === 'MACHUGI' ? 'MACHUGI' : 'STAVROPOLSKAYA';
   ensureMaxStudioConfigured(studio);
   const now = Date.now();
   const reminders = MAX_REPORT_REMINDER_SLOTS
-    .map((slot) => buildMaxShiftReminder({ ...input, studio, slot }))
-    .filter((reminder) => new Date(reminder.scheduledAt).getTime() > now);
+    .map((slot) => {
+      const firstReminder = buildMaxShiftReminder({ ...input, studio, slot });
+      if (new Date(firstReminder.scheduledAt).getTime() > now) return firstReminder;
+      const deadline = reportDeadlineDateTime(input.date, slot);
+      const dayEnd = reminderDayEnd(input.date);
+      if (!deadline || !dayEnd || now > dayEnd.getTime()) return null;
+      const followUpAt = new Date(Math.max(now, deadline.getTime()) + MAX_REPORT_REPEAT_MINUTES * 60 * 1000);
+      if (followUpAt.getTime() > dayEnd.getTime()) return null;
+      return buildMaxShiftReminder({ ...input, studio, slot, scheduledAt: followUpAt.toISOString() });
+    })
+    .filter(Boolean);
   await insertMaxReminders(reminders);
   return reminders.map((reminder) => ({
     slot: reminder.reportSlot,
@@ -559,12 +619,26 @@ async function cleanupOldMaxReminders() {
 
 async function runMaxReminderJob() {
   const reminders = await claimDueMaxReminders();
+  const storedState = reminders.length ? await getState() : null;
+  const appState = storedState?.state || null;
   const results = [];
   for (const reminder of reminders) {
     try {
+      if (!MAX_REPORT_REMINDER_SLOTS.includes(reminder.reportSlot)) {
+        await markMaxReminderSent(reminder.id, 'skipped-disabled-slot');
+        results.push({ id: reminder.id, status: 'skipped', reason: 'disabled-slot' });
+        continue;
+      }
+      if (isReminderReportSubmitted(reminder, appState)) {
+        await markMaxReminderSent(reminder.id, 'skipped-report-submitted');
+        results.push({ id: reminder.id, status: 'skipped', reason: 'report-submitted' });
+        continue;
+      }
       const message = await sendMaxMessage(reminder.messageText, reminder.studio);
       const messageId = message.message?.id || message.id || null;
       await markMaxReminderSent(reminder.id, messageId);
+      const nextReminder = isReminderReportSubmitted(reminder, appState) ? null : nextFollowUpReminder(reminder);
+      if (nextReminder) await insertMaxReminders([nextReminder]);
       results.push({ id: reminder.id, status: 'sent', messageId });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown MAX reminder error';
@@ -1448,6 +1522,10 @@ export async function handleApiRequest(request, response) {
       const body = JSON.parse(await readBody(request) || '{}');
       if (!body.slot || !body.report || typeof body.report !== 'object') {
         send(response, 400, { error: 'slot and report are required' });
+        return;
+      }
+      if (!MAX_REPORT_REMINDER_SLOTS.includes(body.slot)) {
+        send(response, 400, { error: 'Reports are available only for 14:00 and 18:00' });
         return;
       }
       const sentAt = new Date().toISOString();

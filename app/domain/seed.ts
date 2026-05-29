@@ -74,7 +74,7 @@ function createChecklist(userId: string, role: Role, index: number): DailyCheckl
     assignedTo: userId,
     date: '2026-05-13T00:00:00.000+03:00',
     createdAt: now,
-    reports: isAdminRole ? [createReport('14:00', assigneeName), createReport('18:00', assigneeName), createReport('22:00', assigneeName)] : [],
+    reports: isAdminRole ? [createReport('14:00', assigneeName), createReport('18:00', assigneeName)] : [],
     items: labels.map((label, itemIndex) => ({
       id: id(`checklist-${index}-item`, itemIndex + 1),
       label,

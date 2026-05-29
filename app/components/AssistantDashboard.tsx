@@ -387,10 +387,9 @@ function ChecklistSnapshot({ report, onBack }: { report: ChecklistMonitorReport;
           <h3 className="text-2xl text-[#f5f3f0]">{report.assignee.name}</h3>
           <p className="text-sm text-[#a89b8f]">{roleLabels[report.assignee.role]} · {formatDate(report.checklist.date)} · {report.completedCount}/{report.checklist.items.length}</p>
         </div>
-        <div className="grid xl:grid-cols-3 gap-3 mb-6">
+        <div className="grid xl:grid-cols-2 gap-3 mb-6">
           <ReportStatusCard slot="14:00" status={report.report14} />
           <ReportStatusCard slot="18:00" status={report.report18} />
-          <ReportStatusCard slot="22:00" status={report.report22} />
         </div>
         <div className="space-y-3">
           {report.checklist.items.map((item) => (

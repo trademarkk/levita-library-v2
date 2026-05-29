@@ -45,6 +45,8 @@ const REPORT_DEADLINES: Record<ChecklistReportSlot, number> = {
   '18:00': 18 * 60,
   '22:00': 22 * 60,
 };
+const ACTIVE_REPORT_SLOTS: ChecklistReportSlot[] = ['14:00', '18:00'];
+const CONTROL_REPORT_SLOTS: ChecklistReportSlot[] = ['14:00', '18:00', '22:00'];
 const DEFAULT_STUDIO: Studio = 'STAVROPOLSKAYA';
 const FINANCIAL_PLAN_FORWARD_MONTHS = 36;
 const CANONICAL_ADMIN_CHECKLIST_ITEMS = [
@@ -359,7 +361,7 @@ function createDailyChecklist(user: User): DailyChecklist {
     assignedTo: user.id,
     date: startOfTodayIso(),
     createdAt: new Date().toISOString(),
-    reports: isAdminRole ? [blankReport('14:00', user.name), blankReport('18:00', user.name), blankReport('22:00', user.name)] : [],
+    reports: isAdminRole ? ACTIVE_REPORT_SLOTS.map((slot) => blankReport(slot, user.name)) : [],
     items: finalLabels.map((label) => ({
       id: newId('checklist-item'),
       label,
@@ -387,7 +389,7 @@ function normalizeChecklistReportForToday(report: ChecklistReport) {
 }
 
 function mergeChecklistReports(left: ChecklistReport[], right: ChecklistReport[]) {
-  return (['14:00', '18:00', '22:00'] as ChecklistReportSlot[]).map((slot) => {
+  return ACTIVE_REPORT_SLOTS.map((slot) => {
     const primary = left.find((report) => report.slot === slot);
     const incoming = right.find((report) => report.slot === slot);
     const report = { ...blankReport(slot, primary?.adminName || incoming?.adminName || ''), ...primary, ...incoming };
@@ -424,7 +426,7 @@ function normalizeChecklistReportForDate(report: ChecklistReport, targetDate: st
 }
 
 function mergeChecklistReportsForDate(left: ChecklistReport[], right: ChecklistReport[], targetDate: string) {
-  return (['14:00', '18:00', '22:00'] as ChecklistReportSlot[]).map((slot) => {
+  return ACTIVE_REPORT_SLOTS.map((slot) => {
     const primary = left.find((report) => report.slot === slot);
     const incoming = right.find((report) => report.slot === slot);
     const report = { ...blankReport(slot, primary?.adminName || incoming?.adminName || ''), ...primary, ...incoming };
@@ -524,7 +526,7 @@ function normalizeState(raw: Partial<LibraryState> | null): LibraryState {
             }))
           : [],
         reports: isAdminRole
-          ? (['14:00', '18:00', '22:00'] as ChecklistReportSlot[]).map((slot) => {
+          ? ACTIVE_REPORT_SLOTS.map((slot) => {
               const existing = checklist.reports?.find((report) => report.slot === slot);
               const report = { ...blankReport(slot, assignee?.name ?? ''), ...existing };
               return {
@@ -756,7 +758,7 @@ function findReportItem(checklist: DailyChecklist, slot: ChecklistReportSlot) {
 }
 
 function findReportSlotByItem(checklist: DailyChecklist, itemId: string) {
-  return (['14:00', '18:00', '22:00'] as ChecklistReportSlot[]).find((slot) => findReportItem(checklist, slot)?.id === itemId) ?? null;
+  return CONTROL_REPORT_SLOTS.find((slot) => findReportItem(checklist, slot)?.id === itemId) ?? null;
 }
 
 function getReportStatus(checklist: DailyChecklist, slot: ChecklistReportSlot): ChecklistControlStatus {
@@ -1338,6 +1340,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         item.completedBy = item.completed ? userId ?? currentUser?.id ?? null : null;
         const slot = findReportSlotByItem(checklist, item.id);
         if (!slot) return;
+        if (!ACTIVE_REPORT_SLOTS.includes(slot)) return;
         let report = checklist.reports.find((entry) => entry.slot === slot);
         if (!report) {
           report = blankReport(slot, draft.users.find((user) => user.id === checklist.assignedTo)?.name ?? '');
@@ -1371,6 +1374,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       });
     },
     async updateChecklistReport(checklistId, slot, input) {
+      if (!ACTIVE_REPORT_SLOTS.includes(slot)) return;
       const submittedAt = new Date().toISOString();
       const currentChecklist = state.checklists.find((item) => item.id === checklistId);
       const currentReport = currentChecklist?.reports.find((item) => item.slot === slot);

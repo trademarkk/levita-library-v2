@@ -88,12 +88,10 @@ function ControlCenterSection() {
   const lateReports = todayReports.flatMap((report) => [
     { slot: '14:00', report, status: report.report14 },
     { slot: '18:00', report, status: report.report18 },
-    { slot: '22:00', report, status: report.report22 },
   ]).filter((item) => item.status.submitted && !item.status.onTime);
   const missingReports = todayReports.flatMap((report) => [
     { slot: '14:00', report, status: report.report14 },
     { slot: '18:00', report, status: report.report18 },
-    { slot: '22:00', report, status: report.report22 },
   ]).filter((item) => !item.status.submitted);
   const todayShifts = state.adminShifts.filter((shift) => shift.date === today);
   const activeRefunds = state.refunds.filter((refund) => refund.status === 'NEW' || refund.status === 'IN_PROGRESS');
@@ -614,10 +612,9 @@ function OwnerChecklistSnapshot({ report, onBack }: { report: OwnerMonitorReport
           <h3 className="text-2xl text-[#f5f3f0]">{report.assignee.name}</h3>
           <p className="text-sm text-[#a89b8f]">{roleLabels[report.assignee.role]} · {formatDate(report.checklist.date)} · {report.completedCount}/{report.checklist.items.length}</p>
         </div>
-        <div className="grid xl:grid-cols-3 gap-3 mb-6">
+        <div className="grid xl:grid-cols-2 gap-3 mb-6">
           <ControlReportCard slot="14:00" status={report.report14} />
           <ControlReportCard slot="18:00" status={report.report18} />
-          <ControlReportCard slot="22:00" status={report.report22} />
         </div>
         <div className="space-y-3">
           {report.checklist.items.map((item) => (
