@@ -10,6 +10,7 @@ import { formatDate, formatTime, refundStatusLabels, reportSlotLabels, roleLabel
 import { can } from '../domain/permissions';
 import type { ChecklistReport, KnowledgeCategory, RefundStatus, Role, Studio } from '../domain/types';
 import { BookOpen, DollarSign, Edit2, FileText, Info, Link as LinkIcon, ListChecks, Phone, Plus, Save, Shield, Trash2, X } from 'lucide-react';
+import { SEARCH_NAVIGATION_EVENT, type SearchNavigationDetail } from './searchNavigation';
 
 const adminTabs = [
   { id: 'responsibilities', label: 'Обязанности' },
@@ -40,6 +41,18 @@ function AdminWorkspace({ role, canManageTemplates = false, canManageLinks = fal
   const shift = user ? activeAdminShift(user.id) : null;
   const canManageRoleTemplates = can(role, 'create', 'messageTemplates', { targetRole: role }) || canManageTemplates;
   const canManageRoleLinks = can(role, 'create', 'workLinks', { targetRole: role }) || canManageLinks;
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<SearchNavigationDetail>).detail;
+      if (!detail?.tabId || !tabs.some((tab) => tab.id === detail.tabId)) return;
+      setActiveTab(detail.tabId);
+      if (!shift) setStudyMode(true);
+    };
+
+    window.addEventListener(SEARCH_NAVIGATION_EVENT, handler);
+    return () => window.removeEventListener(SEARCH_NAVIGATION_EVENT, handler);
+  }, [shift, tabs]);
 
   return (
     <DashboardLayout role={role} userName={user?.name ?? roleLabels[role]}>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { DashboardLayout } from './DashboardLayout';
 import { TabNavigation } from './TabNavigation';
 import { GlassCard } from './GlassCard';
@@ -11,6 +11,7 @@ import { employeeStatusLabels, formatDate, formatTime, refundStatusLabels, roleL
 import { can } from '../domain/permissions';
 import type { ChecklistControlStatus, EmployeeStatus, KnowledgeCategory, RefundStatus, Role } from '../domain/types';
 import { Activity, AlertCircle, Clock3, DollarSign, Edit2, FileText, Info, Link as LinkIcon, ListChecks, Plus, Save, ShieldCheck, Trash2, UserRound, X } from 'lucide-react';
+import { SEARCH_NAVIGATION_EVENT, type SearchNavigationDetail } from './searchNavigation';
 
 const tabs = [
   { id: 'control-center', label: 'Центр контроля' },
@@ -40,6 +41,18 @@ export function OwnerDashboard() {
   const [activeTab, setActiveTab] = useState('control-center');
   const { currentUser, state, refreshState } = useLibrary();
   const owner = currentUser?.role === 'OWNER' ? currentUser : state.users.find((user) => user.role === 'OWNER');
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<SearchNavigationDetail>).detail;
+      if (!detail?.tabId || !tabs.some((tab) => tab.id === detail.tabId)) return;
+      setActiveTab(detail.tabId);
+      if (detail.tabId === 'checklists') void refreshState();
+    };
+
+    window.addEventListener(SEARCH_NAVIGATION_EVENT, handler);
+    return () => window.removeEventListener(SEARCH_NAVIGATION_EVENT, handler);
+  }, [refreshState]);
 
   return (
     <DashboardLayout role="OWNER" userName={owner?.name ?? 'Руководитель'}>
@@ -491,7 +504,7 @@ function OwnerDocumentTemplatesSection() {
       </GlassCard>
       <div className="grid md:grid-cols-2 gap-4">
         {state.documentTemplates.map((template, idx) => (
-          <GlassCard key={template.id} delay={idx * 0.06}>
+          <GlassCard key={template.id} delay={idx * 0.06} data-search-target={`documentTemplate:${template.id}`}>
             <div className="flex items-start justify-between gap-4">
               <div className="flex items-start gap-3">
                 <FileText className="w-5 h-5 text-[#c9a98d] mt-1" />
@@ -548,7 +561,7 @@ function OwnerUsefulContactsSection() {
 
       <div className="grid md:grid-cols-2 gap-4">
         {state.usefulContacts.map((contact, idx) => (
-          <GlassCard key={contact.id} delay={idx * 0.06}>
+          <GlassCard key={contact.id} delay={idx * 0.06} data-search-target={`usefulContact:${contact.id}`}>
             <div className="flex items-start justify-between gap-4">
               <div className="flex gap-3">
                 <UserRound className="w-5 h-5 text-[#c9a98d] mt-1" />

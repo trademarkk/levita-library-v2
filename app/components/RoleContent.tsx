@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { BookOpen, CheckCircle2, Edit2, FileText, Info, Link as LinkIcon, Plus, Save, Shield, Star, Trash2, X } from 'lucide-react';
 import { GlassCard } from './GlassCard';
 import { TabNavigation } from './TabNavigation';
@@ -6,6 +6,7 @@ import { useLibrary } from '../domain/LibraryContext';
 import { formatDate, roleLabels } from '../domain/labels';
 import { knowledgeCategoryResource, manageableContentRolesFor, managedContentRoles, visibleContentRolesFor } from '../domain/permissions';
 import type { BusinessModelScope, FavoriteEntityType, HelpfulLink, KnowledgeCategory, KnowledgeEntry, LinkCategory, Role } from '../domain/types';
+import { getPendingSearchTarget, SEARCH_NAVIGATION_EVENT, type SearchNavigationDetail } from './searchNavigation';
 
 export const managedRoles = managedContentRoles;
 const messageTemplateManagedRoles = managedContentRoles.filter((role) => role !== 'TRAINER' && role !== 'SENIOR_TRAINER');
@@ -80,6 +81,10 @@ function businessModelMatches(value: BusinessModelScope | undefined, filter: Bus
   const scope = value ?? 'ALL';
   if (filter === 'ALL') return scope === 'ALL';
   return scope === filter || scope === 'ALL';
+}
+
+function searchTarget(entityType: FavoriteEntityType, entityId: string) {
+  return `${entityType}:${entityId}`;
 }
 
 function BusinessModelBadge({ value }: { value?: BusinessModelScope }) {
@@ -195,6 +200,22 @@ export function RoleContentViewer({ role, category }: { role: Role; category: Kn
   const favoriteCount = baseEntries.filter((entry) => isFavorite('knowledge', entry.id)).length;
   const entries = favoriteFilter === 'favorites' ? baseEntries.filter((entry) => isFavorite('knowledge', entry.id)) : baseEntries;
   const selected = entries.find((entry) => entry.id === selectedId) ?? null;
+  const visibleRoleKey = visibleRoles.join('|');
+
+  useEffect(() => {
+    const applyTarget = (detail: SearchNavigationDetail | null) => {
+      if (!detail || detail.entityType !== 'knowledge' || detail.category !== category) return;
+      if (detail.role && !visibleRoles.includes(detail.role)) return;
+      setFavoriteFilter('all');
+      setSelectedId(null);
+      if (hasBusinessModelFilter) setBusinessModelFilter(detail.businessModel ?? 'ALL');
+    };
+
+    applyTarget(getPendingSearchTarget());
+    const handler = (event: Event) => applyTarget((event as CustomEvent<SearchNavigationDetail>).detail);
+    window.addEventListener(SEARCH_NAVIGATION_EVENT, handler);
+    return () => window.removeEventListener(SEARCH_NAVIGATION_EVENT, handler);
+  }, [category, hasBusinessModelFilter, visibleRoleKey]);
 
   if (selected && (category === 'REGULATION' || category === 'KNOWLEDGE')) {
     return (
@@ -233,7 +254,7 @@ export function RoleContentViewer({ role, category }: { role: Role; category: Kn
           {entries.length === 0 && <p className="text-[#a89b8f]">{favoriteFilter === 'favorites' ? 'В избранном пока нет материалов этой вкладки.' : categoryEmpty[category]}</p>}
           <ul className="space-y-3">
             {entries.map((entry) => (
-              <li key={entry.id} className="flex items-start gap-3 rounded-lg bg-[#2a2630]/55 p-3">
+              <li key={entry.id} data-search-target={searchTarget('knowledge', entry.id)} className="flex items-start gap-3 rounded-lg bg-[#2a2630]/55 p-3">
                 <span className="mt-2 h-2 w-2 rounded-full bg-[#c9a98d]" />
                 <span className="text-[#f5f3f0]">{entry.title}</span>
                 <FavoriteButton entityType="knowledge" entityId={entry.id} label={entry.title} />
@@ -252,7 +273,7 @@ export function RoleContentViewer({ role, category }: { role: Role; category: Kn
     <div className="grid md:grid-cols-2 gap-5">
       {entries.length === 0 && <GlassCard><p className="text-[#a89b8f]">{favoriteFilter === 'favorites' ? 'В избранном пока нет материалов этой вкладки.' : categoryEmpty[category]}</p></GlassCard>}
       {entries.map((entry, index) => (
-        <GlassCard key={entry.id} delay={index * 0.05}>
+        <GlassCard key={entry.id} delay={index * 0.05} data-search-target={searchTarget('knowledge', entry.id)}>
           <div className="flex items-start gap-3 mb-3">
             {category === 'REGULATION' ? <Shield className="w-5 h-5 text-[#c9a98d] mt-1" /> : category === 'KNOWLEDGE' ? <BookOpen className="w-5 h-5 text-[#c9a98d] mt-1" /> : <Info className="w-5 h-5 text-[#c9a98d] mt-1" />}
             <div className="flex-1">
@@ -306,6 +327,21 @@ export function RoleTemplatesViewer({ role }: { role: Role }) {
   const baseTemplates = state.templates.filter((template) => visibleRoles.includes(template.role) && businessModelMatches(template.businessModel, businessModelFilter));
   const favoriteCount = baseTemplates.filter((template) => isFavorite('template', template.id)).length;
   const templates = favoriteFilter === 'favorites' ? baseTemplates.filter((template) => isFavorite('template', template.id)) : baseTemplates;
+  const visibleRoleKey = visibleRoles.join('|');
+
+  useEffect(() => {
+    const applyTarget = (detail: SearchNavigationDetail | null) => {
+      if (!detail || detail.entityType !== 'template') return;
+      if (detail.role && !visibleRoles.includes(detail.role)) return;
+      setFavoriteFilter('all');
+      setBusinessModelFilter(detail.businessModel ?? 'ALL');
+    };
+
+    applyTarget(getPendingSearchTarget());
+    const handler = (event: Event) => applyTarget((event as CustomEvent<SearchNavigationDetail>).detail);
+    window.addEventListener(SEARCH_NAVIGATION_EVENT, handler);
+    return () => window.removeEventListener(SEARCH_NAVIGATION_EVENT, handler);
+  }, [visibleRoleKey]);
 
   return (
     <div className="space-y-4">
@@ -313,7 +349,7 @@ export function RoleTemplatesViewer({ role }: { role: Role }) {
       <BusinessModelFilter value={businessModelFilter} onChange={setBusinessModelFilter} />
       {templates.length === 0 && <GlassCard><p className="text-[#a89b8f]">{favoriteFilter === 'favorites' ? 'В избранном пока нет шаблонов этой вкладки.' : 'Для этой роли пока нет шаблонов сообщений.'}</p></GlassCard>}
       {templates.map((template, index) => (
-        <GlassCard key={template.id} delay={index * 0.05}>
+        <GlassCard key={template.id} delay={index * 0.05} data-search-target={searchTarget('template', template.id)}>
           <div className="flex gap-3">
             <FileText className="w-5 h-5 text-[#c9a98d] mt-1" />
             <div>
@@ -342,6 +378,20 @@ export function RoleLinksViewer({ role }: { role: Role }) {
   const baseLinks = state.links.filter((link) => visibleRoles.includes(link.role));
   const favoriteCount = baseLinks.filter((link) => isFavorite('link', link.id)).length;
   const links = favoriteFilter === 'favorites' ? baseLinks.filter((link) => isFavorite('link', link.id)) : baseLinks;
+  const visibleRoleKey = visibleRoles.join('|');
+
+  useEffect(() => {
+    const applyTarget = (detail: SearchNavigationDetail | null) => {
+      if (!detail || detail.entityType !== 'link') return;
+      if (detail.role && !visibleRoles.includes(detail.role)) return;
+      setFavoriteFilter('all');
+    };
+
+    applyTarget(getPendingSearchTarget());
+    const handler = (event: Event) => applyTarget((event as CustomEvent<SearchNavigationDetail>).detail);
+    window.addEventListener(SEARCH_NAVIGATION_EVENT, handler);
+    return () => window.removeEventListener(SEARCH_NAVIGATION_EVENT, handler);
+  }, [visibleRoleKey]);
 
   return (
     <div>
@@ -349,7 +399,7 @@ export function RoleLinksViewer({ role }: { role: Role }) {
       <div className="grid md:grid-cols-2 gap-4">
         {links.length === 0 && <GlassCard><p className="text-[#a89b8f]">{favoriteFilter === 'favorites' ? 'В избранном пока нет ссылок этой вкладки.' : 'Для этой роли пока нет рабочих ссылок.'}</p></GlassCard>}
         {links.map((link, index) => (
-          <GlassCard key={link.id} delay={index * 0.05}>
+          <GlassCard key={link.id} delay={index * 0.05} data-search-target={searchTarget('link', link.id)}>
             <div className="flex gap-3">
               <LinkIcon className="w-5 h-5 text-[#c9a98d] mt-1" />
               <div>
@@ -378,6 +428,20 @@ export function RoleTemplatesManager({ role }: { role: Role }) {
   const [draft, setDraft] = useState({ title: '', purpose: '', body: '', businessModel: 'ALL' as BusinessModelScope });
   const [error, setError] = useState<string | null>(null);
   const templates = state.templates.filter((template) => manageableRoles.includes(template.role) && businessModelMatches(template.businessModel, businessModelFilter));
+  const manageableRoleKey = manageableRoles.join('|');
+
+  useEffect(() => {
+    const applyTarget = (detail: SearchNavigationDetail | null) => {
+      if (!detail || detail.entityType !== 'template' || !detail.role || !manageableRoles.includes(detail.role)) return;
+      setActiveRole(detail.role);
+      setBusinessModelFilter(detail.businessModel ?? 'ALL');
+    };
+
+    applyTarget(getPendingSearchTarget());
+    const handler = (event: Event) => applyTarget((event as CustomEvent<SearchNavigationDetail>).detail);
+    window.addEventListener(SEARCH_NAVIGATION_EVENT, handler);
+    return () => window.removeEventListener(SEARCH_NAVIGATION_EVENT, handler);
+  }, [manageableRoleKey]);
 
   const reset = () => {
     setEditingId(null);
@@ -424,7 +488,7 @@ export function RoleTemplatesManager({ role }: { role: Role }) {
       <div className="space-y-4">
         {templates.length === 0 && <GlassCard><p className="text-[#a89b8f]">Шаблоны для этих ролей пока не добавлены.</p></GlassCard>}
         {templates.map((template) => (
-          <GlassCard key={template.id}>
+          <GlassCard key={template.id} data-search-target={searchTarget('template', template.id)}>
             <div className="flex justify-between gap-4">
               <div>
                 <h3 className="text-lg text-[#f5f3f0]">{template.title}</h3>
@@ -455,6 +519,19 @@ export function RoleLinksManager({ role }: { role: Role }) {
   const [draft, setDraft] = useState({ title: '', url: '', description: '', category: 'WORK_TABLE' as LinkCategory });
   const [error, setError] = useState<string | null>(null);
   const links = state.links.filter((link) => manageableRoles.includes(link.role));
+  const manageableRoleKey = manageableRoles.join('|');
+
+  useEffect(() => {
+    const applyTarget = (detail: SearchNavigationDetail | null) => {
+      if (!detail || detail.entityType !== 'link' || !detail.role || !manageableRoles.includes(detail.role)) return;
+      setActiveRole(detail.role);
+    };
+
+    applyTarget(getPendingSearchTarget());
+    const handler = (event: Event) => applyTarget((event as CustomEvent<SearchNavigationDetail>).detail);
+    window.addEventListener(SEARCH_NAVIGATION_EVENT, handler);
+    return () => window.removeEventListener(SEARCH_NAVIGATION_EVENT, handler);
+  }, [manageableRoleKey]);
 
   const reset = () => {
     setEditingId(null);
@@ -502,7 +579,7 @@ export function RoleLinksManager({ role }: { role: Role }) {
       <div className="grid md:grid-cols-2 gap-4">
         {links.length === 0 && <GlassCard><p className="text-[#a89b8f]">Рабочие ссылки для этих ролей пока не добавлены.</p></GlassCard>}
         {links.map((link) => (
-          <GlassCard key={link.id}>
+          <GlassCard key={link.id} data-search-target={searchTarget('link', link.id)}>
             <div className="flex justify-between gap-4">
               <div>
                 <h3 className="text-[#f5f3f0]">{link.title}</h3>
@@ -532,6 +609,18 @@ export function OwnerRoleContentManager({ category }: { category: KnowledgeCateg
   const selectedTabs = useMemo(() => tabsFor(category), [category]);
   const titlePlaceholder = category === 'RESPONSIBILITY' ? 'Новая обязанность' : 'Название';
   const contentPlaceholder = category === 'REGULATION' ? 'Текст регламента' : category === 'KNOWLEDGE' ? 'Описание и содержимое' : 'Текст информации';
+
+  useEffect(() => {
+    const applyTarget = (detail: SearchNavigationDetail | null) => {
+      if (!detail || detail.entityType !== 'knowledge' || detail.category !== category || !detail.role) return;
+      setActiveRole(detail.role);
+    };
+
+    applyTarget(getPendingSearchTarget());
+    const handler = (event: Event) => applyTarget((event as CustomEvent<SearchNavigationDetail>).detail);
+    window.addEventListener(SEARCH_NAVIGATION_EVENT, handler);
+    return () => window.removeEventListener(SEARCH_NAVIGATION_EVENT, handler);
+  }, [category]);
 
   const resetDraft = () => {
     setEditingId(null);
@@ -579,7 +668,7 @@ export function OwnerRoleContentManager({ category }: { category: KnowledgeCateg
       <div className={category === 'RESPONSIBILITY' ? 'space-y-3' : 'grid md:grid-cols-2 gap-4'}>
         {entries.length === 0 && <GlassCard><p className="text-[#a89b8f]">{categoryEmpty[category]}</p></GlassCard>}
         {entries.map((entry, index) => (
-          <GlassCard key={entry.id} delay={index * 0.04}>
+          <GlassCard key={entry.id} delay={index * 0.04} data-search-target={searchTarget('knowledge', entry.id)}>
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="flex items-start gap-3">
@@ -611,6 +700,18 @@ export function OwnerTemplatesManager() {
   const [draft, setDraft] = useState({ title: '', purpose: '', body: '', businessModel: 'ALL' as BusinessModelScope });
   const templates = state.templates.filter((template) => template.role === activeRole);
 
+  useEffect(() => {
+    const applyTarget = (detail: SearchNavigationDetail | null) => {
+      if (!detail || detail.entityType !== 'template' || !detail.role) return;
+      setActiveRole(detail.role);
+    };
+
+    applyTarget(getPendingSearchTarget());
+    const handler = (event: Event) => applyTarget((event as CustomEvent<SearchNavigationDetail>).detail);
+    window.addEventListener(SEARCH_NAVIGATION_EVENT, handler);
+    return () => window.removeEventListener(SEARCH_NAVIGATION_EVENT, handler);
+  }, []);
+
   const reset = () => {
     setEditingId(null);
     setDraft({ title: '', purpose: '', body: '', businessModel: 'ALL' });
@@ -638,7 +739,7 @@ export function OwnerTemplatesManager() {
       </GlassCard>
       <div className="space-y-4">
         {templates.map((template) => (
-          <GlassCard key={template.id}>
+          <GlassCard key={template.id} data-search-target={searchTarget('template', template.id)}>
             <div className="flex justify-between gap-4">
               <div>
                 <h3 className="text-lg text-[#f5f3f0]">{template.title}</h3>
@@ -667,6 +768,18 @@ export function OwnerLinksManager() {
   const [draft, setDraft] = useState({ title: '', url: '', description: '', category: 'WORK_TABLE' as LinkCategory });
   const [error, setError] = useState<string | null>(null);
   const links = state.links.filter((link) => link.role === activeRole);
+
+  useEffect(() => {
+    const applyTarget = (detail: SearchNavigationDetail | null) => {
+      if (!detail || detail.entityType !== 'link' || !detail.role) return;
+      setActiveRole(detail.role);
+    };
+
+    applyTarget(getPendingSearchTarget());
+    const handler = (event: Event) => applyTarget((event as CustomEvent<SearchNavigationDetail>).detail);
+    window.addEventListener(SEARCH_NAVIGATION_EVENT, handler);
+    return () => window.removeEventListener(SEARCH_NAVIGATION_EVENT, handler);
+  }, []);
 
   const reset = () => {
     setEditingId(null);
@@ -708,7 +821,7 @@ export function OwnerLinksManager() {
       </GlassCard>
       <div className="grid md:grid-cols-2 gap-4">
         {links.map((link) => (
-          <GlassCard key={link.id}>
+          <GlassCard key={link.id} data-search-target={searchTarget('link', link.id)}>
             <div className="flex justify-between gap-4">
               <div>
                 <h3 className="text-[#f5f3f0]">{link.title}</h3>

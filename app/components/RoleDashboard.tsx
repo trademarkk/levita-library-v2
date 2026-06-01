@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { DashboardLayout } from './DashboardLayout';
 import { GlassCard } from './GlassCard';
 import { TabNavigation } from './TabNavigation';
@@ -10,6 +10,7 @@ import { roleLabels } from '../domain/labels';
 import { can } from '../domain/permissions';
 import type { Role } from '../domain/types';
 import { CheckSquare, Edit2, ListChecks, Plus, Save, Trash2, X } from 'lucide-react';
+import { SEARCH_NAVIGATION_EVENT, type SearchNavigationDetail } from './searchNavigation';
 
 type RoleDashboardRole = 'ADMIN' | 'SENIOR_TRAINER' | 'TRAINER';
 
@@ -62,6 +63,17 @@ export function RoleDashboard({ role }: RoleDashboardProps) {
   const { currentUser, state } = useLibrary();
   const user = currentUser?.role === role ? currentUser : state.users.find((item) => item.role === role);
   const canManageRoleLinks = can(role, 'create', 'workLinks', { targetRole: role });
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<SearchNavigationDetail>).detail;
+      if (!detail?.tabId || !roleContent[role].tabs.some((tab) => tab.id === detail.tabId)) return;
+      setActiveTab(detail.tabId);
+    };
+
+    window.addEventListener(SEARCH_NAVIGATION_EVENT, handler);
+    return () => window.removeEventListener(SEARCH_NAVIGATION_EVENT, handler);
+  }, [role]);
 
   return (
     <DashboardLayout role={role} userName={user?.name ?? roleLabels[role]}>

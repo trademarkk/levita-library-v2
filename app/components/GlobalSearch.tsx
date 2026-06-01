@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
-import { ExternalLink, Search, Star, X } from 'lucide-react';
+import { Search, Star } from 'lucide-react';
 import { useLibrary } from '../domain/LibraryContext';
-import { formatDate, roleLabels } from '../domain/labels';
+import { roleLabels } from '../domain/labels';
 import { can, knowledgeCategoryResource, visibleContentRolesFor } from '../domain/permissions';
-import type { FavoriteEntityType, Role } from '../domain/types';
+import type { BusinessModelScope, FavoriteEntityType, KnowledgeCategory, LinkCategory, Role } from '../domain/types';
+import { requestSearchNavigation, tabForSearchTarget } from './searchNavigation';
 
 type SearchResult = {
   entityType: FavoriteEntityType;
@@ -13,11 +14,14 @@ type SearchResult = {
   description: string;
   body?: string;
   role?: Role;
+  category?: KnowledgeCategory;
+  businessModel?: BusinessModelScope;
+  linkCategory?: LinkCategory;
   url?: string;
   createdAt?: string;
 };
 
-const categoryLabels = {
+const categoryLabels: Record<KnowledgeCategory, string> = {
   RESPONSIBILITY: 'Обязанность',
   REGULATION: 'Регламент',
   IMPORTANT_INFO: 'Важная информация',
@@ -37,7 +41,6 @@ function matches(result: SearchResult, query: string) {
 export function GlobalSearch() {
   const { state, currentUser, isFavorite, toggleFavorite } = useLibrary();
   const [query, setQuery] = useState('');
-  const [selected, setSelected] = useState<SearchResult | null>(null);
 
   const results = useMemo<SearchResult[]>(() => {
     const role = currentUser?.role ?? 'OWNER';
@@ -56,6 +59,8 @@ export function GlobalSearch() {
           description: `${roleLabels[entry.role]}${entry.isActual === false ? ' · не актуально' : ''}`,
           body: entry.content,
           role: entry.role,
+          category: entry.category,
+          businessModel: entry.businessModel ?? 'ALL',
           createdAt: entry.createdAt,
         })),
       ...state.templates
@@ -68,6 +73,7 @@ export function GlobalSearch() {
           description: `${roleLabels[template.role]}${template.purpose ? ` · ${template.purpose}` : ''}`,
           body: template.body,
           role: template.role,
+          businessModel: template.businessModel ?? 'ALL',
           createdAt: template.createdAt,
         })),
       ...state.links
@@ -80,6 +86,7 @@ export function GlobalSearch() {
           description: link.description ?? roleLabels[link.role],
           body: link.url,
           role: link.role,
+          linkCategory: link.category,
           url: link.url,
           createdAt: link.createdAt,
         })),
@@ -122,7 +129,22 @@ export function GlobalSearch() {
           const favorite = isFavorite(result.entityType, result.entityId);
           return (
             <div className="global-search-row" key={`${result.entityType}:${result.entityId}`}>
-              <button type="button" className="global-search-open" onClick={() => setSelected(result)}>
+              <button
+                type="button"
+                className="global-search-open"
+                onClick={() => {
+                  requestSearchNavigation({
+                    entityType: result.entityType,
+                    entityId: result.entityId,
+                    role: result.role,
+                    category: result.category,
+                    businessModel: result.businessModel,
+                    linkCategory: result.linkCategory,
+                    tabId: tabForSearchTarget(result),
+                  });
+                  setQuery('');
+                }}
+              >
                 <span>{result.kind}</span>
                 <strong>{result.title}</strong>
                 <small>{result.description}</small>
@@ -139,31 +161,7 @@ export function GlobalSearch() {
           );
         })}
       </div>
-
-      {selected && (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setSelected(null)}>
-          <div className="app-modal" onClick={(event) => event.stopPropagation()}>
-            <div className="mb-4 flex items-start justify-between gap-4">
-              <div>
-                <p className="text-xs uppercase tracking-[0.2em] text-[#c9a98d]">{selected.kind}</p>
-                <h2 className="mt-2 text-2xl text-[#f5f3f0]">{selected.title}</h2>
-                <p className="mt-1 text-sm text-[#a89b8f]">{selected.description}</p>
-              </div>
-              <button type="button" onClick={() => setSelected(null)} className="text-[#a89b8f] hover:text-[#f5f3f0]" aria-label="Закрыть">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            {selected.createdAt && <p className="mb-3 text-xs text-[#c9a98d]">{formatDate(selected.createdAt)}</p>}
-            <p className="whitespace-pre-line text-sm leading-relaxed text-[#d8d1c8]">{selected.body}</p>
-            {selected.url && (
-              <a href={selected.url} target="_blank" rel="noreferrer" className="mt-5 inline-flex items-center gap-2 text-[#c9a98d] hover:text-[#f5f3f0]">
-                <ExternalLink className="h-4 w-4" />
-                Открыть ссылку
-              </a>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
+

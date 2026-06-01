@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import { DashboardLayout } from './DashboardLayout';
 import { TabNavigation } from './TabNavigation';
 import { GlassCard } from './GlassCard';
@@ -13,6 +13,7 @@ import { employeeStatusLabels, formatDate, formatTime, roleLabels, studioLabels 
 import { assistantManagedTeamRoles, can } from '../domain/permissions';
 import type { ChecklistControlStatus, EmployeeStatus, Role } from '../domain/types';
 import { BookOpen, CheckSquare, Edit2, FileText, Info, Link as LinkIcon, ListChecks, Plus, Save, Trash2, UserRound, X } from 'lucide-react';
+import { SEARCH_NAVIGATION_EVENT, type SearchNavigationDetail } from './searchNavigation';
 
 export function AssistantDashboard() {
   const [activeTab, setActiveTab] = useState('tasks');
@@ -42,6 +43,18 @@ export function AssistantDashboard() {
     { id: 'training', label: 'Обучение' },
     { id: 'checklist', label: 'Чек-лист дня' },
   ];
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<SearchNavigationDetail>).detail;
+      if (!detail?.tabId || !tabs.some((tab) => tab.id === detail.tabId)) return;
+      setActiveTab(detail.tabId);
+      if (detail.tabId === 'admin-checklists' || detail.tabId === 'control-center') void refreshState();
+    };
+
+    window.addEventListener(SEARCH_NAVIGATION_EVENT, handler);
+    return () => window.removeEventListener(SEARCH_NAVIGATION_EVENT, handler);
+  }, [refreshState, tabs]);
 
   return (
     <DashboardLayout role="ASSISTANT" userName={assistant?.name ?? 'Ассистент'}>
@@ -442,7 +455,7 @@ function Cards({ entries, icon, empty }: { entries: Array<{ id: string; title: s
   return (
     <div className="grid md:grid-cols-2 gap-6">
       {entries.map((card, idx) => (
-        <GlassCard key={card.id} delay={idx * 0.08}>
+        <GlassCard key={card.id} delay={idx * 0.08} data-search-target={`knowledge:${card.id}`}>
           <div className="flex items-start gap-3 mb-3">
             {icon}
             <h3 className="text-xl text-[#f5f3f0]">{card.title}</h3>
@@ -489,7 +502,7 @@ function EditableTemplateList({ templates, draft, setDraft, editingId, startEdit
       </div>
       <div className="space-y-4">
         {templates.map((template: any, idx: number) => (
-          <GlassCard key={template.id} delay={idx * 0.08}>
+          <GlassCard key={template.id} delay={idx * 0.08} data-search-target={`template:${template.id}`}>
             <div className="flex items-start justify-between mb-3">
               <div className="flex items-center gap-3">
                 <FileText className="w-5 h-5 text-[#c9a98d]" />
@@ -553,7 +566,7 @@ function LinksSection() {
         </div>
       </GlassCard>
       {links.map((link, idx) => (
-        <GlassCard key={link.id} delay={idx * 0.08}>
+        <GlassCard key={link.id} delay={idx * 0.08} data-search-target={`link:${link.id}`}>
           <div className="flex items-start gap-3">
             <LinkIcon className="w-5 h-5 text-[#c9a98d] mt-1" />
             <div className="flex-1">
@@ -594,7 +607,7 @@ function DocumentTemplatesSection() {
       </GlassCard>
       <div className="grid md:grid-cols-2 gap-4">
         {state.documentTemplates.map((template, idx) => (
-          <GlassCard key={template.id} delay={idx * 0.06}>
+          <GlassCard key={template.id} delay={idx * 0.06} data-search-target={`documentTemplate:${template.id}`}>
             <div className="flex items-start gap-3">
               <FileText className="w-5 h-5 text-[#c9a98d] mt-1" />
               <div>
@@ -636,7 +649,7 @@ function ContactsSection() {
         </div>
       </GlassCard>
       {state.usefulContacts.map((contact, idx) => (
-        <GlassCard key={contact.id} delay={idx * 0.08}>
+        <GlassCard key={contact.id} delay={idx * 0.08} data-search-target={`usefulContact:${contact.id}`}>
           <div className="flex items-start justify-between gap-3">
             <div className="flex gap-3">
               <UserRound className="w-5 h-5 text-[#c9a98d] mt-1" />
@@ -680,7 +693,7 @@ function TrainingSection() {
         </div>
       </GlassCard>
       {materials.map((material, idx) => (
-        <GlassCard key={material.id} delay={idx * 0.08}>
+        <GlassCard key={material.id} delay={idx * 0.08} data-search-target={`knowledge:${material.id}`}>
           <div className="flex items-center gap-4">
             <BookOpen className="w-5 h-5 text-[#c9a98d]" />
             <div className="min-w-0">

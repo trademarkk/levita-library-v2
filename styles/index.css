@@ -176,6 +176,12 @@ body,
   background: rgb(201 169 141 / 0.12);
 }
 
+[data-search-target].search-target-highlight .glass-card-surface,
+[data-search-target].search-target-highlight {
+  border-color: rgb(201 169 141 / 0.9) !important;
+  box-shadow: 0 0 0 1px rgb(201 169 141 / 0.7), 0 18px 45px rgb(201 169 141 / 0.18);
+}
+
 .financial-table-card {
   position: relative;
   overflow: hidden;
