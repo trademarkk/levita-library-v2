@@ -8,10 +8,13 @@
    - `0002_add_max_report_delivery.sql`
    - `0003_add_checklist_report_studio.sql`
    - `0004_add_max_reminders_queue.sql`
+   - `0005_limit_max_reminders_to_report_slots.sql`
+   - `0006_add_tables_mode_entities.sql`
 3. Скопируйте `SUPABASE_URL` и `SUPABASE_SERVICE_ROLE_KEY`.
 4. Перед первым полноценным запуском перенесите текущее состояние:
    ```bash
-   LEVTIA_STORAGE_DRIVER=supabase npm run supabase:push-state
+   npm run supabase:push-state
+   npm run supabase:migrate-tables
    ```
 
 ## Vercel
@@ -20,6 +23,7 @@
 
 ```bash
 LEVTIA_STORAGE_DRIVER=supabase
+LEVTIA_DATA_MODE=tables
 SUPABASE_URL=...
 SUPABASE_SERVICE_ROLE_KEY=...
 LEVTIA_APP_ORIGIN=https://your-domain.vercel.app
@@ -32,6 +36,8 @@ MAX_API_BASE=https://platform-api.max.ru
 
 CRON_SECRET=generate-a-random-secret
 MAX_REMINDER_RETENTION_DAYS=20
+APP_STATE_BACKUP_RETENTION_DAYS=20
+APP_STATE_BACKUP_MAX_ROWS=50
 
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
@@ -66,7 +72,6 @@ GOOGLE_INCLUDE_TASKS=true
 
 - 13:45 по Москве для отчета 14:00
 - 17:45 по Москве для отчета 18:00
-- 21:45 по Москве для отчета 22:00
 
 Cron endpoint каждую минуту забирает pending-напоминания из Supabase, отправляет их в MAX и помечает как `sent` или `failed`.
 После каждого запуска cron также удаляет из `max_reminders` отправленные и ошибочные записи старше `MAX_REMINDER_RETENTION_DAYS` дней, чтобы бесплатный тариф Supabase не забивался служебной историей.

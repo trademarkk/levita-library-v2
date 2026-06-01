@@ -13,10 +13,12 @@
 ## Что добавлено
 
 - `supabase/migrations/0001_levtia_library_initial.sql` — базовая Supabase/Postgres схема.
+- `supabase/migrations/0002_add_max_report_delivery.sql` ... `0006_add_tables_mode_entities.sql` — дополнительные поля, очередь MAX-напоминаний и таблицы для полноценного режима хранения.
 - `server/api.mjs` — поддержка двух storage backend:
   - `sqlite`
   - `supabase`
 - `scripts/push-state-to-supabase.mjs` — перенос текущего `app_state` из SQLite в Supabase.
+- `scripts/migrate-app-state-to-tables.mjs` — раскладка `app_state` по нормализованным таблицам Supabase.
 - `.env.example` — переменные окружения Supabase.
 - `npm run supabase:push-state` — команда миграции текущего состояния.
 
@@ -49,6 +51,7 @@ supabase db push
 
 ```env
 LEVTIA_STORAGE_DRIVER=supabase
+LEVTIA_DATA_MODE=app_state
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 ```
@@ -59,6 +62,7 @@ Google Calendar переменные оставить как сейчас.
 
 ```bash
 npm run supabase:push-state
+npm run supabase:migrate-tables
 ```
 
 Скрипт читает `data/levtia-library.sqlite` и пишет строку `id = main` в `public.app_state`.

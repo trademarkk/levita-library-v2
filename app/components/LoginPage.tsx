@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { Sparkles, Lock, Mail } from 'lucide-react';
 import { useLibrary } from '../domain/LibraryContext';
@@ -12,31 +12,44 @@ export function LoginPage() {
   const [mode, setMode] = useState<'login' | 'reset'>('login');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const { login, resetPassword } = useLibrary();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setError('');
+    setIsSubmitting(true);
 
-    const result = await login(email, password);
-    if (!result.ok) setError(result.error ?? 'Не удалось войти.');
-    else navigate(result.route ?? '/assistant');
+    try {
+      const result = await login(email, password);
+      if (!result.ok) setError(result.error ?? 'Не удалось войти.');
+      else navigate(result.route ?? '/assistant');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setError('');
     setSuccess('');
+    setIsSubmitting(true);
 
-    const result = await resetPassword(email, newPassword);
-    if (!result.ok) {
-      setError(result.error ?? 'Не удалось изменить пароль.');
-      return;
+    try {
+      const result = await resetPassword(email, newPassword);
+      if (!result.ok) {
+        setError(result.error ?? 'Не удалось изменить пароль.');
+        return;
+      }
+      setPassword(newPassword);
+      setNewPassword('');
+      setMode('login');
+      setSuccess('Пароль изменён. Теперь можно войти с новым паролем.');
+    } finally {
+      setIsSubmitting(false);
     }
-    setPassword(newPassword);
-    setNewPassword('');
-    setMode('login');
-    setSuccess('Пароль изменён. Теперь можно войти с новым паролем.');
   };
 
   return (
@@ -151,9 +164,10 @@ export function LoginPage() {
               {/* Submit button */}
               <button
                 type="submit"
-                className="w-full py-3.5 bg-gradient-to-r from-[#c9a98d] to-[#b88b7a] text-[#0f0e12] rounded-lg hover:shadow-2xl hover:shadow-[#c9a98d]/30 transition-all duration-500"
+                disabled={isSubmitting}
+                className="w-full py-3.5 bg-gradient-to-r from-[#c9a98d] to-[#b88b7a] text-[#0f0e12] rounded-lg hover:shadow-2xl hover:shadow-[#c9a98d]/30 transition-all duration-500 disabled:cursor-wait disabled:opacity-70"
               >
-                {mode === 'login' ? 'Войти' : 'Изменить пароль'}
+                {isSubmitting ? 'Проверяем доступ...' : mode === 'login' ? 'Войти' : 'Изменить пароль'}
               </button>
             </form>
             <button
@@ -166,13 +180,6 @@ export function LoginPage() {
             >
               {mode === 'login' ? 'Восстановить пароль' : 'Вернуться ко входу'}
             </button>
-
-            {/* Back to home */}
-            <div className="mt-8 text-center">
-              <Link to="/" className="text-sm text-[#a89b8f] hover:text-[#c9a98d] transition-colors duration-300">
-                ← На главную
-              </Link>
-            </div>
           </div>
         </motion.div>
       </div>

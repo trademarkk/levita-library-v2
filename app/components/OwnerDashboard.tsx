@@ -3,12 +3,14 @@ import { DashboardLayout } from './DashboardLayout';
 import { TabNavigation } from './TabNavigation';
 import { GlassCard } from './GlassCard';
 import { OwnerLinksManager, OwnerRoleContentManager, OwnerTemplatesManager } from './RoleContent';
-import { CalendarSection, ExpensesSection, FinancialPlanSection } from './SharedPlanningSections';
+import { ExpensesSection, FinancialPlanSection } from './SharedPlanningSections';
 import { TrainerEvaluationSheetsSection, TrainerRatingSection } from './TrainerEvaluationSections';
+import { CallRatingSection } from './CallRatingSection';
 import { useLibrary } from '../domain/LibraryContext';
 import { employeeStatusLabels, formatDate, formatTime, refundStatusLabels, roleLabels, studioLabels } from '../domain/labels';
+import { can } from '../domain/permissions';
 import type { ChecklistControlStatus, EmployeeStatus, KnowledgeCategory, RefundStatus, Role } from '../domain/types';
-import { Activity, AlertCircle, Clock3, DollarSign, Edit2, FileText, Info, Link as LinkIcon, ListChecks, Plus, Save, ShieldCheck, Trash2, X } from 'lucide-react';
+import { Activity, AlertCircle, Clock3, DollarSign, Edit2, FileText, Info, Link as LinkIcon, ListChecks, Plus, Save, ShieldCheck, Trash2, UserRound, X } from 'lucide-react';
 
 const tabs = [
   { id: 'control-center', label: 'Центр контроля' },
@@ -16,10 +18,10 @@ const tabs = [
   { id: 'audit', label: 'Аудит действий' },
   { id: 'team', label: 'Команда' },
   { id: 'financial-plan', label: 'Финансовый план' },
-  { id: 'calendar', label: 'Календарь' },
   { id: 'expenses', label: 'Расходы' },
   { id: 'evaluation-sheets', label: 'Листы оценивания' },
   { id: 'trainer-rating', label: 'Рейтинг тренеров' },
+  { id: 'call-rating', label: 'Рейтинг звонков' },
   { id: 'responsibilities', label: 'Обязанности' },
   { id: 'regulations', label: 'Регламенты' },
   { id: 'info', label: 'Важная информация' },
@@ -27,6 +29,8 @@ const tabs = [
   { id: 'templates', label: 'Шаблоны сообщений' },
   { id: 'document-templates', label: 'Шаблоны документов' },
   { id: 'links', label: 'Рабочие ссылки и таблицы' },
+  { id: 'contacts', label: 'Полезные контакты' },
+  { id: 'training', label: 'Обучение' },
   { id: 'checklists', label: 'Контроль чек-листов' },
   { id: 'calls', label: 'Чек-лист звонка' },
   { id: 'refunds', label: 'Возвраты' },
@@ -60,10 +64,10 @@ export function OwnerDashboard() {
           {activeTab === 'audit' && <AuditLogSection />}
           {activeTab === 'team' && <TeamSection />}
           {activeTab === 'financial-plan' && <FinancialPlanSection />}
-          {activeTab === 'calendar' && <CalendarSection />}
           {activeTab === 'expenses' && <ExpensesSection />}
           {activeTab === 'evaluation-sheets' && <TrainerEvaluationSheetsSection />}
           {activeTab === 'trainer-rating' && <TrainerRatingSection />}
+          {activeTab === 'call-rating' && <CallRatingSection />}
           {activeTab === 'responsibilities' && <OwnerRoleContentManager category="RESPONSIBILITY" />}
           {activeTab === 'regulations' && <OwnerRoleContentManager category="REGULATION" />}
           {activeTab === 'info' && <OwnerRoleContentManager category="IMPORTANT_INFO" />}
@@ -71,6 +75,8 @@ export function OwnerDashboard() {
           {activeTab === 'templates' && <OwnerTemplatesManager />}
           {activeTab === 'document-templates' && <OwnerDocumentTemplatesSection />}
           {activeTab === 'links' && <OwnerLinksManager />}
+          {activeTab === 'contacts' && <OwnerUsefulContactsSection />}
+          {activeTab === 'training' && <OwnerRoleContentManager category="TRAINING" />}
           {activeTab === 'checklists' && <MonitoringSection />}
           {activeTab === 'calls' && <CallsSection />}
           {activeTab === 'refunds' && <RefundsOverviewSection />}
@@ -80,7 +86,7 @@ export function OwnerDashboard() {
   );
 }
 
-function ControlCenterSection() {
+export function ControlCenterSection() {
   const { state, ownerChecklistReports, refreshState } = useLibrary();
   const today = localDateKey();
   const reports = ownerChecklistReports();
@@ -179,7 +185,7 @@ function ControlCenterSection() {
   );
 }
 
-function ShiftJournalSection() {
+export function ShiftJournalSection() {
   const { state } = useLibrary();
   const shifts = [...state.adminShifts].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
 
@@ -215,7 +221,7 @@ function ShiftJournalSection() {
   );
 }
 
-function AuditLogSection() {
+export function AuditLogSection() {
   const { state } = useLibrary();
   const entries = [...(state.auditLog || [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
@@ -261,7 +267,6 @@ function auditActionLabel(action: string) {
     'content.update': 'Редактирование контента',
     'content.delete': 'Удаление контента',
     'finance.update': 'Финансы',
-    'calendar.update': 'Календарь',
   };
   return labels[action] ?? action;
 }
@@ -336,8 +341,8 @@ function TeamSection() {
                 <p className="text-xs text-[#a89b8f] mt-1">{employeeStatusLabels[employee.status]} · c {employee.joinDate}</p>
               </div>
               <div className="flex gap-2">
-                <button onClick={() => openEdit(employee)} className="text-[#a89b8f] hover:text-[#c9a98d]" aria-label={`Редактировать ${employee.name}`}><Edit2 className="w-4 h-4" /></button>
-                {employee.role !== 'OWNER' && <button onClick={() => setDeleteTargetId(employee.id)} className="text-[#a89b8f] hover:text-[#8b3a52]" aria-label={`Удалить ${employee.name}`}><Trash2 className="w-4 h-4" /></button>}
+                {can('OWNER', 'update', 'team', { targetRole: employee.role }) && <button onClick={() => openEdit(employee)} className="text-[#a89b8f] hover:text-[#c9a98d]" aria-label={`Редактировать ${employee.name}`}><Edit2 className="w-4 h-4" /></button>}
+                {can('OWNER', 'delete', 'team', { targetRole: employee.role, ownerProtected: employee.role === 'OWNER' }) && <button onClick={() => setDeleteTargetId(employee.id)} className="text-[#a89b8f] hover:text-[#8b3a52]" aria-label={`Удалить ${employee.name}`}><Trash2 className="w-4 h-4" /></button>}
               </div>
             </div>
           </GlassCard>
@@ -503,6 +508,65 @@ function OwnerDocumentTemplatesSection() {
           </GlassCard>
         ))}
         {state.documentTemplates.length === 0 && <GlassCard><p className="text-[#a89b8f]">Шаблоны документов пока не добавлены.</p></GlassCard>}
+      </div>
+    </div>
+  );
+}
+
+function OwnerUsefulContactsSection() {
+  const { state, createUsefulContact, updateUsefulContact, deleteUsefulContact } = useLibrary();
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ name: '', phone: '', company: '', specialty: '' });
+
+  const reset = () => {
+    setEditingId(null);
+    setDraft({ name: '', phone: '', company: '', specialty: '' });
+  };
+
+  const save = () => {
+    if (!draft.name.trim() || !draft.phone.trim()) return;
+    if (editingId) updateUsefulContact(editingId, draft);
+    else createUsefulContact(draft);
+    reset();
+  };
+
+  return (
+    <div className="space-y-4">
+      <GlassCard>
+        <h3 className="text-xl text-[#f5f3f0] mb-4">{editingId ? 'Редактировать полезный контакт' : 'Добавить полезный контакт'}</h3>
+        <div className="grid md:grid-cols-2 gap-3">
+          <input value={draft.name} onChange={(event) => setDraft((value) => ({ ...value, name: event.target.value }))} placeholder="Имя" className="field" />
+          <input value={draft.phone} onChange={(event) => setDraft((value) => ({ ...value, phone: event.target.value }))} placeholder="Номер" className="field" />
+          <input value={draft.company} onChange={(event) => setDraft((value) => ({ ...value, company: event.target.value }))} placeholder="Компания" className="field" />
+          <textarea value={draft.specialty} onChange={(event) => setDraft((value) => ({ ...value, specialty: event.target.value }))} placeholder="Чем занимаются" className="field min-h-20" />
+        </div>
+        <div className="mt-4 flex flex-wrap gap-3">
+          <button onClick={save} className="primary-action">Сохранить</button>
+          {editingId && <button onClick={reset} className="px-4 py-2 rounded-lg border border-[#c9a98d]/20 text-[#f5f3f0] hover:bg-[#2a2630]">Отмена</button>}
+        </div>
+      </GlassCard>
+
+      <div className="grid md:grid-cols-2 gap-4">
+        {state.usefulContacts.map((contact, idx) => (
+          <GlassCard key={contact.id} delay={idx * 0.06}>
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex gap-3">
+                <UserRound className="w-5 h-5 text-[#c9a98d] mt-1" />
+                <div>
+                  <h3 className="text-[#f5f3f0]">{contact.name}</h3>
+                  <p className="text-sm text-[#c9a98d]">{contact.phone}</p>
+                  <p className="text-sm text-[#a89b8f] mt-2">{contact.company}</p>
+                  <p className="text-sm text-[#a89b8f] mt-1">{contact.specialty}</p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => { setEditingId(contact.id); setDraft({ name: contact.name, phone: contact.phone, company: contact.company, specialty: contact.specialty }); }} className="text-[#a89b8f] hover:text-[#c9a98d]" aria-label={`Редактировать ${contact.name}`}><Edit2 className="w-4 h-4" /></button>
+                <button onClick={() => deleteUsefulContact(contact.id)} className="text-[#a89b8f] hover:text-[#8b3a52]" aria-label={`Удалить ${contact.name}`}><Trash2 className="w-4 h-4" /></button>
+              </div>
+            </div>
+          </GlassCard>
+        ))}
+        {state.usefulContacts.length === 0 && <GlassCard><p className="text-[#a89b8f]">Полезные контакты пока не добавлены.</p></GlassCard>}
       </div>
     </div>
   );

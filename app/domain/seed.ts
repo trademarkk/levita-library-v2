@@ -86,6 +86,7 @@ function createChecklist(userId: string, role: Role, index: number): DailyCheckl
 }
 
 export const initialState: LibraryState = {
+  schemaVersion: 2,
   users: [
     { id: 'user-owner', name: 'Артём Левит', email: 'owner@levita.ru', password: 'owner123', role: 'OWNER', status: 'active', joinDate: 'янв 2024', createdAt: now },
     { id: 'user-assistant', name: 'Анна Ассистент', email: 'assistant@levita.ru', password: 'assistant123', role: 'ASSISTANT', status: 'active', joinDate: 'янв 2025', createdAt: now },
@@ -132,7 +133,6 @@ export const initialState: LibraryState = {
     { id: 'refund-2', clientName: 'Петрова Дарья', requestedAt: '2026-05-10T10:30:00.000+03:00', amount: 7500, reason: 'Смена графика', status: 'NEW', comment: 'Ожидает решения по переносу.', createdAt: now },
   ],
   financialPlans: [],
-  calendarEvents: [],
   expenseCategories: [
     { id: 'expense-category-1', name: 'Аренда', createdAt: now },
     { id: 'expense-category-2', name: 'Маркетинг', createdAt: now },
@@ -144,6 +144,9 @@ export const initialState: LibraryState = {
     { id: 'trainer-evaluation-2', trainerName: 'Мила Тренер', studio: 'MACHUGI', direction: 'Растяжка', score: 9.1, evaluatedAt: '2026-05-14', sheetUrl: 'https://docs.google.com/spreadsheets/', createdAt: now, createdById: 'user-assistant' },
     { id: 'trainer-evaluation-3', trainerName: 'Мила Тренер', studio: 'MACHUGI', direction: 'Балет', score: 8.4, evaluatedAt: '2026-05-21', sheetUrl: 'https://docs.google.com/spreadsheets/', createdAt: now, createdById: 'user-senior-trainer' },
   ],
+  callReviews: [],
+  favorites: [],
+  readReceipts: [],
   callChecklist: [
     'Поздороваться и назвать студию',
     'Уточнить цель клиента',

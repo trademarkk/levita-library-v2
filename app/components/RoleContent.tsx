@@ -1,12 +1,14 @@
 import { useMemo, useState } from 'react';
-import { BookOpen, Edit2, FileText, Info, Link as LinkIcon, Plus, Save, Shield, Trash2, X } from 'lucide-react';
+import { BookOpen, CheckCircle2, Edit2, FileText, Info, Link as LinkIcon, Plus, Save, Shield, Star, Trash2, X } from 'lucide-react';
 import { GlassCard } from './GlassCard';
 import { TabNavigation } from './TabNavigation';
 import { useLibrary } from '../domain/LibraryContext';
 import { formatDate, roleLabels } from '../domain/labels';
-import type { BusinessModelScope, HelpfulLink, KnowledgeCategory, KnowledgeEntry, LinkCategory, Role } from '../domain/types';
+import { knowledgeCategoryResource, manageableContentRolesFor, managedContentRoles, visibleContentRolesFor } from '../domain/permissions';
+import type { BusinessModelScope, FavoriteEntityType, HelpfulLink, KnowledgeCategory, KnowledgeEntry, LinkCategory, Role } from '../domain/types';
 
-export const managedRoles: Role[] = ['ASSISTANT', 'ADMIN', 'SENIOR_ADMIN', 'TRAINER', 'SENIOR_TRAINER'];
+export const managedRoles = managedContentRoles;
+const messageTemplateManagedRoles = managedContentRoles.filter((role) => role !== 'TRAINER' && role !== 'SENIOR_TRAINER');
 
 const roleContentLabels: Record<Role, string> = {
   OWNER: 'руководителя',
@@ -41,13 +43,19 @@ function tabsFor(category: KnowledgeCategory) {
         ? `Регламенты для ${roleContentLabels[role]}`
         : category === 'IMPORTANT_INFO'
           ? `Информация для ${roleContentLabels[role]}`
-          : `База знаний для ${roleContentLabels[role]}`;
+          : category === 'TRAINING'
+            ? `Обучение для ${roleContentLabels[role]}`
+            : `База знаний для ${roleContentLabels[role]}`;
     return { id: role, label };
   });
 }
 
 function roleTabs(label: string) {
   return managedRoles.map((role) => ({ id: role, label: `${label} ${roleContentLabels[role]}` }));
+}
+
+function roleTabsForRoles(label: string, roles: Role[]) {
+  return roles.map((role) => ({ id: role, label: `${label} ${roleContentLabels[role]}` }));
 }
 
 const businessModelLabels: Record<BusinessModelScope, string> = {
@@ -118,16 +126,74 @@ function BusinessModelFilter({ value, onChange }: { value: BusinessModelScope; o
   );
 }
 
+function FavoriteButton({ entityType, entityId, label }: { entityType: FavoriteEntityType; entityId: string; label: string }) {
+  const { isFavorite, toggleFavorite } = useLibrary();
+  const favorite = isFavorite(entityType, entityId);
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        toggleFavorite(entityType, entityId);
+      }}
+      className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition-colors ${favorite ? 'border-[#c9a98d]/50 bg-[#c9a98d]/22 text-[#c9a98d]' : 'border-[#c9a98d]/15 text-[#a89b8f] hover:border-[#c9a98d]/35 hover:text-[#c9a98d]'}`}
+      aria-label={favorite ? `Убрать из избранного: ${label}` : `Добавить в избранное: ${label}`}
+      title={favorite ? 'Убрать из избранного' : 'Добавить в избранное'}
+    >
+      <Star className="h-4 w-4" fill={favorite ? 'currentColor' : 'none'} />
+    </button>
+  );
+}
+
+type FavoriteScopeFilterValue = 'all' | 'favorites';
+
+function FavoriteScopeFilter({
+  value,
+  onChange,
+  favoriteCount,
+}: {
+  value: FavoriteScopeFilterValue;
+  onChange: (value: FavoriteScopeFilterValue) => void;
+  favoriteCount: number;
+}) {
+  const options: { value: FavoriteScopeFilterValue; label: string }[] = [
+    { value: 'all', label: 'Все' },
+    { value: 'favorites', label: favoriteCount > 0 ? `Избранное (${favoriteCount})` : 'Избранное' },
+  ];
+
+  return (
+    <div className="mb-5 flex flex-wrap gap-2">
+      {options.map((option) => {
+        const active = value === option.value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => onChange(option.value)}
+            className={`rounded-full border px-4 py-2 text-sm transition-colors ${active ? 'border-[#c9a98d] bg-[#c9a98d]/24 text-[#f5f3f0]' : 'border-[#c9a98d]/15 text-[#a89b8f] hover:bg-[#2a2630]'}`}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function RoleContentViewer({ role, category }: { role: Role; category: KnowledgeCategory }) {
-  const { state } = useLibrary();
+  const { state, currentUser, isFavorite, markKnowledgeAsRead, knowledgeReadReceipt } = useLibrary();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [businessModelFilter, setBusinessModelFilter] = useState<BusinessModelScope>('ALL');
+  const [favoriteFilter, setFavoriteFilter] = useState<FavoriteScopeFilterValue>('all');
   const hasBusinessModelFilter = supportsBusinessModel(category);
-  const entries = state.knowledge.filter((entry) => (
-    entry.role === role
+  const visibleRoles = visibleContentRolesFor(role, knowledgeCategoryResource(category));
+  const baseEntries = state.knowledge.filter((entry) => (
+    visibleRoles.includes(entry.role)
     && entry.category === category
     && (!hasBusinessModelFilter || businessModelMatches(entry.businessModel, businessModelFilter))
   ));
+  const favoriteCount = baseEntries.filter((entry) => isFavorite('knowledge', entry.id)).length;
+  const entries = favoriteFilter === 'favorites' ? baseEntries.filter((entry) => isFavorite('knowledge', entry.id)) : baseEntries;
   const selected = entries.find((entry) => entry.id === selectedId) ?? null;
 
   if (selected && (category === 'REGULATION' || category === 'KNOWLEDGE')) {
@@ -141,6 +207,18 @@ export function RoleContentViewer({ role, category }: { role: Role; category: Kn
           <h2 className="text-2xl text-[#f5f3f0] mb-4">{selected.title}</h2>
           <div className="mb-4"><BusinessModelBadge value={selected.businessModel} /></div>
           <p className="text-[#a89b8f] leading-relaxed whitespace-pre-line">{selected.content}</p>
+          <div className="mt-5 flex flex-wrap gap-3">
+            <FavoriteButton entityType="knowledge" entityId={selected.id} label={selected.title} />
+            {category === 'IMPORTANT_INFO' && currentUser && (
+              <button
+                type="button"
+                onClick={() => markKnowledgeAsRead(selected.id)}
+                className="rounded-lg border border-[#c9a98d]/20 px-4 py-2 text-[#f5f3f0] hover:bg-[#2a2630]"
+              >
+                {knowledgeReadReceipt(selected.id) ? 'Ознакомление подтверждено' : 'Я ознакомлен'}
+              </button>
+            )}
+          </div>
         </GlassCard>
       </div>
     );
@@ -148,44 +226,66 @@ export function RoleContentViewer({ role, category }: { role: Role; category: Kn
 
   if (category === 'RESPONSIBILITY') {
     return (
-      <GlassCard>
-        <h2 className="text-2xl text-[#f5f3f0] mb-5">Обязанности</h2>
-        {entries.length === 0 && <p className="text-[#a89b8f]">{categoryEmpty[category]}</p>}
-        <ul className="space-y-3">
-          {entries.map((entry) => (
-            <li key={entry.id} className="flex items-start gap-3 rounded-lg bg-[#2a2630]/55 p-3">
-              <span className="mt-2 h-2 w-2 rounded-full bg-[#c9a98d]" />
-              <span className="text-[#f5f3f0]">{entry.title}</span>
-            </li>
-          ))}
-        </ul>
-      </GlassCard>
+      <div>
+        <FavoriteScopeFilter value={favoriteFilter} onChange={setFavoriteFilter} favoriteCount={favoriteCount} />
+        <GlassCard>
+          <h2 className="text-2xl text-[#f5f3f0] mb-5">Обязанности</h2>
+          {entries.length === 0 && <p className="text-[#a89b8f]">{favoriteFilter === 'favorites' ? 'В избранном пока нет материалов этой вкладки.' : categoryEmpty[category]}</p>}
+          <ul className="space-y-3">
+            {entries.map((entry) => (
+              <li key={entry.id} className="flex items-start gap-3 rounded-lg bg-[#2a2630]/55 p-3">
+                <span className="mt-2 h-2 w-2 rounded-full bg-[#c9a98d]" />
+                <span className="text-[#f5f3f0]">{entry.title}</span>
+                <FavoriteButton entityType="knowledge" entityId={entry.id} label={entry.title} />
+              </li>
+            ))}
+          </ul>
+        </GlassCard>
+      </div>
     );
   }
 
   return (
     <>
+    <FavoriteScopeFilter value={favoriteFilter} onChange={(value) => { setFavoriteFilter(value); setSelectedId(null); }} favoriteCount={favoriteCount} />
     {hasBusinessModelFilter && <BusinessModelFilter value={businessModelFilter} onChange={(value) => { setBusinessModelFilter(value); setSelectedId(null); }} />}
     <div className="grid md:grid-cols-2 gap-5">
-      {entries.length === 0 && <GlassCard><p className="text-[#a89b8f]">{categoryEmpty[category]}</p></GlassCard>}
+      {entries.length === 0 && <GlassCard><p className="text-[#a89b8f]">{favoriteFilter === 'favorites' ? 'В избранном пока нет материалов этой вкладки.' : categoryEmpty[category]}</p></GlassCard>}
       {entries.map((entry, index) => (
         <GlassCard key={entry.id} delay={index * 0.05}>
           <div className="flex items-start gap-3 mb-3">
             {category === 'REGULATION' ? <Shield className="w-5 h-5 text-[#c9a98d] mt-1" /> : category === 'KNOWLEDGE' ? <BookOpen className="w-5 h-5 text-[#c9a98d] mt-1" /> : <Info className="w-5 h-5 text-[#c9a98d] mt-1" />}
             <div className="flex-1">
-              <h3 className="text-xl text-[#f5f3f0]">{entry.title}</h3>
-              <div className="mt-2"><BusinessModelBadge value={entry.businessModel} /></div>
+              <div className="flex items-start justify-between gap-3">
+                <h3 className="text-xl text-[#f5f3f0]">{entry.title}</h3>
+                <FavoriteButton entityType="knowledge" entityId={entry.id} label={entry.title} />
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <BusinessModelBadge value={entry.businessModel} />
+                {visibleRoles.length > 1 && <span className="rounded-full border border-[#c9a98d]/20 px-2.5 py-1 text-xs text-[#a89b8f]">{roleLabels[entry.role]}</span>}
+              </div>
               {category === 'IMPORTANT_INFO' && (
                 <div className="mt-2 flex flex-wrap gap-2 text-xs">
                   <span className="rounded-full bg-[#c9a98d]/15 px-2 py-1 text-[#c9a98d]">{formatDate(entry.createdAt)}</span>
                   <span className={`rounded-full px-2 py-1 ${entry.isActual === false ? 'bg-[#8b3a52]/25 text-[#f0c5cf]' : 'bg-[#5e6d58]/30 text-[#d8e0d2]'}`}>
                     {entry.isActual === false ? 'не актуально' : 'актуально'}
                   </span>
+                  {knowledgeReadReceipt(entry.id) && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-[#5e6d58]/30 px-2 py-1 text-[#d8e0d2]">
+                      <CheckCircle2 className="h-3 w-3" />
+                      ознакомлен
+                    </span>
+                  )}
                 </div>
               )}
             </div>
           </div>
           <p className="text-sm text-[#a89b8f] leading-relaxed whitespace-pre-line">{entry.content}</p>
+          {category === 'IMPORTANT_INFO' && currentUser && (
+            <button onClick={() => markKnowledgeAsRead(entry.id)} className="mt-4 px-4 py-2 rounded-lg border border-[#c9a98d]/20 text-[#f5f3f0] hover:bg-[#2a2630]">
+              {knowledgeReadReceipt(entry.id) ? 'Обновить отметку ознакомления' : 'Я ознакомлен'}
+            </button>
+          )}
           {(category === 'REGULATION' || category === 'KNOWLEDGE') && (
             <button onClick={() => setSelectedId(entry.id)} className="mt-4 px-4 py-2 rounded-lg bg-[#c9a98d]/20 text-[#c9a98d] hover:bg-[#c9a98d]/30">
               Открыть
@@ -199,22 +299,31 @@ export function RoleContentViewer({ role, category }: { role: Role; category: Kn
 }
 
 export function RoleTemplatesViewer({ role }: { role: Role }) {
-  const { state } = useLibrary();
+  const { state, isFavorite } = useLibrary();
   const [businessModelFilter, setBusinessModelFilter] = useState<BusinessModelScope>('ALL');
-  const templates = state.templates.filter((template) => template.role === role && businessModelMatches(template.businessModel, businessModelFilter));
+  const [favoriteFilter, setFavoriteFilter] = useState<FavoriteScopeFilterValue>('all');
+  const visibleRoles = visibleContentRolesFor(role, 'messageTemplates');
+  const baseTemplates = state.templates.filter((template) => visibleRoles.includes(template.role) && businessModelMatches(template.businessModel, businessModelFilter));
+  const favoriteCount = baseTemplates.filter((template) => isFavorite('template', template.id)).length;
+  const templates = favoriteFilter === 'favorites' ? baseTemplates.filter((template) => isFavorite('template', template.id)) : baseTemplates;
 
   return (
     <div className="space-y-4">
+      <FavoriteScopeFilter value={favoriteFilter} onChange={setFavoriteFilter} favoriteCount={favoriteCount} />
       <BusinessModelFilter value={businessModelFilter} onChange={setBusinessModelFilter} />
-      {templates.length === 0 && <GlassCard><p className="text-[#a89b8f]">Для этой роли пока нет шаблонов сообщений.</p></GlassCard>}
+      {templates.length === 0 && <GlassCard><p className="text-[#a89b8f]">{favoriteFilter === 'favorites' ? 'В избранном пока нет шаблонов этой вкладки.' : 'Для этой роли пока нет шаблонов сообщений.'}</p></GlassCard>}
       {templates.map((template, index) => (
         <GlassCard key={template.id} delay={index * 0.05}>
           <div className="flex gap-3">
             <FileText className="w-5 h-5 text-[#c9a98d] mt-1" />
             <div>
-              <h3 className="text-lg text-[#f5f3f0]">{template.title}</h3>
+              <div className="flex items-start justify-between gap-3">
+                <h3 className="text-lg text-[#f5f3f0]">{template.title}</h3>
+                <FavoriteButton entityType="template" entityId={template.id} label={template.title} />
+              </div>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <BusinessModelBadge value={template.businessModel} />
+                {visibleRoles.length > 1 && <span className="rounded-full border border-[#c9a98d]/20 px-2.5 py-1 text-xs text-[#a89b8f]">{roleLabels[template.role]}</span>}
                 <p className="text-xs text-[#c9a98d]">{template.purpose}</p>
               </div>
               <p className="text-sm text-[#a89b8f] mt-3 whitespace-pre-line">{template.body}</p>
@@ -227,30 +336,184 @@ export function RoleTemplatesViewer({ role }: { role: Role }) {
 }
 
 export function RoleLinksViewer({ role }: { role: Role }) {
-  const { state } = useLibrary();
-  const links = state.links.filter((link) => link.role === role);
+  const { state, isFavorite } = useLibrary();
+  const [favoriteFilter, setFavoriteFilter] = useState<FavoriteScopeFilterValue>('all');
+  const visibleRoles = visibleContentRolesFor(role, 'workLinks');
+  const baseLinks = state.links.filter((link) => visibleRoles.includes(link.role));
+  const favoriteCount = baseLinks.filter((link) => isFavorite('link', link.id)).length;
+  const links = favoriteFilter === 'favorites' ? baseLinks.filter((link) => isFavorite('link', link.id)) : baseLinks;
 
   return (
-    <div className="grid md:grid-cols-2 gap-4">
-      {links.length === 0 && <GlassCard><p className="text-[#a89b8f]">Для этой роли пока нет рабочих ссылок.</p></GlassCard>}
-      {links.map((link, index) => (
-        <GlassCard key={link.id} delay={index * 0.05}>
-          <div className="flex gap-3">
-            <LinkIcon className="w-5 h-5 text-[#c9a98d] mt-1" />
-            <div>
-              <h3 className="text-[#f5f3f0]">{link.title}</h3>
-              <a href={link.url} className="text-sm text-[#a89b8f] hover:text-[#c9a98d] break-all">{link.url}</a>
-              <p className="text-sm text-[#a89b8f] mt-2">{link.description}</p>
+    <div>
+      <FavoriteScopeFilter value={favoriteFilter} onChange={setFavoriteFilter} favoriteCount={favoriteCount} />
+      <div className="grid md:grid-cols-2 gap-4">
+        {links.length === 0 && <GlassCard><p className="text-[#a89b8f]">{favoriteFilter === 'favorites' ? 'В избранном пока нет ссылок этой вкладки.' : 'Для этой роли пока нет рабочих ссылок.'}</p></GlassCard>}
+        {links.map((link, index) => (
+          <GlassCard key={link.id} delay={index * 0.05}>
+            <div className="flex gap-3">
+              <LinkIcon className="w-5 h-5 text-[#c9a98d] mt-1" />
+              <div>
+                <div className="flex items-start justify-between gap-3">
+                  <h3 className="text-[#f5f3f0]">{link.title}</h3>
+                  <FavoriteButton entityType="link" entityId={link.id} label={link.title} />
+                </div>
+                {visibleRoles.length > 1 && <p className="mt-1 text-xs text-[#c9a98d]">{roleLabels[link.role]}</p>}
+                <a href={link.url} className="text-sm text-[#a89b8f] hover:text-[#c9a98d] break-all">{link.url}</a>
+                <p className="text-sm text-[#a89b8f] mt-2">{link.description}</p>
+              </div>
             </div>
-          </div>
-        </GlassCard>
-      ))}
+          </GlassCard>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function RoleTemplatesManager({ role }: { role: Role }) {
+  const { state, createTemplate, updateTemplate, deleteTemplate } = useLibrary();
+  const manageableRoles = manageableContentRolesFor(role, 'messageTemplates');
+  const [activeRole, setActiveRole] = useState<Role>(manageableRoles[0] ?? role);
+  const [businessModelFilter, setBusinessModelFilter] = useState<BusinessModelScope>('ALL');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ title: '', purpose: '', body: '', businessModel: 'ALL' as BusinessModelScope });
+  const templates = state.templates.filter((template) => manageableRoles.includes(template.role) && businessModelMatches(template.businessModel, businessModelFilter));
+
+  const reset = () => {
+    setEditingId(null);
+    setDraft({ title: '', purpose: '', body: '', businessModel: 'ALL' });
+  };
+
+  const save = () => {
+    if (!draft.title.trim() || !draft.body.trim()) return;
+    if (editingId) updateTemplate(editingId, { ...draft, role: activeRole });
+    else createTemplate({ ...draft, role: activeRole });
+    reset();
+  };
+
+  return (
+    <div className="space-y-5">
+      <BusinessModelFilter value={businessModelFilter} onChange={setBusinessModelFilter} />
+      <GlassCard>
+        <h3 className="text-xl text-[#f5f3f0] mb-4">{editingId ? 'Редактировать шаблон' : 'Добавить шаблон сообщения'}</h3>
+        <div className="grid md:grid-cols-2 gap-3">
+          <select value={activeRole} onChange={(event) => setActiveRole(event.target.value as Role)} className="field">
+            {manageableRoles.map((item) => <option key={item} value={item}>{roleLabels[item]}</option>)}
+          </select>
+          <input value={draft.title} onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))} placeholder="Название шаблона" className="field" />
+          <input value={draft.purpose} onChange={(event) => setDraft((value) => ({ ...value, purpose: event.target.value }))} placeholder="Назначение" className="field" />
+          <BusinessModelSelect value={draft.businessModel} onChange={(businessModel) => setDraft((value) => ({ ...value, businessModel }))} />
+          <textarea value={draft.body} onChange={(event) => setDraft((value) => ({ ...value, body: event.target.value }))} placeholder="Текст шаблона" className="field md:col-span-2 min-h-28" />
+        </div>
+        {error && <p className="mt-3 text-sm text-[#f0c5cf]">{error}</p>}
+        <div className="mt-4 flex flex-wrap gap-3">
+          <button onClick={save} className="primary-action flex items-center gap-2"><Save className="w-4 h-4" />Сохранить</button>
+          {editingId && <button onClick={reset} className="px-4 py-2 rounded-lg border border-[#c9a98d]/20 text-[#f5f3f0] hover:bg-[#2a2630] flex items-center gap-2"><X className="w-4 h-4" />Отмена</button>}
+        </div>
+      </GlassCard>
+
+      <div className="space-y-4">
+        {templates.length === 0 && <GlassCard><p className="text-[#a89b8f]">Шаблоны для этих ролей пока не добавлены.</p></GlassCard>}
+        {templates.map((template) => (
+          <GlassCard key={template.id}>
+            <div className="flex justify-between gap-4">
+              <div>
+                <h3 className="text-lg text-[#f5f3f0]">{template.title}</h3>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <BusinessModelBadge value={template.businessModel} />
+                  <span className="rounded-full border border-[#c9a98d]/20 px-2.5 py-1 text-xs text-[#a89b8f]">{roleLabels[template.role]}</span>
+                  <p className="text-xs text-[#c9a98d]">{template.purpose}</p>
+                </div>
+                <p className="text-sm text-[#a89b8f] mt-3 whitespace-pre-line">{template.body}</p>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => { setEditingId(template.id); setActiveRole(template.role); setDraft({ title: template.title, purpose: template.purpose ?? '', body: template.body, businessModel: template.businessModel ?? 'ALL' }); }} className="text-[#a89b8f] hover:text-[#c9a98d]" aria-label={`Редактировать ${template.title}`}><Edit2 className="w-4 h-4" /></button>
+                <button onClick={() => deleteTemplate(template.id)} className="text-[#a89b8f] hover:text-[#8b3a52]" aria-label={`Удалить ${template.title}`}><Trash2 className="w-4 h-4" /></button>
+              </div>
+            </div>
+          </GlassCard>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function RoleLinksManager({ role }: { role: Role }) {
+  const { state, createLink, updateLink, deleteLink } = useLibrary();
+  const manageableRoles = manageableContentRolesFor(role, 'workLinks');
+  const [activeRole, setActiveRole] = useState<Role>(manageableRoles[0] ?? role);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ title: '', url: '', description: '', category: 'WORK_TABLE' as LinkCategory });
+  const [error, setError] = useState<string | null>(null);
+  const links = state.links.filter((link) => manageableRoles.includes(link.role));
+
+  const reset = () => {
+    setEditingId(null);
+    setDraft({ title: '', url: '', description: '', category: 'WORK_TABLE' });
+  };
+
+  const save = () => {
+    if (!draft.title.trim()) {
+      setError('Укажите название.');
+      return;
+    }
+    if (!draft.url.trim()) {
+      setError('Поле ссылки обязательно.');
+      return;
+    }
+    setError(null);
+    if (editingId) updateLink(editingId, { ...draft, role: activeRole });
+    else createLink({ ...draft, role: activeRole });
+    reset();
+  };
+
+  return (
+    <div className="space-y-5">
+      <GlassCard>
+        <h3 className="text-xl text-[#f5f3f0] mb-4">{editingId ? 'Редактировать ссылку' : 'Добавить рабочую ссылку или таблицу'}</h3>
+        <div className="grid md:grid-cols-2 gap-3">
+          <select value={activeRole} onChange={(event) => setActiveRole(event.target.value as Role)} className="field">
+            {manageableRoles.map((item) => <option key={item} value={item}>{roleLabels[item]}</option>)}
+          </select>
+          <select value={draft.category} onChange={(event) => setDraft((value) => ({ ...value, category: event.target.value as LinkCategory }))} className="field">
+            <option value="WORK_TABLE">Рабочая таблица</option>
+            <option value="TRAINING">Обучение</option>
+            <option value="HELPFUL">Полезная ссылка</option>
+          </select>
+          <input value={draft.title} onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))} placeholder="Название" className="field" />
+          <input value={draft.url} onChange={(event) => setDraft((value) => ({ ...value, url: event.target.value }))} placeholder="https://..." className="field" />
+          <textarea value={draft.description} onChange={(event) => setDraft((value) => ({ ...value, description: event.target.value }))} placeholder="Описание" className="field md:col-span-2 min-h-24" />
+        </div>
+        <div className="mt-4 flex flex-wrap gap-3">
+          <button onClick={save} className="primary-action flex items-center gap-2"><Save className="w-4 h-4" />Сохранить</button>
+          {editingId && <button onClick={reset} className="px-4 py-2 rounded-lg border border-[#c9a98d]/20 text-[#f5f3f0] hover:bg-[#2a2630] flex items-center gap-2"><X className="w-4 h-4" />Отмена</button>}
+        </div>
+      </GlassCard>
+
+      <div className="grid md:grid-cols-2 gap-4">
+        {links.length === 0 && <GlassCard><p className="text-[#a89b8f]">Рабочие ссылки для этих ролей пока не добавлены.</p></GlassCard>}
+        {links.map((link) => (
+          <GlassCard key={link.id}>
+            <div className="flex justify-between gap-4">
+              <div>
+                <h3 className="text-[#f5f3f0]">{link.title}</h3>
+                <p className="mt-1 text-xs text-[#c9a98d]">{roleLabels[link.role]}</p>
+                <a href={link.url} className="text-sm text-[#a89b8f] hover:text-[#c9a98d] break-all">{link.url}</a>
+                <p className="text-sm text-[#a89b8f] mt-2">{link.description}</p>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => { setEditingId(link.id); setActiveRole(link.role); setDraft({ title: link.title, url: link.url, description: link.description ?? '', category: link.category }); }} className="text-[#a89b8f] hover:text-[#c9a98d]" aria-label={`Редактировать ${link.title}`}><Edit2 className="w-4 h-4" /></button>
+                <button onClick={() => deleteLink(link.id)} className="text-[#a89b8f] hover:text-[#8b3a52]" aria-label={`Удалить ${link.title}`}><Trash2 className="w-4 h-4" /></button>
+              </div>
+            </div>
+          </GlassCard>
+        ))}
+      </div>
     </div>
   );
 }
 
 export function OwnerRoleContentManager({ category }: { category: KnowledgeCategory }) {
-  const { state, createKnowledge, updateKnowledge, deleteKnowledge } = useLibrary();
+  const { state, createKnowledge, updateKnowledge, deleteKnowledge, knowledgeReadCount } = useLibrary();
   const [activeRole, setActiveRole] = useState<Role>('ASSISTANT');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState({ title: '', content: '', isActual: true, businessModel: 'ALL' as BusinessModelScope });
@@ -309,10 +572,13 @@ export function OwnerRoleContentManager({ category }: { category: KnowledgeCateg
           <GlassCard key={entry.id} delay={index * 0.04}>
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h3 className="text-lg text-[#f5f3f0]">{entry.title}</h3>
+                <div className="flex items-start gap-3">
+                  <h3 className="text-lg text-[#f5f3f0]">{entry.title}</h3>
+                  <FavoriteButton entityType="knowledge" entityId={entry.id} label={entry.title} />
+                </div>
                 {hasBusinessModel && <div className="mt-2"><BusinessModelBadge value={entry.businessModel} /></div>}
                 {category === 'IMPORTANT_INFO' && (
-                  <p className="text-xs text-[#c9a98d] mt-1">{formatDate(entry.createdAt)} · {entry.isActual === false ? 'не актуально' : 'актуально'}</p>
+                  <p className="text-xs text-[#c9a98d] mt-1">{formatDate(entry.createdAt)} · {entry.isActual === false ? 'не актуально' : 'актуально'} · ознакомились: {knowledgeReadCount(entry.id)}</p>
                 )}
                 {category !== 'RESPONSIBILITY' && <p className="text-sm text-[#a89b8f] mt-3 whitespace-pre-line">{entry.content}</p>}
               </div>
@@ -349,7 +615,7 @@ export function OwnerTemplatesManager() {
 
   return (
     <div className="space-y-5">
-      <TabNavigation tabs={roleTabs('Шаблоны')} activeTab={activeRole} onTabChange={(role) => { setActiveRole(role as Role); reset(); }} />
+      <TabNavigation tabs={roleTabsForRoles('Шаблоны', messageTemplateManagedRoles)} activeTab={activeRole} onTabChange={(role) => { setActiveRole(role as Role); reset(); }} />
       <GlassCard>
         <h3 className="text-xl text-[#f5f3f0] mb-4">{editingId ? 'Редактировать шаблон' : 'Новый шаблон'}: {roleLabels[activeRole]}</h3>
         <div className="grid md:grid-cols-2 gap-3">
@@ -389,6 +655,7 @@ export function OwnerLinksManager() {
   const [activeRole, setActiveRole] = useState<Role>('ASSISTANT');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState({ title: '', url: '', description: '', category: 'WORK_TABLE' as LinkCategory });
+  const [error, setError] = useState<string | null>(null);
   const links = state.links.filter((link) => link.role === activeRole);
 
   const reset = () => {
@@ -397,7 +664,15 @@ export function OwnerLinksManager() {
   };
 
   const save = () => {
-    if (!draft.title.trim() || !draft.url.trim()) return;
+    if (!draft.title.trim()) {
+      setError('Укажите название.');
+      return;
+    }
+    if (!draft.url.trim()) {
+      setError('Поле ссылки обязательно.');
+      return;
+    }
+    setError(null);
     if (editingId) updateLink(editingId, { ...draft, role: activeRole });
     else createLink({ ...draft, role: activeRole });
     reset();
@@ -418,6 +693,7 @@ export function OwnerLinksManager() {
           </select>
           <textarea value={draft.description} onChange={(event) => setDraft((value) => ({ ...value, description: event.target.value }))} placeholder="Описание" className="field md:col-span-2 min-h-24" />
         </div>
+        {error && <p className="mt-3 text-sm text-[#f0c5cf]">{error}</p>}
         <button onClick={save} className="primary-action mt-4">Сохранить</button>
       </GlassCard>
       <div className="grid md:grid-cols-2 gap-4">

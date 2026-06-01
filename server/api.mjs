@@ -3,8 +3,9 @@ import { pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DatabaseSync } from 'node:sqlite';
 import { createClient } from '@supabase/supabase-js';
+import { readStateFromTables, writeStateToTables } from './table-state.mjs';
+import { applyPrismaMutation, createPrisma, readStateFromPrisma } from './prisma-state.mjs';
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const dataDir = join(rootDir, 'data');
@@ -39,10 +40,15 @@ const MAX_REPORT_REMINDER_SLOTS = ['14:00', '18:00'];
 const MAX_REPORT_REPEAT_MINUTES = 15;
 const CRON_SECRET = process.env.CRON_SECRET || '';
 const MAX_REMINDER_RETENTION_DAYS = Number(process.env.MAX_REMINDER_RETENTION_DAYS || 20);
+const APP_STATE_BACKUP_RETENTION_DAYS = Number(process.env.APP_STATE_BACKUP_RETENTION_DAYS || 20);
+const APP_STATE_BACKUP_MAX_ROWS = Number(process.env.APP_STATE_BACKUP_MAX_ROWS || 50);
 const STORAGE_DRIVER = process.env.LEVTIA_STORAGE_DRIVER || 'sqlite';
+const DATA_MODE = process.env.LEVTIA_DATA_MODE || 'app_state';
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const useSupabase = STORAGE_DRIVER === 'supabase';
+const useSupabaseTables = useSupabase && DATA_MODE === 'tables';
+const usePrismaState = useSupabase && DATA_MODE === 'prisma';
 
 if (useSupabase && (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY)) {
   throw new Error('Supabase storage requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.');
@@ -52,7 +58,9 @@ if (!useSupabase) {
   mkdirSync(dataDir, { recursive: true });
 }
 
+const DatabaseSync = useSupabase ? null : (await import('node:sqlite')).DatabaseSync;
 const db = useSupabase ? null : new DatabaseSync(dbPath);
+const prisma = usePrismaState ? createPrisma() : null;
 const supabase = useSupabase
   ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
       auth: { persistSession: false, autoRefreshToken: false },
@@ -65,6 +73,13 @@ if (db) {
       id TEXT PRIMARY KEY,
       payload TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS app_state_backups (
+      id TEXT PRIMARY KEY,
+      state_id TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      backed_up_at TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS google_calendar_tokens (
@@ -87,7 +102,7 @@ if (db) {
       shift_id TEXT NOT NULL,
       admin_name TEXT NOT NULL,
       studio TEXT NOT NULL CHECK (studio IN ('STAVROPOLSKAYA', 'MACHUGI')),
-      report_slot TEXT NOT NULL CHECK (report_slot IN ('14:00', '18:00', '22:00')),
+      report_slot TEXT NOT NULL CHECK (report_slot IN ('14:00', '18:00')),
       scheduled_at TEXT NOT NULL,
       message_text TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'sent', 'failed')),
@@ -134,8 +149,8 @@ function send(response, statusCode, payload) {
   response.writeHead(statusCode, {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET,PUT,POST,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Methods': 'GET,PUT,POST,PATCH,DELETE,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-LEVTIA-SYNC-TOKEN',
   });
   response.end(JSON.stringify(payload));
 }
@@ -183,6 +198,32 @@ function normalizeMaxToken(value) {
 
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+function normalizeIntegrationToken(value) {
+  return String(value || '').trim().replace(/^Bearer\s+/i, '').trim();
+}
+
+function isLevitaCallsAuthorized(request) {
+  const expected = normalizeIntegrationToken(process.env.LEVITA_CALLS_SYNC_TOKEN || '');
+  if (!expected) return false;
+  const incoming = normalizeIntegrationToken(request.headers.authorization || request.headers['x-levtia-sync-token'] || request.headers['x-levita-sync-token'] || '');
+  return Boolean(incoming && incoming === expected);
+}
+
+function normalizeStudio(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'machugi' || normalized === 'мачуги' || normalized.includes('мачуг')) return 'MACHUGI';
+  return 'STAVROPOLSKAYA';
+}
+
+function normalizeDateOnly(value) {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) {
+    const raw = String(value || '');
+    return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : new Date().toISOString().slice(0, 10);
+  }
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
 function roleRoute(role) {
@@ -236,6 +277,11 @@ function ensureMaxStudioConfigured(studio = 'STAVROPOLSKAYA') {
   if (!config.botToken) {
     const error = new Error('MAX не настроен: добавьте MAX_BOT_TOKEN.');
     error.statusCode = 409;
+    if (error instanceof TypeError && error.message === 'fetch failed') {
+      const networkError = new Error('MAX API недоступен: сетевой запрос не выполнен. Проверьте интернет, токен и доступность API MAX.');
+      networkError.statusCode = 502;
+      throw networkError;
+    }
     throw error;
   }
   if (!reportChatId) {
@@ -358,6 +404,11 @@ async function sendMaxMessage(text, studio = 'STAVROPOLSKAYA') {
       const timeoutError = new Error('MAX API не ответил вовремя.');
       timeoutError.statusCode = 504;
       throw timeoutError;
+    }
+    if (error instanceof TypeError && error.message === 'fetch failed') {
+      const networkError = new Error('MAX API недоступен: сетевой запрос не выполнен. Проверьте интернет, токен и доступность API MAX.');
+      networkError.statusCode = 502;
+      throw networkError;
     }
     throw error;
   } finally {
@@ -1291,7 +1342,9 @@ async function listGoogleTasksForRange(timeMin, timeMax) {
   }
 }
 
-async function getState() {
+export async function getState() {
+  if (usePrismaState) return readStateFromPrisma(prisma);
+  if (useSupabaseTables) return readStateFromTables(supabase);
   if (useSupabase) {
     const row = await supabaseSingle(
       supabase.from('app_state').select('payload, updated_at').eq('id', 'main').maybeSingle(),
@@ -1312,11 +1365,32 @@ async function getState() {
   };
 }
 
-async function saveState(state) {
+export async function saveState(state) {
+  if (usePrismaState) {
+    const error = new Error('Direct full-state writes are disabled in Prisma mode. Use /api/mutations for targeted writes.');
+    error.statusCode = 409;
+    throw error;
+  }
   const updatedAt = new Date().toISOString();
   const existing = await getState();
   const stateToSave = prepareStateForStorage(state, existing?.state);
+  if (useSupabaseTables) {
+    const result = await writeStateToTables(supabase, stateToSave);
+    return { state: sanitizeStateForClient(result.state), updatedAt: result.updatedAt };
+  }
   if (useSupabase) {
+    if (existing?.state) {
+      await supabaseRun(
+        supabase.from('app_state_backups').insert({
+          id: randomUUID(),
+          state_id: 'main',
+          payload: existing.state,
+          backed_up_at: updatedAt,
+        }),
+        'backup app state',
+      );
+      await cleanupAppStateBackups(updatedAt);
+    }
     await supabaseRun(
       supabase.from('app_state').upsert({ id: 'main', payload: stateToSave, updated_at: updatedAt }, { onConflict: 'id' }),
       'upsert app state',
@@ -1328,21 +1402,70 @@ async function saveState(state) {
     VALUES (?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at
   `);
+  if (existing?.state) {
+    db.prepare(`
+      INSERT INTO app_state_backups (id, state_id, payload, backed_up_at)
+      VALUES (?, ?, ?, ?)
+    `).run(randomUUID(), 'main', JSON.stringify(existing.state), updatedAt);
+    await cleanupAppStateBackups(updatedAt);
+  }
   upsertState.run('main', JSON.stringify(stateToSave), updatedAt);
   return { state: sanitizeStateForClient(stateToSave), updatedAt };
+}
+
+async function cleanupAppStateBackups(nowIso = new Date().toISOString()) {
+  const cutoff = new Date(new Date(nowIso).getTime() - APP_STATE_BACKUP_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  if (useSupabase) {
+    await supabaseRun(supabase.from('app_state_backups').delete().lt('backed_up_at', cutoff), 'cleanup old app state backups');
+    if (APP_STATE_BACKUP_MAX_ROWS > 0) {
+      const { data, error } = await supabase
+        .from('app_state_backups')
+        .select('id')
+        .eq('state_id', 'main')
+        .order('backed_up_at', { ascending: false })
+        .range(APP_STATE_BACKUP_MAX_ROWS, APP_STATE_BACKUP_MAX_ROWS + 500);
+      if (error) throw new Error(`Supabase select extra app state backups failed: ${error.message}`);
+      const ids = (data || []).map((row) => row.id);
+      if (ids.length) await supabaseRun(supabase.from('app_state_backups').delete().in('id', ids), 'cleanup extra app state backups');
+    }
+    return;
+  }
+  db.prepare('DELETE FROM app_state_backups WHERE backed_up_at < ?').run(cutoff);
+  if (APP_STATE_BACKUP_MAX_ROWS > 0) {
+    db.prepare(`
+      DELETE FROM app_state_backups
+      WHERE id IN (
+        SELECT id FROM app_state_backups
+        WHERE state_id = ?
+        ORDER BY backed_up_at DESC
+        LIMIT -1 OFFSET ?
+      )
+    `).run('main', APP_STATE_BACKUP_MAX_ROWS);
+  }
 }
 
 function prepareStateForStorage(state, existingState = null) {
   if (!state || typeof state !== 'object') return state;
   const existingHashes = new Map((existingState?.users || []).map((user) => [user.id, user.passwordHash]));
+  const knownEntities = new Set([
+    ...(state.knowledge || []).map((item) => `knowledge:${item.id}`),
+    ...(state.templates || []).map((item) => `template:${item.id}`),
+    ...(state.links || []).map((item) => `link:${item.id}`),
+    ...(state.documentTemplates || []).map((item) => `documentTemplate:${item.id}`),
+    ...(state.usefulContacts || []).map((item) => `usefulContact:${item.id}`),
+  ]);
+  const knownUsers = new Set((state.users || []).map((user) => user.id));
   return {
     ...state,
+    schemaVersion: Math.max(Number(state.schemaVersion) || 0, 2),
     users: (state.users || []).map((user) => {
       const password = String(user.password || '');
       const passwordHash = user.passwordHash || existingHashes.get(user.id) || (password ? hashPassword(password) : undefined);
       const { password: _password, ...safeUser } = user;
       return passwordHash ? { ...safeUser, passwordHash } : safeUser;
     }),
+    favorites: (state.favorites || []).filter((favorite) => knownUsers.has(favorite.userId) && knownEntities.has(`${favorite.entityType}:${favorite.entityId}`)),
+    readReceipts: (state.readReceipts || []).filter((receipt) => knownUsers.has(receipt.userId) && receipt.entityType === 'knowledge' && knownEntities.has(`knowledge:${receipt.entityId}`)),
     auditLog: (state.auditLog || []).slice(0, 500),
   };
 }
@@ -1355,7 +1478,154 @@ function sanitizeStateForClient(state) {
   };
 }
 
+function callReviewFromPayload(body, existingReview = null) {
+  const payload = body.payload && typeof body.payload === 'object' ? body.payload : body;
+  const externalId = String(body.externalId || payload.externalId || payload.callId || payload.id || '').trim();
+  const now = new Date().toISOString();
+  const score = Number(payload.score ?? payload.totalScore ?? payload.total_score);
+  return {
+    id: existingReview?.id || randomUUID(),
+    source: 'levita-calls',
+    externalId,
+    adminName: String(payload.adminName || payload.admin_name || payload.managerName || '').trim(),
+    studio: normalizeStudio(payload.studio || payload.studioSlug || payload.studio_slug || payload.studioName || payload.studio_name),
+    score: Number.isFinite(score) ? score : 0,
+    reviewedAt: normalizeDateOnly(payload.reviewedAt || payload.reviewed_at || payload.callDate || payload.createdAt || payload.created_at),
+    amoCrmDealUrl: payload.amoCrmDealUrl || payload.amo_crm_deal_url || payload.amoUrl || null,
+    callUrl: payload.callUrl || payload.call_url || null,
+    originalFilename: payload.originalFilename || payload.original_filename || null,
+    comment: payload.comment || payload.summary || payload.notes || null,
+    createdAt: existingReview?.createdAt || now,
+    updatedAt: now,
+  };
+}
+
+async function syncLevitaCallReview(body) {
+  const event = String(body.event || body.type || 'updated').trim().toLowerCase();
+  const payload = body.payload && typeof body.payload === 'object' ? body.payload : body;
+  const externalId = String(body.externalId || payload.externalId || payload.callId || payload.id || '').trim();
+  if (!externalId) {
+    const error = new Error('externalId is required');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const stored = await getState();
+  const state = stored?.state;
+  if (!state) {
+    const error = new Error('App state is not initialized');
+    error.statusCode = 409;
+    throw error;
+  }
+
+  if (event === 'deleted' || event === 'delete') {
+    if (usePrismaState) {
+      await applyPrismaMutation(prisma, 'callReview.delete', { externalId });
+      const next = await getState();
+      return { ok: true, event, externalId, deleted: true, callReviewsCount: next?.state?.callReviews?.length || 0, updatedAt: next?.updatedAt || new Date().toISOString() };
+    }
+    const callReviews = (state.callReviews || []).filter((review) => !(review.source === 'levita-calls' && review.externalId === externalId));
+    const result = await saveState({ ...state, callReviews });
+    return { ok: true, event, externalId, deleted: true, callReviewsCount: callReviews.length, updatedAt: result.updatedAt };
+  }
+
+  const scoreValue = Number(payload.score ?? payload.totalScore ?? payload.total_score);
+  const existingReviews = Array.isArray(state.callReviews) ? state.callReviews : [];
+  const existing = existingReviews.find((review) => review.source === 'levita-calls' && review.externalId === externalId);
+  const review = callReviewFromPayload({ ...body, externalId }, existing);
+    if (!review.adminName || !Number.isFinite(scoreValue)) {
+      const error = new Error('adminName and score are required');
+      error.statusCode = 400;
+      throw error;
+    }
+
+  if (usePrismaState) {
+    await applyPrismaMutation(prisma, 'callReview.upsert', review);
+    const next = await getState();
+    return { ok: true, event, externalId, deleted: false, callReviewsCount: next?.state?.callReviews?.length || 0, updatedAt: next?.updatedAt || new Date().toISOString() };
+  }
+
+  const callReviews = existing
+    ? existingReviews.map((item) => (item.id === existing.id ? review : item))
+    : [review, ...existingReviews];
+  const result = await saveState({ ...state, callReviews });
+  return {
+    ok: true,
+    event,
+    externalId,
+    deleted: event === 'deleted' || event === 'delete',
+    callReviewsCount: callReviews.length,
+    updatedAt: result.updatedAt,
+  };
+}
+
 async function resetState() {
+  if (usePrismaState) {
+    const tables = [
+      ['financial_plan_payments', 'row_id'],
+      ['checklist_reports', 'id'],
+      ['checklist_items', 'id'],
+      ['financial_plan_rows', 'id'],
+      ['daily_checklists', 'id'],
+      ['admin_shifts', 'id'],
+      ['audit_log', 'id'],
+      ['call_reviews', 'id'],
+      ['tasks', 'id'],
+      ['response_templates', 'id'],
+      ['helpful_links', 'id'],
+      ['document_templates', 'id'],
+      ['useful_contacts', 'id'],
+      ['knowledge_entries', 'id'],
+      ['content_favorites', 'id'],
+      ['content_read_receipts', 'id'],
+      ['refunds', 'id'],
+      ['financial_plan_months', 'month'],
+      ['calendar_events', 'id'],
+      ['expense_categories', 'id'],
+      ['expenses', 'id'],
+      ['trainer_evaluation_sheets', 'id'],
+      ['call_checklist_items', 'id'],
+      ['app_settings', 'id'],
+      ['users', 'id'],
+    ];
+    for (const [table, column] of tables) {
+      await prisma.$executeRawUnsafe(`delete from public.${table} where ${column} is not null`);
+    }
+    return;
+  }
+  if (useSupabaseTables) {
+    const tables = [
+      ['financial_plan_payments', 'row_id'],
+      ['checklist_reports', 'id'],
+      ['checklist_items', 'id'],
+      ['financial_plan_rows', 'id'],
+      ['daily_checklists', 'id'],
+      ['admin_shifts', 'id'],
+      ['audit_log', 'id'],
+      ['call_reviews', 'id'],
+      ['tasks', 'id'],
+      ['response_templates', 'id'],
+      ['helpful_links', 'id'],
+      ['document_templates', 'id'],
+      ['useful_contacts', 'id'],
+      ['knowledge_entries', 'id'],
+      ['content_favorites', 'id'],
+      ['content_read_receipts', 'id'],
+      ['refunds', 'id'],
+      ['financial_plan_months', 'month'],
+      ['calendar_events', 'id'],
+      ['expense_categories', 'id'],
+      ['expenses', 'id'],
+      ['trainer_evaluation_sheets', 'id'],
+      ['call_checklist_items', 'id'],
+      ['app_settings', 'id'],
+      ['users', 'id'],
+    ];
+    for (const [table, column] of tables) {
+      await supabaseRun(supabase.from(table).delete().not(column, 'is', null), `reset ${table}`);
+    }
+    return;
+  }
   if (useSupabase) {
     await supabaseRun(supabase.from('app_state').delete().eq('id', 'main'), 'delete app state');
     return;
@@ -1403,7 +1673,7 @@ export async function handleApiRequest(request, response) {
     const url = new URL(request.url ?? '/', `http://${request.headers.host}`);
 
     if (url.pathname === '/api/health' && request.method === 'GET') {
-      send(response, 200, { ok: true, storageDriver: STORAGE_DRIVER, dbPath: useSupabase ? null : dbPath });
+      send(response, 200, { ok: true, storageDriver: STORAGE_DRIVER, dataMode: DATA_MODE, dbPath: useSupabase ? null : dbPath });
       return;
     }
 
@@ -1448,6 +1718,11 @@ export async function handleApiRequest(request, response) {
       }
 
       if (legacyOk) {
+        if (usePrismaState) {
+          await applyPrismaMutation(prisma, 'employee.update', { id: user.id, input: { password } }, user);
+          send(response, 200, { ok: true, user: publicUser({ ...user, password: '', passwordHash: hashPassword(password) }), route: roleRoute(user.role) });
+          return;
+        }
         const nextState = {
           ...state,
           users: state.users.map((item) => item.id === user.id
@@ -1488,7 +1763,8 @@ export async function handleApiRequest(request, response) {
           ? { ...item, password: '', passwordHash: hashPassword(password) }
           : item),
       };
-      await saveState(nextState);
+      if (usePrismaState) await applyPrismaMutation(prisma, 'employee.update', { id: user.id, input: { password } }, user);
+      else await saveState(nextState);
       send(response, 200, { ok: true });
       return;
     }
@@ -1528,14 +1804,57 @@ export async function handleApiRequest(request, response) {
         send(response, 400, { error: 'Reports are available only for 14:00 and 18:00' });
         return;
       }
+      const requiredReportFields = ['adminName', 'calls', 'reached', 'bookings', 'cash', 'came', 'bought'];
+      const missingReportField = requiredReportFields.some((field) => !String(body.report?.[field] ?? '').trim());
+      if (missingReportField) {
+        send(response, 400, { error: 'Заполните все поля отчёта перед отправкой в MAX.' });
+        return;
+      }
       const sentAt = new Date().toISOString();
       const studio = body.report?.studio === 'MACHUGI' ? 'MACHUGI' : 'STAVROPOLSKAYA';
-      const message = await sendMaxMessage(maxReportText(body), studio);
-      send(response, 200, {
-        ok: true,
-        sentAt,
-        messageId: message.message?.id || message.id || null,
-      });
+      try {
+        const message = await sendMaxMessage(maxReportText(body), studio);
+        send(response, 200, {
+          ok: true,
+          sentAt,
+          messageId: message.message?.id || message.id || null,
+        });
+      } catch (error) {
+        send(response, 200, {
+          ok: false,
+          sentAt: null,
+          messageId: null,
+          error: error instanceof Error ? error.message : 'MAX report was not sent.',
+        });
+      }
+      return;
+    }
+
+    if (url.pathname === '/api/integrations/levita-calls/reviews' && request.method === 'POST') {
+      if (!isLevitaCallsAuthorized(request)) {
+        send(response, 401, { error: 'Unauthorized levita-calls sync request' });
+        return;
+      }
+      const body = JSON.parse(await readBody(request) || '{}');
+      send(response, 200, await syncLevitaCallReview(body));
+      return;
+    }
+
+    if (url.pathname === '/api/mutations' && request.method === 'POST') {
+      if (!usePrismaState) {
+        send(response, 409, { error: 'Prisma mutations require LEVTIA_DATA_MODE=prisma.' });
+        return;
+      }
+      const body = JSON.parse(await readBody(request) || '{}');
+      if (!body.action || typeof body.action !== 'string') {
+        send(response, 400, { error: 'action is required' });
+        return;
+      }
+      const current = await getState();
+      const actor = body.actorId ? current?.state?.users?.find((user) => user.id === body.actorId) ?? null : null;
+      await applyPrismaMutation(prisma, body.action, body.payload || {}, actor);
+      const payload = await getState();
+      send(response, 200, payload ? { ...payload, state: sanitizeStateForClient(payload.state) } : { state: null, updatedAt: null });
       return;
     }
 
@@ -1714,4 +2033,12 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     console.log(`LEVTIA Library API: http://127.0.0.1:${PORT}`);
     console.log(useSupabase ? 'Storage: Supabase' : `SQLite DB: ${dbPath}`);
   });
+  if (process.env.MAX_REMINDER_LOCAL_CRON !== 'false') {
+    setInterval(() => {
+      runMaxReminderJob().catch((error) => {
+        console.error('MAX reminder job failed:', error);
+      });
+    }, 60 * 1000).unref();
+  }
 }
+

@@ -161,6 +161,7 @@ export function TrainerEvaluationSheetsSection() {
   const { state, createTrainerEvaluation, updateTrainerEvaluation, deleteTrainerEvaluation } = useLibrary();
   const [draft, setDraft] = useState<EvaluationDraft>(() => emptyDraft());
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const trainerNames = useMemo(() => Array.from(new Set([
     ...state.users.filter((user) => user.role === 'TRAINER' || user.role === 'SENIOR_TRAINER').map((user) => user.name),
     ...trainerNamesFrom(state.trainerEvaluations),
@@ -170,10 +171,19 @@ export function TrainerEvaluationSheetsSection() {
   const reset = () => {
     setDraft(emptyDraft());
     setEditingId(null);
+    setError(null);
   };
 
   const save = () => {
-    if (!draft.trainerName.trim() || !draft.direction.trim() || !draft.score || !draft.evaluatedAt || !draft.sheetUrl.trim()) return;
+    if (!draft.sheetUrl.trim()) {
+      setError('Укажите ссылку на Google-таблицу.');
+      return;
+    }
+    if (!draft.trainerName.trim() || !draft.direction.trim() || !draft.score || !draft.evaluatedAt) {
+      setError('Заполните имя тренера, направление, оценку и дату.');
+      return;
+    }
+    setError(null);
     if (editingId) updateTrainerEvaluation(editingId, toInput(draft));
     else createTrainerEvaluation(toInput(draft));
     reset();
@@ -194,7 +204,7 @@ export function TrainerEvaluationSheetsSection() {
             <p className="mt-2 text-sm text-[#a89b8f]">Сохраняйте оценку тренера и ссылку на подробный разбор занятия в Google-таблице.</p>
           </div>
           {editingId && (
-            <button onClick={reset} className="calendar-soft-button inline-flex items-center gap-2 self-start">
+            <button onClick={reset} className="soft-action inline-flex items-center gap-2 self-start">
               <X className="h-4 w-4" />
               Отменить редактирование
             </button>
@@ -237,6 +247,7 @@ export function TrainerEvaluationSheetsSection() {
             {editingId ? 'Сохранить' : 'Добавить'}
           </button>
         </div>
+        {error && <p className="mt-3 text-sm text-[#f0c5cf]">{error}</p>}
       </GlassCard>
 
       <div className="grid gap-4 xl:grid-cols-2">
@@ -388,13 +399,17 @@ export function TrainerRatingSection() {
                     dataKey="score"
                     stroke="#c9a98d"
                     strokeWidth={3}
-                    dot={(props) => (
-                      <RatingDot
-                        {...props}
-                        selected={props.payload?.id === selectedEvaluationId}
-                        onSelect={selectChartPoint}
-                      />
-                    )}
+                    dot={(props) => {
+                      const { key: dotKey, ...dotProps } = props as RatingDotProps & { key?: string };
+                      return (
+                        <RatingDot
+                          key={dotKey}
+                          {...dotProps}
+                          selected={props.payload?.id === selectedEvaluationId}
+                          onSelect={selectChartPoint}
+                        />
+                      );
+                    }}
                     activeDot={false}
                   />
                 </LineChart>
@@ -409,3 +424,4 @@ export function TrainerRatingSection() {
     </div>
   );
 }
+

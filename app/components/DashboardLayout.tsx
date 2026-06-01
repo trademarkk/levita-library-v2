@@ -5,6 +5,7 @@ import { ReactNode } from 'react';
 import { useLibrary } from '../domain/LibraryContext';
 import { roleLabels, roleRoutes } from '../domain/labels';
 import type { Role } from '../domain/types';
+import { GlobalSearch } from './GlobalSearch';
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -14,12 +15,13 @@ interface DashboardLayoutProps {
 
 export function DashboardLayout({ children, role, userName = 'Сотрудник' }: DashboardLayoutProps) {
   const location = useLocation();
-  const { currentUser, logout, state } = useLibrary();
+  const { currentUser, logout, state, isDataLoading, isSaving, dataError } = useLibrary();
   const displayName = currentUser?.role === role ? currentUser.name : userName;
   const settingsClass = [
     `theme-${state.settings.colorMode}`,
     `density-${state.settings.density}`,
     state.settings.animations ? 'motion-on' : 'motion-off',
+    isSaving ? 'is-saving' : '',
   ].join(' ');
 
   return (
@@ -59,6 +61,10 @@ export function DashboardLayout({ children, role, userName = 'Сотрудник
           />
         </nav>
 
+        <div className="px-4 pb-4 lg:px-6">
+          <GlobalSearch />
+        </div>
+
         {/* User info */}
         <div className="p-4 lg:p-6 border-t border-[#c9a98d]/10">
           <div className="flex items-center gap-3 mb-3 lg:mb-4">
@@ -90,6 +96,16 @@ export function DashboardLayout({ children, role, userName = 'Сотрудник
         </div>
 
         <div className="relative z-10">
+          {(isDataLoading || isSaving) && (
+            <div className="sticky top-0 z-50 border-b border-[#c9a98d]/20 bg-[#1f1a22]/95 px-4 py-3 text-sm text-[#f5f3f0] backdrop-blur">
+              {isSaving ? 'Сохраняем данные в базе...' : 'Загружаем актуальные данные из базы...'}
+            </div>
+          )}
+          {dataError && (
+            <div className="sticky top-0 z-50 border-b border-[#8b3a52]/40 bg-[#3a1f2b]/95 px-4 py-3 text-sm text-[#f5f3f0] backdrop-blur">
+              {dataError}
+            </div>
+          )}
           {children}
         </div>
       </main>

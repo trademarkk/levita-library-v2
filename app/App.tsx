@@ -1,5 +1,4 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { LandingPage } from './components/LandingPage';
 import { LoginPage } from './components/LoginPage';
 import { AssistantDashboard } from './components/AssistantDashboard';
 import { SeniorAdminDashboard } from './components/SeniorAdminDashboard';
@@ -15,7 +14,7 @@ export default function App() {
       <BrowserRouter>
         <div className="min-h-screen bg-background text-foreground">
           <Routes>
-            <Route path="/" element={<LandingPage />} />
+            <Route path="/" element={<LoginPage />} />
             <Route path="/login" element={<LoginPage />} />
             <Route path="/assistant" element={<AssistantDashboard />} />
             <Route path="/senior-admin" element={<SeniorAdminDashboard />} />

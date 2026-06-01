@@ -4,10 +4,13 @@ import { TabNavigation } from './TabNavigation';
 import { GlassCard } from './GlassCard';
 import { ConfirmChecklistDialog } from './ConfirmChecklistDialog';
 import { RoleContentViewer } from './RoleContent';
-import { CalendarSection, ExpensesSection, FinancialPlanSection } from './SharedPlanningSections';
+import { ExpensesSection, FinancialPlanSection } from './SharedPlanningSections';
 import { TrainerEvaluationSheetsSection, TrainerRatingSection } from './TrainerEvaluationSections';
+import { CallRatingSection } from './CallRatingSection';
+import { AuditLogSection, ControlCenterSection, ShiftJournalSection } from './OwnerDashboard';
 import { useLibrary } from '../domain/LibraryContext';
 import { employeeStatusLabels, formatDate, formatTime, roleLabels, studioLabels } from '../domain/labels';
+import { assistantManagedTeamRoles, can } from '../domain/permissions';
 import type { ChecklistControlStatus, EmployeeStatus, Role } from '../domain/types';
 import { BookOpen, CheckSquare, Edit2, FileText, Info, Link as LinkIcon, ListChecks, Plus, Save, Trash2, UserRound, X } from 'lucide-react';
 
@@ -17,13 +20,16 @@ export function AssistantDashboard() {
   const assistant = currentUser?.role === 'ASSISTANT' ? currentUser : state.users.find((user) => user.role === 'ASSISTANT');
 
   const tabs = [
+    { id: 'control-center', label: 'Центр контроля' },
+    { id: 'shift-journal', label: 'Журнал смен' },
+    { id: 'audit', label: 'Аудит действий' },
     { id: 'tasks', label: 'Важные задачи' },
     { id: 'financial-plan', label: 'Финансовый план' },
-    { id: 'calendar', label: 'Календарь' },
     { id: 'expenses', label: 'Расходы' },
     { id: 'team', label: 'Команда' },
     { id: 'evaluation-sheets', label: 'Листы оценивания' },
     { id: 'trainer-rating', label: 'Рейтинг тренеров' },
+    { id: 'call-rating', label: 'Рейтинг звонков' },
     { id: 'admin-checklists', label: 'Контроль чек-листов' },
     { id: 'responsibilities', label: 'Обязанности' },
     { id: 'regulations', label: 'Регламенты' },
@@ -50,18 +56,21 @@ export function AssistantDashboard() {
           activeTab={activeTab}
           onTabChange={(tab) => {
             setActiveTab(tab);
-            if (tab === 'admin-checklists') void refreshState();
+            if (tab === 'admin-checklists' || tab === 'control-center') void refreshState();
           }}
         />
 
         <div className="max-w-7xl">
+          {activeTab === 'control-center' && <ControlCenterSection />}
+          {activeTab === 'shift-journal' && <ShiftJournalSection />}
+          {activeTab === 'audit' && <AuditLogSection />}
           {activeTab === 'tasks' && <TasksSection />}
           {activeTab === 'financial-plan' && <FinancialPlanSection />}
-          {activeTab === 'calendar' && <CalendarSection />}
           {activeTab === 'expenses' && <ExpensesSection />}
           {activeTab === 'team' && <AssistantTeamSection />}
           {activeTab === 'evaluation-sheets' && <TrainerEvaluationSheetsSection />}
           {activeTab === 'trainer-rating' && <TrainerRatingSection />}
+          {activeTab === 'call-rating' && <CallRatingSection />}
           {activeTab === 'admin-checklists' && <AdminChecklistMonitor />}
           {activeTab === 'responsibilities' && <RoleContentViewer role="ASSISTANT" category="RESPONSIBILITY" />}
           {activeTab === 'regulations' && <RoleContentViewer role="ASSISTANT" category="REGULATION" />}
@@ -79,7 +88,7 @@ export function AssistantDashboard() {
   );
 }
 
-const assistantTeamRoles: Role[] = ['SENIOR_ADMIN', 'ADMIN', 'SENIOR_TRAINER', 'TRAINER'];
+const assistantTeamRoles: Role[] = assistantManagedTeamRoles;
 
 function AssistantTeamSection() {
   const { state, createEmployee, updateEmployee, deleteEmployee } = useLibrary();
@@ -108,7 +117,7 @@ function AssistantTeamSection() {
 
   const save = () => {
     if (!draft.name.trim() || !draft.email.trim() || (!editingId && !draft.password.trim())) return;
-    if (!assistantTeamRoles.includes(draft.role)) return;
+    if (!can('ASSISTANT', editingId ? 'update' : 'create', 'team', { targetRole: draft.role })) return;
     if (editingId) {
       const input = draft.password.trim() ? draft : { name: draft.name, email: draft.email, role: draft.role, status: draft.status };
       updateEmployee(editingId, input);
@@ -142,8 +151,8 @@ function AssistantTeamSection() {
                 <p className="mt-1 text-xs text-[#a89b8f]">{employeeStatusLabels[employee.status]} · c {employee.joinDate}</p>
               </div>
               <div className="flex gap-2">
-                <button onClick={() => openEdit(employee)} className="text-[#a89b8f] hover:text-[#c9a98d]" aria-label={`Редактировать ${employee.name}`}><Edit2 className="h-4 w-4" /></button>
-                <button onClick={() => setDeleteTargetId(employee.id)} className="text-[#a89b8f] hover:text-[#8b3a52]" aria-label={`Удалить ${employee.name}`}><Trash2 className="h-4 w-4" /></button>
+                {can('ASSISTANT', 'update', 'team', { targetRole: employee.role }) && <button onClick={() => openEdit(employee)} className="text-[#a89b8f] hover:text-[#c9a98d]" aria-label={`Редактировать ${employee.name}`}><Edit2 className="h-4 w-4" /></button>}
+                {can('ASSISTANT', 'delete', 'team', { targetRole: employee.role }) && <button onClick={() => setDeleteTargetId(employee.id)} className="text-[#a89b8f] hover:text-[#8b3a52]" aria-label={`Удалить ${employee.name}`}><Trash2 className="h-4 w-4" /></button>}
               </div>
             </div>
           </GlassCard>
@@ -217,7 +226,7 @@ function getDeadlineState(deadline?: string | null) {
 function TasksSection() {
   const { state, toggleTask, createTask } = useLibrary();
   const [showForm, setShowForm] = useState(false);
-  const [draft, setDraft] = useState({ title: '', period: '', description: '', priority: 'medium' as const, deadline: '', addToCalendar: false });
+  const [draft, setDraft] = useState({ title: '', period: '', description: '', priority: 'medium' as const, deadline: '' });
   const tasks = state.tasks
     .filter((task) => task.role === 'ASSISTANT')
     .sort((left, right) => Number(left.status === 'completed') - Number(right.status === 'completed'));
@@ -225,7 +234,7 @@ function TasksSection() {
   const addTask = () => {
     if (!draft.title.trim() || !draft.period.trim()) return;
     createTask({ ...draft, deadline: draft.deadline || null });
-    setDraft({ title: '', period: '', description: '', priority: 'medium', deadline: '', addToCalendar: false });
+    setDraft({ title: '', period: '', description: '', priority: 'medium', deadline: '' });
     setShowForm(false);
   };
 
@@ -249,10 +258,6 @@ function TasksSection() {
               <option value="medium">Средний приоритет</option>
               <option value="low">Низкий приоритет</option>
             </select>
-            <label className="md:col-span-3 flex items-center gap-3 rounded-lg border border-[#c9a98d]/15 bg-[#2a2630]/50 px-3 py-2 text-sm text-[#f5f3f0]">
-              <input type="checkbox" checked={draft.addToCalendar} onChange={(event) => setDraft((value) => ({ ...value, addToCalendar: event.target.checked }))} className="h-4 w-4 accent-[#c9a98d]" />
-              Добавить в календарь на дату дедлайна
-            </label>
             <button onClick={addTask} className="primary-action">Сохранить</button>
           </div>
           <textarea value={draft.description} onChange={(event) => setDraft((value) => ({ ...value, description: event.target.value }))} placeholder="Описание" className="field min-h-20 mt-3" />
@@ -516,10 +521,19 @@ function LinksSection() {
   const { state, createLink, updateLink, deleteLink } = useLibrary();
   const [draft, setDraft] = useState({ title: '', url: '', description: '' });
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const links = state.links.filter((link) => link.role === 'ASSISTANT');
 
   const save = () => {
-    if (!draft.title.trim() || !draft.url.trim()) return;
+    if (!draft.title.trim()) {
+      setError('Укажите название ссылки.');
+      return;
+    }
+    if (!draft.url.trim()) {
+      setError('Поле ссылки обязательно.');
+      return;
+    }
+    setError(null);
     if (editingId) updateLink(editingId, draft);
     else createLink({ ...draft, role: 'ASSISTANT' });
     setDraft({ title: '', url: '', description: '' });
@@ -534,6 +548,7 @@ function LinksSection() {
           <input value={draft.title} onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))} placeholder="Название" className="field" />
           <input value={draft.url} onChange={(event) => setDraft((value) => ({ ...value, url: event.target.value }))} placeholder="https://..." className="field" />
           <textarea value={draft.description} onChange={(event) => setDraft((value) => ({ ...value, description: event.target.value }))} placeholder="Описание" className="field min-h-20" />
+          {error && <p className="text-sm text-[#f0c5cf]">{error}</p>}
           <button onClick={save} className="primary-action">Сохранить</button>
         </div>
       </GlassCard>
@@ -668,9 +683,9 @@ function TrainingSection() {
         <GlassCard key={material.id} delay={idx * 0.08}>
           <div className="flex items-center gap-4">
             <BookOpen className="w-5 h-5 text-[#c9a98d]" />
-            <div>
+            <div className="min-w-0">
               <h3 className="text-lg mb-1 text-[#f5f3f0]">{material.title}</h3>
-              <p className="text-sm text-[#a89b8f]">{material.content}</p>
+              <p className="break-anywhere text-sm text-[#a89b8f]">{material.content}</p>
             </div>
           </div>
         </GlassCard>

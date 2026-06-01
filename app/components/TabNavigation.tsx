@@ -59,6 +59,7 @@ export function TabNavigation({ tabs, activeTab, onTabChange, storageKey }: TabN
       {visibleTabs.map((tab) => (
         <button
           key={tab.id}
+          data-allow-while-saving
           draggable
           aria-current={activeTab === tab.id ? 'page' : undefined}
           onDragStart={() => setDraggedId(tab.id)}

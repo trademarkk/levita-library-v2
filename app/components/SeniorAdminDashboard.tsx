@@ -3,9 +3,11 @@ import { DashboardLayout } from './DashboardLayout';
 import { TabNavigation } from './TabNavigation';
 import { GlassCard } from './GlassCard';
 import { ConfirmChecklistDialog } from './ConfirmChecklistDialog';
-import { RoleContentViewer, RoleLinksViewer, RoleTemplatesViewer } from './RoleContent';
+import { RoleContentViewer, RoleLinksManager, RoleLinksViewer, RoleTemplatesManager, RoleTemplatesViewer } from './RoleContent';
+import { CallRatingSection } from './CallRatingSection';
 import { useLibrary } from '../domain/LibraryContext';
 import { formatDate, formatTime, refundStatusLabels, reportSlotLabels, roleLabels, studioLabels } from '../domain/labels';
+import { can } from '../domain/permissions';
 import type { ChecklistReport, KnowledgeCategory, RefundStatus, Role, Studio } from '../domain/types';
 import { BookOpen, DollarSign, Edit2, FileText, Info, Link as LinkIcon, ListChecks, Phone, Plus, Save, Shield, Trash2, X } from 'lucide-react';
 
@@ -16,6 +18,7 @@ const adminTabs = [
   { id: 'knowledge', label: 'База знаний' },
   { id: 'templates', label: 'Шаблоны сообщений' },
   { id: 'links', label: 'Рабочие ссылки и таблицы' },
+  { id: 'call-rating', label: 'Рейтинг звонков' },
   { id: 'checklist', label: 'Чек-лист дня' },
   { id: 'calls', label: 'Чек-лист звонка' },
 ];
@@ -30,10 +33,13 @@ export function AdminDashboard() {
 
 function AdminWorkspace({ role, canManageTemplates = false, canManageLinks = false, canManageRefunds = false }: { role: 'ADMIN' | 'SENIOR_ADMIN'; canManageTemplates?: boolean; canManageLinks?: boolean; canManageRefunds?: boolean }) {
   const [activeTab, setActiveTab] = useState('responsibilities');
+  const [studyMode, setStudyMode] = useState(false);
   const { currentUser, state, activeAdminShift } = useLibrary();
   const user = currentUser?.role === role ? currentUser : state.users.find((item) => item.role === role);
-  const tabs = canManageRefunds ? [...adminTabs, { id: 'refunds', label: 'Возвраты' }] : adminTabs;
+  const tabs = can(role, 'view', 'refunds') || canManageRefunds ? [...adminTabs, { id: 'refunds', label: 'Возвраты' }] : adminTabs;
   const shift = user ? activeAdminShift(user.id) : null;
+  const canManageRoleTemplates = can(role, 'create', 'messageTemplates', { targetRole: role }) || canManageTemplates;
+  const canManageRoleLinks = can(role, 'create', 'workLinks', { targetRole: role }) || canManageLinks;
 
   return (
     <DashboardLayout role={role} userName={user?.name ?? roleLabels[role]}>
@@ -43,21 +49,27 @@ function AdminWorkspace({ role, canManageTemplates = false, canManageLinks = fal
           <p className="text-[#a89b8f]">Регламенты, база знаний, чек-лист смены, звонки и рабочие таблицы.</p>
         </div>
 
-        {!shift ? (
-          <ShiftStartGate role={role} selectedUserId={user?.id ?? ''} />
+        {!shift && !studyMode ? (
+          <ShiftStartGate role={role} selectedUserId={user?.id ?? ''} onSkipShift={() => setStudyMode(true)} />
         ) : (
           <>
             <GlassCard className="mb-6">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <p className="text-sm text-[#a89b8f]">Смена открыта</p>
-                  <p className="text-lg text-[#f5f3f0]">{shift.adminName} · {studioLabels[shift.studio]}</p>
+                  <p className="text-sm text-[#a89b8f]">{shift ? 'Смена открыта' : 'Сегодня не на смене'}</p>
+                  <p className="text-lg text-[#f5f3f0]">{shift ? `${shift.adminName} · ${studioLabels[shift.studio]}` : 'Доступны материалы без открытия смены'}</p>
                 </div>
-                <div className="text-sm text-[#a89b8f]">
-                  MAX-напоминания: {shift.remindersScheduledAt ? 'запланированы' : shift.reminderScheduleError ? 'ошибка' : 'ожидают постановки'}
-                </div>
+                {shift ? (
+                  <div className="text-sm text-[#a89b8f]">
+                    MAX-напоминания: {shift.remindersScheduledAt ? 'запланированы' : shift.reminderScheduleError ? 'ошибка' : 'ожидают постановки'}
+                  </div>
+                ) : (
+                  <button onClick={() => setStudyMode(false)} className="px-4 py-2 rounded-lg border border-[#c9a98d]/20 text-[#f5f3f0] hover:bg-[#2a2630]">
+                    Открыть смену
+                  </button>
+                )}
               </div>
-              {shift.reminderScheduleError && <p className="mt-3 text-sm text-[#f0c5cf]">{shift.reminderScheduleError}</p>}
+              {shift?.reminderScheduleError && <p className="mt-3 text-sm text-[#f0c5cf]">{shift.reminderScheduleError}</p>}
             </GlassCard>
 
             <TabNavigation tabs={tabs} activeTab={activeTab} onTabChange={setActiveTab} />
@@ -67,9 +79,10 @@ function AdminWorkspace({ role, canManageTemplates = false, canManageLinks = fal
               {activeTab === 'regulations' && <RoleContentViewer role={role} category="REGULATION" />}
               {activeTab === 'info' && <RoleContentViewer role={role} category="IMPORTANT_INFO" />}
               {activeTab === 'knowledge' && <RoleContentViewer role={role} category="KNOWLEDGE" />}
-              {activeTab === 'templates' && <RoleTemplatesViewer role={role} />}
-              {activeTab === 'links' && <RoleLinksViewer role={role} />}
-              {activeTab === 'checklist' && <ChecklistSection userId={user?.id ?? ''} shiftStudio={shift.studio} />}
+              {activeTab === 'templates' && (canManageRoleTemplates ? <RoleTemplatesManager role={role} /> : <RoleTemplatesViewer role={role} />)}
+              {activeTab === 'links' && (canManageRoleLinks ? <RoleLinksManager role={role} /> : <RoleLinksViewer role={role} />)}
+              {activeTab === 'call-rating' && <CallRatingSection />}
+              {activeTab === 'checklist' && (shift ? <ChecklistSection userId={user?.id ?? ''} shiftStudio={shift.studio} shiftAdminName={shift.adminName} /> : <StudyModeChecklistNotice />)}
               {activeTab === 'calls' && <CallsSection />}
               {activeTab === 'refunds' && canManageRefunds && <RefundsSection />}
             </div>
@@ -80,7 +93,7 @@ function AdminWorkspace({ role, canManageTemplates = false, canManageLinks = fal
   );
 }
 
-function ShiftStartGate({ role, selectedUserId }: { role: 'ADMIN' | 'SENIOR_ADMIN'; selectedUserId: string }) {
+function ShiftStartGate({ role, selectedUserId, onSkipShift }: { role: 'ADMIN' | 'SENIOR_ADMIN'; selectedUserId: string; onSkipShift: () => void }) {
   const { state, startAdminShift } = useLibrary();
   const users = state.users.filter((item) => item.role === role && item.status === 'active');
   const [userId, setUserId] = useState(selectedUserId || users[0]?.id || '');
@@ -127,11 +140,28 @@ function ShiftStartGate({ role, selectedUserId }: { role: 'ADMIN' | 'SENIOR_ADMI
               </select>
             </label>
           </div>
-          <button onClick={start} disabled={!selectedUser || isStarting} className="primary-action mt-6 disabled:cursor-not-allowed disabled:opacity-50">
-            {isStarting ? 'Открываем смену...' : 'Я на смене'}
-          </button>
+          <div className="mt-6 flex flex-wrap gap-3">
+            <button onClick={start} disabled={!selectedUser || isStarting} className="primary-action disabled:cursor-not-allowed disabled:opacity-50">
+              {isStarting ? 'Открываем смену...' : 'Я на смене'}
+            </button>
+            <button onClick={onSkipShift} className="px-4 py-2 rounded-lg border border-[#c9a98d]/20 text-[#f5f3f0] hover:bg-[#2a2630]">
+              Я сегодня не на смене
+            </button>
+          </div>
         </div>
       </div>
+    </GlassCard>
+  );
+}
+
+function StudyModeChecklistNotice() {
+  return (
+    <GlassCard>
+      <h2 className="text-2xl text-[#f5f3f0]">Чек-лист доступен только на смене</h2>
+      <p className="mt-2 text-[#a89b8f]">
+        Вы вошли без открытия смены, поэтому можно читать материалы, регламенты, базу знаний, шаблоны и рабочие ссылки.
+        Чтобы отмечать чек-лист и сдавать отчёты, откройте смену.
+      </p>
     </GlassCard>
   );
 }
@@ -190,10 +220,16 @@ function LinksSection({ editable }: { editable: boolean }) {
   const { state, createLink, updateLink, deleteLink } = useLibrary();
   const [draft, setDraft] = useState({ title: '', url: '', description: '' });
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const links = state.links.filter((link) => link.role === 'ADMIN' || link.role === 'SENIOR_ADMIN');
 
   const saveEdit = () => {
     if (!editingId) return;
+    if (!draft.url.trim()) {
+      setError('Поле ссылки обязательно.');
+      return;
+    }
+    setError(null);
     updateLink(editingId, draft);
     setEditingId(null);
     setDraft({ title: '', url: '', description: '' });
@@ -208,7 +244,15 @@ function LinksSection({ editable }: { editable: boolean }) {
             <input value={draft.title} onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))} placeholder="Название" className="field" />
             <input value={draft.url} onChange={(event) => setDraft((value) => ({ ...value, url: event.target.value }))} placeholder="https://..." className="field" />
             <textarea value={draft.description} onChange={(event) => setDraft((value) => ({ ...value, description: event.target.value }))} placeholder="Описание" className="field min-h-20" />
-            <button onClick={() => editingId ? saveEdit() : (createLink({ ...draft, role: 'ADMIN', category: 'WORK_TABLE' }), setDraft({ title: '', url: '', description: '' }))} className="primary-action">Сохранить</button>
+            {error && <p className="text-sm text-[#f0c5cf]">{error}</p>}
+            <button onClick={() => {
+              if (!draft.url.trim()) {
+                setError('Поле ссылки обязательно.');
+                return;
+              }
+              setError(null);
+              editingId ? saveEdit() : (createLink({ ...draft, role: 'ADMIN', category: 'WORK_TABLE' }), setDraft({ title: '', url: '', description: '' }));
+            }} className="primary-action">Сохранить</button>
           </div>
         </GlassCard>
       )}
@@ -234,10 +278,11 @@ function LinksSection({ editable }: { editable: boolean }) {
   );
 }
 
-function ChecklistSection({ userId, shiftStudio }: { userId: string; shiftStudio: Studio }) {
+function ChecklistSection({ userId, shiftStudio, shiftAdminName }: { userId: string; shiftStudio: Studio; shiftAdminName: string }) {
   const { checklistForUser, toggleChecklistItem, updateChecklistReport } = useLibrary();
   const checklist = checklistForUser(userId);
   const [reportDrafts, setReportDrafts] = useState<Record<string, Partial<ChecklistReport>>>({});
+  const [reportErrors, setReportErrors] = useState<Record<string, string>>({});
   const [confirmItemId, setConfirmItemId] = useState<string | null>(null);
 
   if (!checklist) return <GlassCard><p className="text-[#a89b8f]">Чек-лист пока не создан.</p></GlassCard>;
@@ -251,6 +296,25 @@ function ChecklistSection({ userId, shiftStudio }: { userId: string; shiftStudio
 
   const setReportStudio = (slot: string, studio: Studio) => {
     setReportDrafts((current) => ({ ...current, [slot]: { ...current[slot], studio } }));
+  };
+
+  const submitReport = (slot: ChecklistReport['slot'], draft: Partial<ChecklistReport>) => {
+    const requiredFields: Array<keyof Pick<ChecklistReport, 'adminName' | 'calls' | 'reached' | 'bookings' | 'cash' | 'came' | 'bought'>> = [
+      'adminName',
+      'calls',
+      'reached',
+      'bookings',
+      'cash',
+      'came',
+      'bought',
+    ];
+    const hasEmptyField = requiredFields.some((field) => String(draft[field] ?? '').trim().length === 0);
+    if (hasEmptyField) {
+      setReportErrors((current) => ({ ...current, [slot]: 'Заполните все поля отчёта перед отправкой в MAX.' }));
+      return;
+    }
+    setReportErrors((current) => ({ ...current, [slot]: '' }));
+    void updateChecklistReport(checklist.id, slot, draft);
   };
 
   return (
@@ -276,7 +340,12 @@ function ChecklistSection({ userId, shiftStudio }: { userId: string; shiftStudio
 
       <div className="grid xl:grid-cols-2 gap-4">
         {checklist.reports.filter((report) => report.slot !== '22:00').map((report) => {
-          const draft = { ...report, studio: report.studio ?? shiftStudio, ...reportDrafts[report.slot] };
+          const draft = {
+            ...report,
+            ...reportDrafts[report.slot],
+            studio: reportDrafts[report.slot]?.studio ?? shiftStudio,
+            adminName: reportDrafts[report.slot]?.adminName ?? report.adminName ?? shiftAdminName,
+          };
           return (
             <GlassCard key={report.slot}>
               <h3 className="text-lg text-[#f5f3f0] mb-1">{reportSlotLabels[report.slot]}</h3>
@@ -287,7 +356,8 @@ function ChecklistSection({ userId, shiftStudio }: { userId: string; shiftStudio
                   <select
                     value={draft.studio ?? shiftStudio}
                     onChange={(event) => setReportStudio(report.slot, event.target.value as Studio)}
-                    className="field py-1.5"
+                    disabled
+                    className="field py-1.5 disabled:opacity-70"
                   >
                     <option value="STAVROPOLSKAYA">{studioLabels.STAVROPOLSKAYA}</option>
                     <option value="MACHUGI">{studioLabels.MACHUGI}</option>
@@ -300,7 +370,8 @@ function ChecklistSection({ userId, shiftStudio }: { userId: string; shiftStudio
                 <ReportInput label="Касса" value={draft.cash ?? ''} onChange={(value) => setReportField(report.slot, 'cash', value)} />
                 <ReportInput label="Был" value={draft.came ?? ''} onChange={(value) => setReportField(report.slot, 'came', value)} />
                 <ReportInput label="Купил" value={draft.bought ?? ''} onChange={(value) => setReportField(report.slot, 'bought', value)} />
-                <button onClick={() => updateChecklistReport(checklist.id, report.slot, draft)} className="primary-action w-full">Сохранить отчёт</button>
+                {reportErrors[report.slot] && <p className="text-xs text-[#f0c5cf]">{reportErrors[report.slot]}</p>}
+                <button onClick={() => submitReport(report.slot, draft)} className="primary-action w-full">Сохранить отчёт</button>
                 {report.maxSentAt && <p className="text-xs text-[#a89b8f]">MAX отправлен: {formatTime(report.maxSentAt)}</p>}
                 {report.maxSendError && <p className="text-xs text-[#f0c5cf]">Ошибка MAX: {report.maxSendError}</p>}
               </div>

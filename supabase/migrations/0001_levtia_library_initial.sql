@@ -71,6 +71,13 @@ create table if not exists public.app_state (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.app_state_backups (
+  id uuid primary key default gen_random_uuid(),
+  state_id text not null,
+  payload jsonb not null,
+  backed_up_at timestamptz not null default now()
+);
+
 create table if not exists public.google_calendar_tokens (
   id text primary key,
   access_token text not null,
@@ -119,6 +126,7 @@ create table if not exists public.response_templates (
   title text not null,
   body text not null,
   role public.levtia_role not null,
+  business_model text not null default 'ALL' check (business_model in ('SUBSCRIPTION', 'MEMBERSHIP', 'ALL')),
   purpose text,
   created_by_id text references public.users(id) on delete set null,
   created_at timestamptz not null default now(),
@@ -161,11 +169,30 @@ create table if not exists public.knowledge_entries (
   content text not null,
   role public.levtia_role not null,
   category public.knowledge_category not null,
+  business_model text not null default 'ALL' check (business_model in ('SUBSCRIPTION', 'MEMBERSHIP', 'ALL')),
   hashtags text,
   is_actual boolean not null default true,
   searchable boolean not null default true,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
+);
+
+create table if not exists public.content_favorites (
+  id text primary key,
+  user_id text not null references public.users(id) on delete cascade,
+  entity_type text not null check (entity_type in ('knowledge', 'template', 'link', 'documentTemplate', 'usefulContact')),
+  entity_id text not null,
+  created_at timestamptz not null default now(),
+  unique (user_id, entity_type, entity_id)
+);
+
+create table if not exists public.content_read_receipts (
+  id text primary key,
+  user_id text not null references public.users(id) on delete cascade,
+  entity_type text not null default 'knowledge' check (entity_type = 'knowledge'),
+  entity_id text not null,
+  read_at timestamptz not null default now(),
+  unique (user_id, entity_type, entity_id)
 );
 
 create table if not exists public.daily_checklists (
@@ -308,12 +335,15 @@ create table if not exists public.app_settings (
 );
 
 create index if not exists app_state_payload_gin_idx on public.app_state using gin (payload jsonb_path_ops);
+create index if not exists app_state_backups_state_backed_up_idx on public.app_state_backups (state_id, backed_up_at desc);
 create index if not exists google_oauth_states_created_at_idx on public.google_oauth_states (created_at);
 create index if not exists users_role_status_idx on public.users (role, status);
 create index if not exists tasks_role_status_deadline_idx on public.tasks (role, status, deadline);
 create index if not exists response_templates_role_idx on public.response_templates (role);
 create index if not exists helpful_links_role_category_idx on public.helpful_links (role, category);
 create index if not exists knowledge_entries_role_category_actual_idx on public.knowledge_entries (role, category, is_actual);
+create index if not exists content_favorites_user_entity_idx on public.content_favorites (user_id, entity_type, entity_id);
+create index if not exists content_read_receipts_entity_idx on public.content_read_receipts (entity_type, entity_id, read_at desc);
 create index if not exists daily_checklists_date_role_idx on public.daily_checklists (checklist_date, role);
 create index if not exists daily_checklists_assigned_date_idx on public.daily_checklists (assigned_to, checklist_date);
 create index if not exists checklist_items_checklist_position_idx on public.checklist_items (checklist_id, position);
@@ -330,6 +360,7 @@ create index if not exists trainer_evaluation_trainer_date_idx on public.trainer
 create index if not exists call_checklist_items_position_idx on public.call_checklist_items (position);
 
 alter table public.app_state enable row level security;
+alter table public.app_state_backups enable row level security;
 alter table public.google_calendar_tokens enable row level security;
 alter table public.google_oauth_states enable row level security;
 alter table public.users enable row level security;
@@ -339,6 +370,8 @@ alter table public.helpful_links enable row level security;
 alter table public.document_templates enable row level security;
 alter table public.useful_contacts enable row level security;
 alter table public.knowledge_entries enable row level security;
+alter table public.content_favorites enable row level security;
+alter table public.content_read_receipts enable row level security;
 alter table public.daily_checklists enable row level security;
 alter table public.checklist_items enable row level security;
 alter table public.checklist_reports enable row level security;
@@ -354,5 +387,8 @@ alter table public.call_checklist_items enable row level security;
 alter table public.app_settings enable row level security;
 
 comment on table public.app_state is 'Compatibility JSON storage used during the SQLite-to-Supabase transition.';
+comment on table public.app_state_backups is 'Automatic backups of the JSON app_state before every overwrite.';
 comment on table public.google_calendar_tokens is 'Server-only OAuth token storage. Access through service role API only.';
 comment on table public.users is 'LEVTIA role users. Replace legacy_password with Supabase Auth identities before production.';
+comment on table public.content_favorites is 'Per-user pinned materials used by the application UI.';
+comment on table public.content_read_receipts is 'Per-user acknowledgements for important knowledge entries.';

@@ -7,6 +7,7 @@ export type EmployeeStatus = 'active' | 'blocked' | 'read-only';
 export type ChecklistReportSlot = '14:00' | '18:00' | '22:00';
 export type Studio = 'STAVROPOLSKAYA' | 'MACHUGI';
 export type BusinessModelScope = 'SUBSCRIPTION' | 'MEMBERSHIP' | 'ALL';
+export type FavoriteEntityType = 'knowledge' | 'template' | 'link' | 'documentTemplate' | 'usefulContact';
 
 export interface User {
   id: string;
@@ -32,8 +33,9 @@ export type AuditAction =
   | 'content.create'
   | 'content.update'
   | 'content.delete'
-  | 'finance.update'
-  | 'calendar.update';
+  | 'content.favorite'
+  | 'content.read'
+  | 'finance.update';
 
 export interface AuditEntry {
   id: string;
@@ -57,8 +59,6 @@ export interface TaskTemplate {
   priority: 'high' | 'medium' | 'low';
   status: 'pending' | 'in-progress' | 'completed';
   deadline?: string | null;
-  addToCalendar?: boolean;
-  calendarEventId?: string | null;
   createdAt: string;
 }
 
@@ -111,6 +111,22 @@ export interface KnowledgeEntry {
   isActual?: boolean;
   searchable: boolean;
   createdAt: string;
+}
+
+export interface ContentFavorite {
+  id: string;
+  userId: string;
+  entityType: FavoriteEntityType;
+  entityId: string;
+  createdAt: string;
+}
+
+export interface ContentReadReceipt {
+  id: string;
+  userId: string;
+  entityType: 'knowledge';
+  entityId: string;
+  readAt: string;
 }
 
 export interface ChecklistItem {
@@ -191,34 +207,6 @@ export interface FinancialPlanMonth {
   rows: FinancialPlanRow[];
 }
 
-export type CalendarRecurrenceFrequency = 'weekly';
-
-export interface CalendarEventRecurrence {
-  frequency: CalendarRecurrenceFrequency;
-  interval: number;
-  weekdays: number[];
-  until?: string | null;
-}
-
-export interface CalendarEvent {
-  id: string;
-  title: string;
-  date: string;
-  startTime?: string | null;
-  endTime?: string | null;
-  description?: string | null;
-  sourceTaskId?: string | null;
-  googleEventId?: string | null;
-  googleRecurringEventId?: string | null;
-  googleHtmlLink?: string | null;
-  googleSyncStatus?: 'pending' | 'synced' | 'error' | 'not_connected';
-  googleSyncError?: string | null;
-  source?: 'local' | 'google' | 'google-calendar' | 'google-task';
-  sourceName?: string | null;
-  recurrence?: CalendarEventRecurrence | null;
-  createdAt: string;
-}
-
 export type ExpenseStudio = 'STAVROPOLSKAYA' | 'MACHUGI';
 export type ExpenseAccount = 'RS_SBER' | 'TOCHKA' | 'CREDIT';
 
@@ -232,6 +220,22 @@ export interface TrainerEvaluationSheet {
   sheetUrl: string;
   createdAt: string;
   createdById?: string | null;
+}
+
+export interface CallReview {
+  id: string;
+  source: 'levita-calls';
+  externalId: string;
+  adminName: string;
+  studio: ExpenseStudio;
+  score: number;
+  reviewedAt: string;
+  amoCrmDealUrl?: string | null;
+  callUrl?: string | null;
+  originalFilename?: string | null;
+  comment?: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ExpenseCategory {
@@ -252,6 +256,7 @@ export interface ExpenseRecord {
 }
 
 export interface LibraryState {
+  schemaVersion?: number;
   users: User[];
   tasks: TaskTemplate[];
   templates: ResponseTemplate[];
@@ -262,10 +267,12 @@ export interface LibraryState {
   checklists: DailyChecklist[];
   refunds: RefundCase[];
   financialPlans: FinancialPlanMonth[];
-  calendarEvents: CalendarEvent[];
   expenseCategories: ExpenseCategory[];
   expenses: ExpenseRecord[];
   trainerEvaluations: TrainerEvaluationSheet[];
+  callReviews: CallReview[];
+  favorites: ContentFavorite[];
+  readReceipts: ContentReadReceipt[];
   callChecklist: string[];
   adminShifts: AdminShift[];
   auditLog: AuditEntry[];
