@@ -38,6 +38,7 @@ const MAX_REPORT_CHAT_ID_STAVROPOLSKAYA = process.env.MAX_REPORT_CHAT_ID_STAVROP
 const MAX_REPORT_CHAT_ID_MACHUGI = process.env.MAX_REPORT_CHAT_ID_MACHUGI || '';
 const MAX_REPORT_REMINDER_SLOTS = ['14:00', '18:00'];
 const MAX_REPORT_REPEAT_MINUTES = 15;
+const MAX_REMINDER_PROCESSING_TIMEOUT_MINUTES = 5;
 const CRON_SECRET = process.env.CRON_SECRET || '';
 const MAX_REMINDER_RETENTION_DAYS = Number(process.env.MAX_REMINDER_RETENTION_DAYS || 20);
 const APP_STATE_BACKUP_RETENTION_DAYS = Number(process.env.APP_STATE_BACKUP_RETENTION_DAYS || 20);
@@ -648,6 +649,29 @@ async function claimDueMaxReminders(limit = 25) {
   return reminders.filter((reminder) => claim.run(now, reminder.id).changes > 0);
 }
 
+async function releaseStaleProcessingMaxReminders() {
+  const cutoff = new Date(Date.now() - MAX_REMINDER_PROCESSING_TIMEOUT_MINUTES * 60 * 1000).toISOString();
+  const now = new Date().toISOString();
+
+  if (useSupabase) {
+    const { data, error } = await supabase
+      .from('max_reminders')
+      .update({ status: 'pending', error: 'processing timeout: returned to queue', updated_at: now })
+      .eq('status', 'processing')
+      .lt('updated_at', cutoff)
+      .select('id');
+    if (error) throw new Error(`Supabase release stale max reminders failed: ${error.message}`);
+    return { released: data?.length ?? 0, cutoff };
+  }
+
+  const result = db.prepare(`
+    UPDATE max_reminders
+    SET status = 'pending', error = 'processing timeout: returned to queue', updated_at = ?
+    WHERE status = 'processing' AND updated_at < ?
+  `).run(now, cutoff);
+  return { released: result.changes ?? 0, cutoff };
+}
+
 async function markMaxReminderSent(id, messageId) {
   const now = new Date().toISOString();
   if (useSupabase) {
@@ -714,6 +738,7 @@ async function cleanupOldMaxReminders() {
 }
 
 async function runMaxReminderJob() {
+  const released = await releaseStaleProcessingMaxReminders();
   const reminders = await claimDueMaxReminders();
   const storedState = reminders.length ? await getState() : null;
   const appState = storedState?.state || null;
@@ -739,6 +764,8 @@ async function runMaxReminderJob() {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown MAX reminder error';
       await markMaxReminderFailed(reminder.id, message);
+      const nextReminder = isReminderReportSubmitted(reminder, appState) ? null : nextFollowUpReminder(reminder);
+      if (nextReminder) await insertMaxReminders([nextReminder]);
       results.push({ id: reminder.id, status: 'failed', error: message });
     }
   }
@@ -748,6 +775,7 @@ async function runMaxReminderJob() {
     processed: results.length,
     sent: results.filter((item) => item.status === 'sent').length,
     failed: results.filter((item) => item.status === 'failed').length,
+    releasedStaleProcessing: released.released,
     cleanup,
     results,
   };
