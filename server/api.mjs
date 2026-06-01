@@ -303,6 +303,32 @@ function reportDeadlineDateTime(date, slot) {
   return reminderDateTime(date, slot, 0);
 }
 
+function nextPostDeadlineReminderTime(date, slot, fromMs = Date.now()) {
+  const deadline = reportDeadlineDateTime(date, slot);
+  const dayEnd = reminderDayEnd(date);
+  if (!deadline || !dayEnd) return null;
+
+  const intervalMs = MAX_REPORT_REPEAT_MINUTES * 60 * 1000;
+  const baseline = Math.max(fromMs, deadline.getTime() + intervalMs);
+  const elapsed = baseline - deadline.getTime();
+  const steps = Math.max(1, Math.ceil(elapsed / intervalMs));
+  const nextTime = new Date(deadline.getTime() + steps * intervalMs);
+
+  if (nextTime.getTime() > dayEnd.getTime()) return null;
+  return nextTime;
+}
+
+function nextInitialReportReminderTime(date, slot, nowMs = Date.now()) {
+  const firstReminder = reminderDateTime(date, slot, 15);
+  const deadline = reportDeadlineDateTime(date, slot);
+  const dayEnd = reminderDayEnd(date);
+  if (!firstReminder || !deadline || !dayEnd || nowMs > dayEnd.getTime()) return null;
+
+  if (nowMs <= firstReminder.getTime()) return firstReminder;
+  if (nowMs < deadline.getTime()) return new Date(nowMs);
+  return nextPostDeadlineReminderTime(date, slot, nowMs);
+}
+
 function maxReminderId(shiftId, date, slot, scheduledAt) {
   return `${shiftId}:${date}:${slot}:${scheduledAt.replace(/[:.]/g, '-')}`;
 }
@@ -496,6 +522,32 @@ async function insertMaxReminders(reminders) {
   return reminders;
 }
 
+async function deletePendingMaxRemindersForShift(shiftId, slots) {
+  const reportSlots = [...new Set((slots || []).filter(Boolean))];
+  if (!shiftId || !reportSlots.length) return;
+
+  if (useSupabase) {
+    await supabaseRun(
+      supabase
+        .from('max_reminders')
+        .delete()
+        .eq('shift_id', shiftId)
+        .eq('status', 'pending')
+        .in('report_slot', reportSlots),
+      'delete pending max reminders for shift',
+    );
+    return;
+  }
+
+  const placeholders = reportSlots.map(() => '?').join(', ');
+  db.prepare(`
+    DELETE FROM max_reminders
+    WHERE shift_id = ?
+      AND status = 'pending'
+      AND report_slot IN (${placeholders})
+  `).run(shiftId, ...reportSlots);
+}
+
 function stateDateKey(value) {
   if (/^\d{4}-\d{2}-\d{2}/.test(String(value || ''))) return String(value).slice(0, 10);
   const date = value ? new Date(value) : null;
@@ -522,11 +574,8 @@ function reminderDayEnd(date) {
 function nextFollowUpReminder(reminder) {
   const shiftDate = reminder.shiftId ? reminder.id.split(':')[1] : '';
   const date = shiftDate || String(reminder.scheduledAt || '').slice(0, 10);
-  const deadline = reportDeadlineDateTime(date, reminder.reportSlot);
-  const dayEnd = reminderDayEnd(date);
-  if (!deadline || !dayEnd) return null;
-  const nextTime = new Date(Math.max(Date.now(), deadline.getTime()) + MAX_REPORT_REPEAT_MINUTES * 60 * 1000);
-  if (nextTime.getTime() > dayEnd.getTime()) return null;
+  const nextTime = nextPostDeadlineReminderTime(date, reminder.reportSlot);
+  if (!nextTime) return null;
   return buildMaxShiftReminder({
     shiftId: reminder.shiftId,
     adminName: reminder.adminName,
@@ -543,16 +592,12 @@ async function createMaxShiftReminders(input) {
   const now = Date.now();
   const reminders = MAX_REPORT_REMINDER_SLOTS
     .map((slot) => {
-      const firstReminder = buildMaxShiftReminder({ ...input, studio, slot });
-      if (new Date(firstReminder.scheduledAt).getTime() > now) return firstReminder;
-      const deadline = reportDeadlineDateTime(input.date, slot);
-      const dayEnd = reminderDayEnd(input.date);
-      if (!deadline || !dayEnd || now > dayEnd.getTime()) return null;
-      const followUpAt = new Date(Math.max(now, deadline.getTime()) + MAX_REPORT_REPEAT_MINUTES * 60 * 1000);
-      if (followUpAt.getTime() > dayEnd.getTime()) return null;
-      return buildMaxShiftReminder({ ...input, studio, slot, scheduledAt: followUpAt.toISOString() });
+      const scheduledAt = nextInitialReportReminderTime(input.date, slot, now);
+      if (!scheduledAt) return null;
+      return buildMaxShiftReminder({ ...input, studio, slot, scheduledAt: scheduledAt.toISOString() });
     })
     .filter(Boolean);
+  await deletePendingMaxRemindersForShift(input.shiftId, reminders.map((reminder) => reminder.reportSlot));
   await insertMaxReminders(reminders);
   return reminders.map((reminder) => ({
     slot: reminder.reportSlot,
