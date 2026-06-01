@@ -376,15 +376,25 @@ export function RoleTemplatesManager({ role }: { role: Role }) {
   const [businessModelFilter, setBusinessModelFilter] = useState<BusinessModelScope>('ALL');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState({ title: '', purpose: '', body: '', businessModel: 'ALL' as BusinessModelScope });
+  const [error, setError] = useState<string | null>(null);
   const templates = state.templates.filter((template) => manageableRoles.includes(template.role) && businessModelMatches(template.businessModel, businessModelFilter));
 
   const reset = () => {
     setEditingId(null);
+    setError(null);
     setDraft({ title: '', purpose: '', body: '', businessModel: 'ALL' });
   };
 
   const save = () => {
-    if (!draft.title.trim() || !draft.body.trim()) return;
+    if (!draft.title.trim()) {
+      setError('Укажите название шаблона.');
+      return;
+    }
+    if (!draft.body.trim()) {
+      setError('Укажите текст шаблона.');
+      return;
+    }
+    setError(null);
     if (editingId) updateTemplate(editingId, { ...draft, role: activeRole });
     else createTemplate({ ...draft, role: activeRole });
     reset();
