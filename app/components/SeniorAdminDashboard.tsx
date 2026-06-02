@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { DashboardLayout } from './DashboardLayout';
 import { TabNavigation } from './TabNavigation';
 import { GlassCard } from './GlassCard';
-import { ConfirmChecklistDialog } from './ConfirmChecklistDialog';
 import { RoleContentViewer, RoleLinksManager, RoleLinksViewer, RoleTemplatesManager, RoleTemplatesViewer } from './RoleContent';
 import { CallRatingSection } from './CallRatingSection';
 import { useLibrary } from '../domain/LibraryContext';
@@ -292,16 +291,35 @@ function LinksSection({ editable }: { editable: boolean }) {
 }
 
 function ChecklistSection({ userId, shiftStudio, shiftAdminName }: { userId: string; shiftStudio: Studio; shiftAdminName: string }) {
-  const { checklistForUser, toggleChecklistItem, updateChecklistReport } = useLibrary();
+  const { checklistForUser, confirmChecklistItems, updateChecklistReport } = useLibrary();
   const checklist = checklistForUser(userId);
   const [reportDrafts, setReportDrafts] = useState<Record<string, Partial<ChecklistReport>>>({});
   const [reportErrors, setReportErrors] = useState<Record<string, string>>({});
-  const [confirmItemId, setConfirmItemId] = useState<string | null>(null);
+  const [itemDrafts, setItemDrafts] = useState<Record<string, boolean>>({});
+  const [isConfirmingItems, setIsConfirmingItems] = useState(false);
+
+  useEffect(() => {
+    setItemDrafts({});
+  }, [checklist?.id]);
 
   if (!checklist) return <GlassCard><p className="text-[#a89b8f]">Чек-лист пока не создан.</p></GlassCard>;
 
-  const completedCount = checklist.items.filter((item) => item.completed).length;
-  const confirmItem = checklist.items.find((item) => item.id === confirmItemId) ?? null;
+  const itemCompleted = (itemId: string, fallback: boolean) => itemDrafts[itemId] ?? fallback;
+  const changedItems = checklist.items
+    .map((item) => ({ itemId: item.id, completed: itemCompleted(item.id, item.completed), original: item.completed }))
+    .filter((item) => item.completed !== item.original);
+  const completedCount = checklist.items.filter((item) => itemCompleted(item.id, item.completed)).length;
+
+  const confirmItems = async () => {
+    if (!changedItems.length || isConfirmingItems) return;
+    setIsConfirmingItems(true);
+    try {
+      await confirmChecklistItems(checklist.id, changedItems.map(({ itemId, completed }) => ({ itemId, completed })), userId);
+      setItemDrafts({});
+    } finally {
+      setIsConfirmingItems(false);
+    }
+  };
 
   const setReportField = (slot: string, key: keyof ChecklistReport, value: string) => {
     setReportDrafts((current) => ({ ...current, [slot]: { ...current[slot], [key]: value } }));
@@ -340,12 +358,30 @@ function ChecklistSection({ userId, shiftStudio, shiftAdminName }: { userId: str
             <p className="text-sm text-[#a89b8f]">{formatDate(checklist.date)} · {completedCount} из {checklist.items.length}</p>
           </div>
         </div>
+        <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm text-[#a89b8f]">
+            {changedItems.length ? `Изменений к подтверждению: ${changedItems.length}` : 'Отметьте пункты и подтвердите их одним действием.'}
+          </p>
+          <button
+            type="button"
+            onClick={confirmItems}
+            disabled={!changedItems.length || isConfirmingItems}
+            className="primary-action disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isConfirmingItems ? 'Сохраняем...' : 'Подтвердить'}
+          </button>
+        </div>
         <div className="space-y-3">
           {checklist.items.map((item) => (
             <label key={item.id} className="flex items-center gap-3 p-3 rounded-lg hover:bg-[#2a2630] transition-colors">
-              <input type="checkbox" checked={item.completed} onChange={() => item.completed ? toggleChecklistItem(checklist.id, item.id, userId) : setConfirmItemId(item.id)} className="w-5 h-5 rounded accent-[#c9a98d]" />
-              <span className={`flex-1 ${item.completed ? 'text-[#a89b8f] line-through' : 'text-[#f5f3f0]'}`}>{item.label}</span>
-              <span className="text-xs text-[#a89b8f]">{formatTime(item.completedAt)}</span>
+              <input
+                type="checkbox"
+                checked={itemCompleted(item.id, item.completed)}
+                onChange={(event) => setItemDrafts((current) => ({ ...current, [item.id]: event.target.checked }))}
+                className="w-5 h-5 rounded accent-[#c9a98d]"
+              />
+              <span className={`flex-1 ${itemCompleted(item.id, item.completed) ? 'text-[#a89b8f] line-through' : 'text-[#f5f3f0]'}`}>{item.label}</span>
+              <span className="text-xs text-[#a89b8f]">{itemDrafts[item.id] !== undefined ? 'не сохранено' : formatTime(item.completedAt)}</span>
             </label>
           ))}
         </div>
@@ -392,16 +428,6 @@ function ChecklistSection({ userId, shiftStudio, shiftAdminName }: { userId: str
           );
         })}
       </div>
-      {confirmItem && (
-        <ConfirmChecklistDialog
-          itemLabel={confirmItem.label}
-          onCancel={() => setConfirmItemId(null)}
-          onConfirm={() => {
-            toggleChecklistItem(checklist.id, confirmItem.id, userId);
-            setConfirmItemId(null);
-          }}
-        />
-      )}
     </div>
   );
 }

@@ -22,6 +22,39 @@ export function createPrisma() {
   });
 }
 
+function moscowDateParts(value = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Moscow',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hour12: false,
+  }).formatToParts(value);
+  const get = (type) => parts.find((part) => part.type === type)?.value || '';
+  return {
+    date: `${get('year')}-${get('month')}-${get('day')}`,
+    hour: Number(get('hour')),
+  };
+}
+
+export async function closeDuePrismaAdminShifts(prisma, nowDate = new Date()) {
+  await prisma.$executeRawUnsafe('alter table public.admin_shifts add column if not exists closed_at timestamptz');
+  const now = nowDate.toISOString();
+  const current = moscowDateParts(nowDate);
+  if (current.hour < 23) {
+    return { ok: true, skipped: true, reason: 'before-23-msk', closed: 0, date: current.date };
+  }
+  const result = await prisma.$executeRaw`
+    update public.admin_shifts
+    set closed_at = ${now}::timestamptz,
+        updated_at = now()
+    where closed_at is null
+      and shift_date <= ${current.date}::date
+  `;
+  return { ok: true, skipped: false, closed: Number(result) || 0, date: current.date, closedAt: now };
+}
+
 function newId(prefix) {
   return `${prefix}-${Date.now()}-${randomUUID().slice(0, 12)}`;
 }
@@ -244,7 +277,7 @@ export async function readStateFromPrisma(prisma) {
       favorites: favorites.map((favorite) => ({ id: favorite.id, userId: favorite.user_id, entityType: favorite.entity_type, entityId: favorite.entity_id, createdAt: iso(favorite.created_at) })),
       readReceipts: readReceipts.map((receipt) => ({ id: receipt.id, userId: receipt.user_id, entityType: 'knowledge', entityId: receipt.entity_id, readAt: iso(receipt.read_at) })),
       callChecklist: callChecklistItems.map((item) => item.label),
-      adminShifts: adminShifts.map((shift) => ({ id: shift.id, userId: shift.user_id, adminName: shift.admin_name, studio: shift.studio, date: dateOnly(shift.shift_date), startedAt: iso(shift.started_at), remindersScheduledAt: iso(shift.reminders_scheduled_at), reminderScheduleError: shift.reminder_schedule_error })),
+      adminShifts: adminShifts.map((shift) => ({ id: shift.id, userId: shift.user_id, adminName: shift.admin_name, studio: shift.studio, date: dateOnly(shift.shift_date), startedAt: iso(shift.started_at), closedAt: iso(shift.closed_at), remindersScheduledAt: iso(shift.reminders_scheduled_at), reminderScheduleError: shift.reminder_schedule_error })),
       auditLog: auditLog.map((entry) => ({ id: entry.id, action: entry.action, entityType: entry.entity_type, entityId: entry.entity_id, entityLabel: entry.entity_label, description: entry.description, actorId: entry.actor_id, actorName: entry.actor_name, actorRole: entry.actor_role, createdAt: iso(entry.created_at) })),
       settings,
     },
@@ -438,6 +471,19 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
       const rows = await prisma.$queryRaw`select completed from public.checklist_items where id = ${payload.itemId} and checklist_id = ${payload.checklistId}`;
       const completed = !Boolean(rows[0]?.completed);
       await prisma.$executeRaw`update public.checklist_items set completed = ${completed}, completed_at = ${completed ? now : null}::timestamptz, completed_by = ${completed ? payload.userId || actor?.id || null : null} where id = ${payload.itemId} and checklist_id = ${payload.checklistId}`;
+      return;
+    }
+    case 'checklist.items.confirm': {
+      const completedAt = payload.completedAt || now;
+      for (const item of payload.items || []) {
+        await prisma.$executeRaw`
+          update public.checklist_items
+          set completed = ${Boolean(item.completed)},
+              completed_at = ${item.completed ? completedAt : null}::timestamptz,
+              completed_by = ${item.completed ? payload.userId || actor?.id || null : null}
+          where id = ${item.itemId} and checklist_id = ${payload.checklistId}
+        `;
+      }
       return;
     }
     case 'checklist.item.add': {

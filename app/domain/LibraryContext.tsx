@@ -154,6 +154,7 @@ type LibraryContextValue = {
   updateImportantInfo: (id: string, input: Partial<Pick<KnowledgeEntry, 'title' | 'content' | 'hashtags'>>) => void;
   deleteImportantInfo: (id: string) => void;
   toggleChecklistItem: (checklistId: string, itemId: string, userId?: string) => void;
+  confirmChecklistItems: (checklistId: string, items: Array<{ itemId: string; completed: boolean }>, userId?: string) => Promise<void>;
   addChecklistItem: (checklistId: string, label: string) => void;
   deleteChecklistItem: (checklistId: string, itemId: string) => void;
   addRoleChecklistItem: (roles: Role[], label: string) => void;
@@ -231,6 +232,33 @@ function dateKey(value?: string | Date | null) {
   const date = value ? new Date(value) : new Date();
   if (Number.isNaN(date.getTime())) return '';
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function moscowDateParts(value: Date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Moscow',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hour12: false,
+  }).formatToParts(value);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? '';
+  return {
+    date: `${get('year')}-${get('month')}-${get('day')}`,
+    hour: Number(get('hour')),
+  };
+}
+
+function moscowDateKey(value: Date = new Date()) {
+  return moscowDateParts(value).date;
+}
+
+function isAdminShiftClosed(shift: AdminShift, now = new Date()) {
+  if (shift.closedAt) return true;
+  const current = moscowDateParts(now);
+  if (shift.date < current.date) return true;
+  return shift.date === current.date && current.hour >= 23;
 }
 
 function addFinancialPlanMonths(month: string, offset: number) {
@@ -1234,6 +1262,23 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         item.completedBy = item.completed ? completedBy ?? undefined : undefined;
       });
     },
+    async confirmChecklistItems(checklistId, items, userId) {
+      const updates = items.filter((item) => item.itemId);
+      if (!updates.length) return;
+      const completedBy = userId ?? currentUser?.id ?? null;
+      const completedAt = new Date().toISOString();
+      await runMutation('checklist.items.confirm', { checklistId, items: updates, userId: completedBy, completedAt }, (draft) => {
+        const checklist = draft.checklists.find((entry) => entry.id === checklistId);
+        if (!checklist) return;
+        updates.forEach((update) => {
+          const item = checklist.items.find((entry) => entry.id === update.itemId);
+          if (!item) return;
+          item.completed = update.completed;
+          item.completedAt = update.completed ? completedAt : null;
+          item.completedBy = update.completed ? completedBy ?? undefined : undefined;
+        });
+      });
+    },
     addChecklistItem(checklistId, label) {
       if (!label.trim()) return;
       mutateOnServer('checklist.item.add', { checklistId, label: label.trim() });
@@ -1280,10 +1325,11 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       await runMutation('checklist.report.update', { checklistId, slot, input: nextReport } as unknown as Record<string, unknown>);
     },
     activeAdminShift(userId) {
-      return state.adminShifts.find((shift) => shift.userId === userId && shift.date === dateKey()) ?? null;
+      const today = moscowDateKey();
+      return state.adminShifts.find((shift) => shift.userId === userId && shift.date === today && !isAdminShiftClosed(shift)) ?? null;
     },
     async startAdminShift(input) {
-      const shift = { id: newId('shift'), ...input, date: dateKey(), startedAt: new Date().toISOString(), remindersScheduledAt: null, reminderScheduleError: null };
+      const shift = { id: newId('shift'), ...input, date: moscowDateKey(), startedAt: new Date().toISOString(), closedAt: null, remindersScheduledAt: null, reminderScheduleError: null };
       let scheduleResult: { scheduled?: unknown[] } | null = null;
       try {
         scheduleResult = await scheduleMaxShiftReminders({

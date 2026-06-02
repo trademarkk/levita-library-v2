@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
 import { readStateFromTables, writeStateToTables } from './table-state.mjs';
-import { applyPrismaMutation, createPrisma, readStateFromPrisma } from './prisma-state.mjs';
+import { applyPrismaMutation, closeDuePrismaAdminShifts, createPrisma, readStateFromPrisma } from './prisma-state.mjs';
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const dataDir = join(rootDir, 'data');
@@ -735,6 +735,42 @@ async function cleanupOldMaxReminders() {
     WHERE status IN ('sent', 'failed') AND scheduled_at < ?
   `).run(cutoff);
   return { deleted: result.changes ?? 0, cutoff };
+}
+
+function moscowCloseDateParts(value = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Moscow',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hour12: false,
+  }).formatToParts(value);
+  const get = (type) => parts.find((part) => part.type === type)?.value || '';
+  return {
+    date: `${get('year')}-${get('month')}-${get('day')}`,
+    hour: Number(get('hour')),
+  };
+}
+
+async function closeDueAdminShifts() {
+  if (usePrismaState) return closeDuePrismaAdminShifts(prisma);
+  const current = moscowCloseDateParts();
+  if (current.hour < 23) {
+    return { ok: true, skipped: true, reason: 'before-23-msk', closed: 0, date: current.date };
+  }
+  const stored = await getState();
+  const state = stored?.state;
+  if (!state) return { ok: true, skipped: false, closed: 0, date: current.date };
+  const closedAt = new Date().toISOString();
+  let closed = 0;
+  const adminShifts = (state.adminShifts || []).map((shift) => {
+    if (shift.closedAt || shift.date > current.date) return shift;
+    closed += 1;
+    return { ...shift, closedAt };
+  });
+  await saveState({ ...state, adminShifts });
+  return { ok: true, skipped: false, closed, date: current.date, closedAt };
 }
 
 async function runMaxReminderJob() {
@@ -1864,6 +1900,15 @@ export async function handleApiRequest(request, response) {
         return;
       }
       send(response, 200, await runMaxReminderJob());
+      return;
+    }
+
+    if (url.pathname === '/api/jobs/close-shifts' && (request.method === 'GET' || request.method === 'POST')) {
+      if (!isCronAuthorized(request, url)) {
+        send(response, 401, { error: 'Unauthorized cron request' });
+        return;
+      }
+      send(response, 200, await closeDueAdminShifts());
       return;
     }
 

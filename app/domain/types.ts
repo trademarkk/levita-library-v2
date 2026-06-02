@@ -163,6 +163,7 @@ export interface AdminShift {
   studio: Studio;
   date: string;
   startedAt: string;
+  closedAt?: string | null;
   remindersScheduledAt?: string | null;
   reminderScheduleError?: string | null;
 }
