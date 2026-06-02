@@ -482,6 +482,10 @@ button:disabled,
   opacity: 0.6;
 }
 
+.cursor-block:disabled {
+  cursor: not-allowed !important;
+}
+
 .app-shell.is-saving button:not(:disabled):not([data-allow-while-saving]) {
   cursor: wait;
   opacity: 0.68;

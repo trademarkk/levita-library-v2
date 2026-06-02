@@ -366,7 +366,7 @@ function ChecklistSection({ userId, shiftStudio, shiftAdminName }: { userId: str
             type="button"
             onClick={confirmItems}
             disabled={!changedItems.length || isConfirmingItems}
-            className="primary-action disabled:cursor-not-allowed disabled:opacity-50"
+            className="primary-action cursor-block disabled:opacity-50"
           >
             {isConfirmingItems ? 'Сохраняем...' : 'Подтвердить'}
           </button>
