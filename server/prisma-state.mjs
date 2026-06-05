@@ -16,6 +16,17 @@ const ADMIN_CHECKLIST_ITEMS = [
   'Поставить терминал и телефон на зарядку',
 ];
 
+const ASSISTANT_CHECKLIST_ITEMS = [
+  'Проверить входящие сообщения',
+  'Обновить статусы задач',
+  'Подготовить рабочие материалы',
+];
+const TRAINER_CHECKLIST_ITEMS = [
+  'Проверить готовность зала',
+  'Проверить оборудование',
+  'Заполнить заметки по тренировке',
+];
+
 export function createPrisma() {
   return new PrismaClient({
     log: process.env.PRISMA_QUERY_LOG === 'true' ? ['query', 'warn', 'error'] : ['warn', 'error'],
@@ -469,17 +480,23 @@ async function audit(prisma, action, entityType, entityId, entityLabel, actor = 
 }
 
 async function ensureChecklistForUser(prisma, user) {
-  if (!['ADMIN', 'SENIOR_ADMIN', 'TRAINER', 'SENIOR_TRAINER'].includes(user.role)) return;
+  if (!['ADMIN', 'SENIOR_ADMIN', 'ASSISTANT', 'TRAINER', 'SENIOR_TRAINER'].includes(user.role)) return null;
   const today = dateOnly();
   const existing = await prisma.$queryRaw`select id from public.daily_checklists where assigned_to = ${user.id} and checklist_date = ${today}::date limit 1`;
-  if (existing.length) return;
+  if (existing.length) return existing[0].id;
   const checklistId = newId('checklist');
+  const isTrainer = user.role === 'TRAINER' || user.role === 'SENIOR_TRAINER';
+  const isAssistant = user.role === 'ASSISTANT';
   await prisma.$executeRaw`
     insert into public.daily_checklists (id, title, role, assigned_to, checklist_date, created_at, updated_at)
     values (${checklistId}, ${user.role === 'TRAINER' || user.role === 'SENIOR_TRAINER' ? 'Чек-лист тренера' : 'Чек-лист администратора на смену'}, ${user.role}::public.levtia_role, ${user.id}, ${today}::date, now(), now())
   `;
   const items = user.role === 'TRAINER' || user.role === 'SENIOR_TRAINER' ? ['Проверить готовность зала', 'Проверить оборудование', 'Заполнить заметки по тренировке'] : ADMIN_CHECKLIST_ITEMS;
-  for (const [index, label] of items.entries()) {
+  if (isAssistant) {
+    await prisma.$executeRaw`update public.daily_checklists set title = ${'Чек-лист дня'} where id = ${checklistId}`;
+  }
+  const checklistItems = isAssistant ? ASSISTANT_CHECKLIST_ITEMS : items;
+  for (const [index, label] of checklistItems.entries()) {
     await prisma.$executeRaw`
       insert into public.checklist_items (id, checklist_id, label, completed, position)
       values (${newId('checklist-item')}, ${checklistId}, ${label}, false, ${index})
@@ -494,6 +511,7 @@ async function ensureChecklistForUser(prisma, user) {
       `;
     }
   }
+  return checklistId;
 }
 
 export async function applyPrismaMutation(prisma, action, payload = {}, actor = null) {
@@ -664,8 +682,24 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
       return;
     }
     case 'checklist.item.add': {
-      const [{ count }] = await prisma.$queryRaw`select count(*)::int as count from public.checklist_items where checklist_id = ${payload.checklistId}`;
-      await prisma.$executeRaw`insert into public.checklist_items (id, checklist_id, label, completed, position) values (${payload.id || newId('checklist-item')}, ${payload.checklistId}, ${payload.label}, false, ${count || 0})`;
+      let checklistId = payload.checklistId;
+      const existingChecklist = checklistId
+        ? await prisma.$queryRaw`select id from public.daily_checklists where id = ${checklistId} limit 1`
+        : [];
+      if (!existingChecklist.length && payload.assignedTo) {
+        const users = await prisma.$queryRaw`select id, name, role from public.users where id = ${payload.assignedTo} limit 1`;
+        if (users[0]) checklistId = await ensureChecklistForUser(prisma, users[0]);
+      }
+      const resolvedChecklist = checklistId
+        ? await prisma.$queryRaw`select id from public.daily_checklists where id = ${checklistId} limit 1`
+        : [];
+      if (!resolvedChecklist.length) {
+        const error = new Error('Checklist was not found for item creation.');
+        error.statusCode = 404;
+        throw error;
+      }
+      const [{ count }] = await prisma.$queryRaw`select count(*)::int as count from public.checklist_items where checklist_id = ${checklistId}`;
+      await prisma.$executeRaw`insert into public.checklist_items (id, checklist_id, label, completed, position) values (${payload.id || newId('checklist-item')}, ${checklistId}, ${payload.label}, false, ${count || 0})`;
       return;
     }
     case 'checklist.item.delete':

@@ -116,6 +116,10 @@ type StateSliceMeta = {
   month?: string;
 };
 
+type MutationOptions = {
+  showSaving?: boolean;
+};
+
 type LibraryContextValue = {
   state: LibraryState;
   currentUser: User | null;
@@ -909,8 +913,10 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     action: string,
     payload: Record<string, unknown> = {},
     optimistic?: (draft: LibraryState) => void,
+    options: MutationOptions = {},
   ) => {
-    setIsSaving(true);
+    const showSaving = options.showSaving ?? true;
+    if (showSaving) setIsSaving(true);
     setDataError(null);
     if (optimistic) {
       setState((current) => {
@@ -939,7 +945,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       setDataError(message);
       await refreshState();
     } finally {
-      setIsSaving(false);
+      if (showSaving) setIsSaving(false);
     }
   };
 
@@ -947,8 +953,9 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     action: string,
     payload: Record<string, unknown> = {},
     optimistic?: (draft: LibraryState) => void,
+    options?: MutationOptions,
   ) => {
-    void runMutation(action, payload, optimistic);
+    void runMutation(action, payload, optimistic, options);
   };
 
   const runChecklistToggleMutation = (
@@ -1336,8 +1343,21 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       });
     },
     addChecklistItem(checklistId, label) {
-      if (!label.trim()) return;
-      mutateOnServer('checklist.item.add', { checklistId, label: label.trim() });
+      const trimmed = label.trim();
+      if (!trimmed) return;
+      const checklist = state.checklists.find((entry) => entry.id === checklistId);
+      const itemId = newId('checklist-item');
+      mutateOnServer('checklist.item.add', { checklistId, label: trimmed, id: itemId, assignedTo: checklist?.assignedTo ?? null }, (draft) => {
+        const target = draft.checklists.find((entry) => entry.id === checklistId);
+        if (!target) return;
+        target.items.push({
+          id: itemId,
+          label: trimmed,
+          completed: false,
+          completedAt: null,
+          completedBy: undefined,
+        });
+      });
     },
     deleteChecklistItem(checklistId, itemId) {
       mutateOnServer('checklist.item.delete', { checklistId, itemId });
@@ -1509,7 +1529,21 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     },
     toggleFavorite(entityType, entityId) {
       if (!currentUser) return;
-      mutateOnServer('favorite.toggle', { entityType, entityId, userId: currentUser.id });
+      const userId = currentUser.id;
+      mutateOnServer('favorite.toggle', { entityType, entityId, userId }, (draft) => {
+        const index = draft.favorites.findIndex((favorite) => favorite.userId === userId && favorite.entityType === entityType && favorite.entityId === entityId);
+        if (index >= 0) {
+          draft.favorites.splice(index, 1);
+          return;
+        }
+        draft.favorites.unshift({
+          id: newId('favorite'),
+          userId,
+          entityType,
+          entityId,
+          createdAt: new Date().toISOString(),
+        });
+      }, { showSaving: false });
     },
     isFavorite(entityType, entityId, userId) {
       const targetUserId = userId ?? currentUser?.id ?? null;
@@ -1522,7 +1556,18 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     },
     markKnowledgeAsRead(entityId) {
       if (!currentUser) return;
-      mutateOnServer('knowledge.read', { entityId, userId: currentUser.id });
+      const userId = currentUser.id;
+      mutateOnServer('knowledge.read', { entityId, userId }, (draft) => {
+        const exists = draft.readReceipts.some((receipt) => receipt.userId === userId && receipt.entityType === 'knowledge' && receipt.entityId === entityId);
+        if (exists) return;
+        draft.readReceipts.unshift({
+          id: newId('read'),
+          userId,
+          entityType: 'knowledge',
+          entityId,
+          readAt: new Date().toISOString(),
+        });
+      }, { showSaving: false });
     },
     knowledgeReadReceipt(entityId, userId) {
       const targetUserId = userId ?? currentUser?.id ?? null;
