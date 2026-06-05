@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, XAxis, YAxis } from 'recharts';
 import { ExternalLink, X } from 'lucide-react';
 import { GlassCard } from './GlassCard';
@@ -121,12 +121,17 @@ export function CallRatingSection() {
   const adminNames = useMemo(() => adminNamesFrom(state.callReviews), [state.callReviews]);
   const [adminName, setAdminName] = useState('');
   const availableMonths = useMemo(() => {
-    const months = Array.from(new Set(state.callReviews.map((review) => monthKey(review.reviewedAt)))).sort((left, right) => right.localeCompare(left));
-    return months.length ? months : [monthKey(todayKey())];
+    const currentMonth = monthKey(todayKey());
+    const months = Array.from(new Set([currentMonth, ...state.callReviews.map((review) => monthKey(review.reviewedAt))])).sort((left, right) => right.localeCompare(left));
+    return months.length ? months : [currentMonth];
   }, [state.callReviews]);
   const [selectedMonth, setSelectedMonth] = useState(() => availableMonths[0] ?? monthKey(todayKey()));
   const [selectedReviewId, setSelectedReviewId] = useState<string | null>(null);
   const [chartPoint, setChartPoint] = useState<ChartPointSelection | null>(null);
+
+  useEffect(() => {
+    void refreshSlice('ratings', { month: selectedMonth });
+  }, [selectedMonth]);
 
   const filtered = useMemo(() => {
     const targetAdmin = adminName || adminNames[0] || '';

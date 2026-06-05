@@ -1,4 +1,4 @@
-import { lazy, Suspense, type ReactNode, useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import { DashboardLayout } from './DashboardLayout';
 import { TabNavigation } from './TabNavigation';
 import { GlassCard } from './GlassCard';
@@ -6,6 +6,8 @@ import { ConfirmChecklistDialog } from './ConfirmChecklistDialog';
 import { RoleContentViewer } from './RoleContent';
 import { ExpensesSection, FinancialPlanSection } from './SharedPlanningSections';
 import { AuditLogSection, ControlCenterSection, ShiftJournalSection } from './OwnerDashboard';
+import { CallRatingSection } from './CallRatingSection';
+import { TrainerEvaluationSheetsSection, TrainerRatingSection } from './TrainerEvaluationSections';
 import { useLibrary } from '../domain/LibraryContext';
 import { employeeStatusLabels, formatDate, formatTime, roleLabels, studioLabels } from '../domain/labels';
 import { assistantManagedTeamRoles, can } from '../domain/permissions';
@@ -13,9 +15,6 @@ import type { ChecklistControlStatus, EmployeeStatus, Role } from '../domain/typ
 import { BookOpen, CheckSquare, Edit2, FileText, Info, Link as LinkIcon, ListChecks, Plus, Save, Trash2, UserRound, X } from 'lucide-react';
 import { SEARCH_NAVIGATION_EVENT, type SearchNavigationDetail } from './searchNavigation';
 
-const TrainerEvaluationSheetsSection = lazy(() => import('./TrainerEvaluationSections').then((module) => ({ default: module.TrainerEvaluationSheetsSection })));
-const TrainerRatingSection = lazy(() => import('./TrainerEvaluationSections').then((module) => ({ default: module.TrainerRatingSection })));
-const CallRatingSection = lazy(() => import('./CallRatingSection').then((module) => ({ default: module.CallRatingSection })));
 
 function SectionLoader() {
   return <GlassCard><p className="text-sm text-[#a89b8f]">Загружаем раздел...</p></GlassCard>;
@@ -115,9 +114,9 @@ export function AssistantDashboard() {
           {activeTab === 'financial-plan' && <FinancialPlanSection />}
           {activeTab === 'expenses' && <ExpensesSection />}
           {activeTab === 'team' && <AssistantTeamSection />}
-          {activeTab === 'evaluation-sheets' && <Suspense fallback={<SectionLoader />}><TrainerEvaluationSheetsSection /></Suspense>}
-          {activeTab === 'trainer-rating' && <Suspense fallback={<SectionLoader />}><TrainerRatingSection /></Suspense>}
-          {activeTab === 'call-rating' && <Suspense fallback={<SectionLoader />}><CallRatingSection /></Suspense>}
+          {activeTab === 'evaluation-sheets' && <TrainerEvaluationSheetsSection />}
+          {activeTab === 'trainer-rating' && <TrainerRatingSection />}
+          {activeTab === 'call-rating' && <CallRatingSection />}
           {activeTab === 'admin-checklists' && <AdminChecklistMonitor />}
           {activeTab === 'responsibilities' && <RoleContentViewer role="ASSISTANT" category="RESPONSIBILITY" />}
           {activeTab === 'regulations' && <RoleContentViewer role="ASSISTANT" category="REGULATION" />}

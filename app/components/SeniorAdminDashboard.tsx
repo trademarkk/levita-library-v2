@@ -1,16 +1,15 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { DashboardLayout } from './DashboardLayout';
 import { TabNavigation } from './TabNavigation';
 import { GlassCard } from './GlassCard';
 import { RoleContentViewer, RoleLinksManager, RoleLinksViewer, RoleTemplatesManager, RoleTemplatesViewer } from './RoleContent';
+import { CallRatingSection } from './CallRatingSection';
 import { useLibrary } from '../domain/LibraryContext';
 import { formatDate, formatTime, refundStatusLabels, reportSlotLabels, roleLabels, studioLabels } from '../domain/labels';
 import { can } from '../domain/permissions';
 import type { ChecklistReport, KnowledgeCategory, RefundStatus, Role, Studio } from '../domain/types';
 import { BookOpen, DollarSign, Edit2, FileText, Info, Link as LinkIcon, ListChecks, Phone, Plus, Save, Shield, Trash2, X } from 'lucide-react';
 import { SEARCH_NAVIGATION_EVENT, type SearchNavigationDetail } from './searchNavigation';
-
-const CallRatingSection = lazy(() => import('./CallRatingSection').then((module) => ({ default: module.CallRatingSection })));
 
 function SectionLoader() {
   return <GlassCard><p className="text-sm text-[#a89b8f]">Загружаем раздел...</p></GlassCard>;
@@ -123,7 +122,7 @@ function AdminWorkspace({ role, canManageTemplates = false, canManageLinks = fal
               {activeTab === 'knowledge' && <RoleContentViewer role={role} category="KNOWLEDGE" />}
               {activeTab === 'templates' && (canManageRoleTemplates ? <RoleTemplatesManager role={role} /> : <RoleTemplatesViewer role={role} />)}
               {activeTab === 'links' && (canManageRoleLinks ? <RoleLinksManager role={role} /> : <RoleLinksViewer role={role} />)}
-              {activeTab === 'call-rating' && <Suspense fallback={<SectionLoader />}><CallRatingSection /></Suspense>}
+              {activeTab === 'call-rating' && <CallRatingSection />}
               {activeTab === 'checklist' && (shift ? <ChecklistSection userId={user?.id ?? ''} shiftStudio={shift.studio} shiftAdminName={shift.adminName} /> : <StudyModeChecklistNotice />)}
               {activeTab === 'calls' && <CallsSection />}
               {activeTab === 'refunds' && canManageRefunds && <RefundsSection />}
