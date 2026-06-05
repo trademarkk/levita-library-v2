@@ -171,7 +171,7 @@ export function CallRatingSection() {
               Данные приходят из levita-calls. График показывает баллы по разборам звонков: X - дни, Y - итоговая оценка.
             </p>
           </div>
-          <button onClick={() => void refreshSlice('ratings', { month })} className="soft-action self-start xl:self-auto">
+          <button onClick={() => void refreshSlice('ratings', { month: selectedMonth })} className="soft-action self-start xl:self-auto">
             Обновить из базы
           </button>
         </div>

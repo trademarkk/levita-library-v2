@@ -724,7 +724,13 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
     }
     case 'financial.row.delete': {
       const base = financialBaseId(payload.rowId);
-      await prisma.$executeRaw`delete from public.financial_plan_rows where month >= ${payload.month} and (id = ${payload.rowId} or id like ${`%:${base}`})`;
+      await prisma.$transaction(async (tx) => {
+        const rows = await tx.$queryRaw`select id from public.financial_plan_rows where month >= ${payload.month} and (id = ${payload.rowId} or id like ${`%:${base}`})`;
+        for (const row of rows) {
+          await tx.$executeRaw`delete from public.financial_plan_payments where row_id = ${row.id}`;
+        }
+        await tx.$executeRaw`delete from public.financial_plan_rows where month >= ${payload.month} and (id = ${payload.rowId} or id like ${`%:${base}`})`;
+      });
       return;
     }
     case 'financial.cell.update': {
@@ -733,7 +739,12 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
       for (const row of rows) {
         const targetDate = row.month === payload.month ? dateOnly(payload.date) : clampDate(row.month, payload.date);
         if (String(payload.value || '').trim()) {
-          await prisma.$executeRaw`insert into public.financial_plan_payments (row_id, payment_date, value, updated_at) values (${row.id}, ${targetDate}::date, ${String(payload.value)}, now()) on conflict (row_id, payment_date) do update set value = excluded.value, updated_at = now()`;
+          await prisma.$executeRaw`
+            insert into public.financial_plan_payments (row_id, payment_date, value, updated_at)
+            select ${row.id}, ${targetDate}::date, ${String(payload.value)}, now()
+            where exists (select 1 from public.financial_plan_rows where id = ${row.id})
+            on conflict (row_id, payment_date) do update set value = excluded.value, updated_at = now()
+          `;
         } else {
           await prisma.$executeRaw`delete from public.financial_plan_payments where row_id = ${row.id} and payment_date = ${targetDate}::date`;
         }
