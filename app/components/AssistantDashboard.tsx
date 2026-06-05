@@ -44,7 +44,7 @@ export function AssistantDashboard() {
     { id: 'knowledge', label: 'База знаний' },
     { id: 'templates', label: 'Шаблоны ответов' },
     { id: 'document-templates', label: 'Шаблоны документов' },
-    { id: 'links', label: 'Полезные ссылки' },
+    { id: 'links', label: 'Рабочие ссылки и таблицы' },
     { id: 'contacts', label: 'Полезные контакты' },
     { id: 'training', label: 'Обучение' },
     { id: 'checklist', label: 'Чек-лист дня' },
