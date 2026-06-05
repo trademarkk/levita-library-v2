@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
 import { readStateFromTables, writeStateToTables } from './table-state.mjs';
-import { applyPrismaMutation, closeDuePrismaAdminShifts, createPrisma, readStateFromPrisma } from './prisma-state.mjs';
+import { applyPrismaMutation, closeDuePrismaAdminShifts, createPrisma, readStateFromPrisma, readStateSliceFromPrisma } from './prisma-state.mjs';
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const dataDir = join(rootDir, 'data');
@@ -1474,6 +1474,46 @@ export async function getState() {
   };
 }
 
+async function getStateSlice(slice, params = {}) {
+  if (usePrismaState) return readStateSliceFromPrisma(prisma, slice, params);
+  const payload = await getState();
+  const state = payload?.state || {};
+  const month = String(params.month || '').slice(0, 7);
+  const pickMonth = (date) => !month || String(date || '').slice(0, 7) === month;
+  const sliceState = {};
+
+  if (slice === 'bootstrap' || slice === 'team') Object.assign(sliceState, { users: state.users || [], settings: state.settings });
+  else if (slice === 'tasks') Object.assign(sliceState, { tasks: state.tasks || [] });
+  else if (slice === 'content') Object.assign(sliceState, {
+    knowledge: state.knowledge || [],
+    templates: state.templates || [],
+    links: state.links || [],
+    documentTemplates: state.documentTemplates || [],
+    usefulContacts: state.usefulContacts || [],
+    favorites: state.favorites || [],
+    readReceipts: state.readReceipts || [],
+  });
+  else if (slice === 'checklists' || slice === 'control') Object.assign(sliceState, {
+    users: state.users || [],
+    checklists: state.checklists || [],
+    adminShifts: state.adminShifts || [],
+    refunds: state.refunds || [],
+    tasks: state.tasks || [],
+  });
+  else if (slice === 'financial-plan') Object.assign(sliceState, { financialPlans: (state.financialPlans || []).filter((plan) => !month || plan.month === month) });
+  else if (slice === 'expenses') Object.assign(sliceState, { expenseCategories: state.expenseCategories || [], expenses: (state.expenses || []).filter((expense) => pickMonth(expense.date)) });
+  else if (slice === 'ratings') Object.assign(sliceState, { trainerEvaluations: (state.trainerEvaluations || []).filter((item) => pickMonth(item.evaluatedAt)), callReviews: (state.callReviews || []).filter((item) => pickMonth(item.reviewedAt)) });
+  else if (slice === 'audit') Object.assign(sliceState, { auditLog: state.auditLog || [] });
+  else if (slice === 'refunds') Object.assign(sliceState, { refunds: state.refunds || [] });
+  else {
+    const error = new Error(`Unknown state slice: ${slice}`);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return { updatedAt: payload?.updatedAt || new Date().toISOString(), state: sliceState, sliceMeta: month ? { month } : undefined };
+}
+
 export async function saveState(state) {
   if (usePrismaState) {
     const error = new Error('Direct full-state writes are disabled in Prisma mode. Use /api/mutations for targeted writes.');
@@ -1742,6 +1782,22 @@ async function resetState() {
   db.prepare('DELETE FROM app_state WHERE id = ?').run('main');
 }
 
+async function readMutationActor(actorId) {
+  if (!actorId) return null;
+  if (usePrismaState) {
+    const rows = await prisma.$queryRaw`
+      select id, name, role
+      from public.users
+      where id = ${actorId}
+      limit 1
+    `;
+    const row = rows[0];
+    return row ? { id: row.id, name: row.name, role: row.role } : null;
+  }
+  const current = await getState();
+  return current?.state?.users?.find((user) => user.id === actorId) ?? null;
+}
+
 async function cleanupGoogleOAuthStates(beforeTimestamp) {
   if (useSupabase) {
     await supabaseRun(supabase.from('google_oauth_states').delete().lt('created_at', beforeTimestamp), 'cleanup google oauth states');
@@ -1968,9 +2024,12 @@ export async function handleApiRequest(request, response) {
         send(response, 400, { error: 'action is required' });
         return;
       }
-      const current = await getState();
-      const actor = body.actorId ? current?.state?.users?.find((user) => user.id === body.actorId) ?? null : null;
+      const actor = await readMutationActor(body.actorId);
       await applyPrismaMutation(prisma, body.action, body.payload || {}, actor);
+      if (body.returnState === false) {
+        send(response, 200, { ok: true, state: null, updatedAt: new Date().toISOString(), skipRefresh: true });
+        return;
+      }
       const payload = await getState();
       send(response, 200, payload ? { ...payload, state: sanitizeStateForClient(payload.state) } : { state: null, updatedAt: null });
       return;
@@ -2117,6 +2176,14 @@ export async function handleApiRequest(request, response) {
 
     if (url.pathname === '/api/state' && request.method === 'GET') {
       const payload = await getState();
+      send(response, 200, payload ? { ...payload, state: sanitizeStateForClient(payload.state) } : { state: null, updatedAt: null });
+      return;
+    }
+
+    if (url.pathname === '/api/state-slice' && request.method === 'GET') {
+      const slice = url.searchParams.get('slice') || '';
+      const month = url.searchParams.get('month') || undefined;
+      const payload = await getStateSlice(slice, { month });
       send(response, 200, payload ? { ...payload, state: sanitizeStateForClient(payload.state) } : { state: null, updatedAt: null });
       return;
     }

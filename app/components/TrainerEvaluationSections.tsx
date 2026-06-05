@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, XAxis, YAxis } from 'recharts';
 import { ExternalLink, Pencil, Plus, Save, Trash2, X } from 'lucide-react';
 import { GlassCard } from './GlassCard';
@@ -278,7 +278,7 @@ export function TrainerEvaluationSheetsSection() {
 }
 
 export function TrainerRatingSection() {
-  const { state } = useLibrary();
+  const { state, refreshSlice } = useLibrary();
   const chartAreaRef = useRef<HTMLDivElement>(null);
   const [scope, setScope] = useState<RatingScope>('all');
   const [studio, setStudio] = useState<ExpenseStudio>('STAVROPOLSKAYA');
@@ -291,6 +291,10 @@ export function TrainerRatingSection() {
   const [selectedMonth, setSelectedMonth] = useState(() => availableMonths[0] ?? monthKey(todayKey()));
   const [selectedEvaluationId, setSelectedEvaluationId] = useState<string | null>(null);
   const [chartPoint, setChartPoint] = useState<ChartPointSelection | null>(null);
+
+  useEffect(() => {
+    void refreshSlice('ratings', { month: selectedMonth });
+  }, [selectedMonth]);
 
   const filtered = useMemo(() => {
     const targetTrainer = trainerName || trainerNames[0] || '';

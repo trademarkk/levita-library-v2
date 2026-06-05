@@ -1,17 +1,23 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { DashboardLayout } from './DashboardLayout';
 import { TabNavigation } from './TabNavigation';
 import { GlassCard } from './GlassCard';
 import { OwnerLinksManager, OwnerRoleContentManager, OwnerTemplatesManager } from './RoleContent';
 import { ExpensesSection, FinancialPlanSection } from './SharedPlanningSections';
-import { TrainerEvaluationSheetsSection, TrainerRatingSection } from './TrainerEvaluationSections';
-import { CallRatingSection } from './CallRatingSection';
 import { useLibrary } from '../domain/LibraryContext';
 import { employeeStatusLabels, formatDate, formatTime, refundStatusLabels, roleLabels, studioLabels } from '../domain/labels';
 import { can } from '../domain/permissions';
 import type { ChecklistControlStatus, EmployeeStatus, KnowledgeCategory, RefundStatus, Role } from '../domain/types';
 import { Activity, AlertCircle, Clock3, DollarSign, Edit2, FileText, Info, Link as LinkIcon, ListChecks, Plus, Save, ShieldCheck, Trash2, UserRound, X } from 'lucide-react';
 import { SEARCH_NAVIGATION_EVENT, type SearchNavigationDetail } from './searchNavigation';
+
+const TrainerEvaluationSheetsSection = lazy(() => import('./TrainerEvaluationSections').then((module) => ({ default: module.TrainerEvaluationSheetsSection })));
+const TrainerRatingSection = lazy(() => import('./TrainerEvaluationSections').then((module) => ({ default: module.TrainerRatingSection })));
+const CallRatingSection = lazy(() => import('./CallRatingSection').then((module) => ({ default: module.CallRatingSection })));
+
+function SectionLoader() {
+  return <GlassCard><p className="text-sm text-[#a89b8f]">Загружаем раздел...</p></GlassCard>;
+}
 
 const tabs = [
   { id: 'control-center', label: 'Центр контроля' },
@@ -39,20 +45,48 @@ const tabs = [
 
 export function OwnerDashboard() {
   const [activeTab, setActiveTab] = useState('control-center');
-  const { currentUser, state, refreshState } = useLibrary();
+  const { currentUser, state, refreshSlice } = useLibrary();
   const owner = currentUser?.role === 'OWNER' ? currentUser : state.users.find((user) => user.role === 'OWNER');
+
+  const refreshTabData = (tab: string) => {
+    const sliceByTab: Record<string, Parameters<typeof refreshSlice>[0]> = {
+      'control-center': 'control',
+      'shift-journal': 'control',
+      audit: 'audit',
+      team: 'team',
+      'financial-plan': 'financial-plan',
+      expenses: 'expenses',
+      'evaluation-sheets': 'ratings',
+      'trainer-rating': 'ratings',
+      'call-rating': 'ratings',
+      responsibilities: 'content',
+      regulations: 'content',
+      info: 'content',
+      knowledge: 'content',
+      templates: 'content',
+      'document-templates': 'content',
+      links: 'content',
+      contacts: 'content',
+      training: 'content',
+      checklists: 'checklists',
+      calls: 'content',
+      refunds: 'refunds',
+    };
+    const slice = sliceByTab[tab];
+    if (slice) void refreshSlice(slice);
+  };
 
   useEffect(() => {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<SearchNavigationDetail>).detail;
       if (!detail?.tabId || !tabs.some((tab) => tab.id === detail.tabId)) return;
       setActiveTab(detail.tabId);
-      if (detail.tabId === 'checklists') void refreshState();
+      refreshTabData(detail.tabId);
     };
 
     window.addEventListener(SEARCH_NAVIGATION_EVENT, handler);
     return () => window.removeEventListener(SEARCH_NAVIGATION_EVENT, handler);
-  }, [refreshState]);
+  }, []);
 
   return (
     <DashboardLayout role="OWNER" userName={owner?.name ?? 'Руководитель'}>
@@ -67,7 +101,7 @@ export function OwnerDashboard() {
           activeTab={activeTab}
           onTabChange={(tab) => {
             setActiveTab(tab);
-            if (tab === 'checklists') void refreshState();
+            refreshTabData(tab);
           }}
         />
 
@@ -78,9 +112,9 @@ export function OwnerDashboard() {
           {activeTab === 'team' && <TeamSection />}
           {activeTab === 'financial-plan' && <FinancialPlanSection />}
           {activeTab === 'expenses' && <ExpensesSection />}
-          {activeTab === 'evaluation-sheets' && <TrainerEvaluationSheetsSection />}
-          {activeTab === 'trainer-rating' && <TrainerRatingSection />}
-          {activeTab === 'call-rating' && <CallRatingSection />}
+          {activeTab === 'evaluation-sheets' && <Suspense fallback={<SectionLoader />}><TrainerEvaluationSheetsSection /></Suspense>}
+          {activeTab === 'trainer-rating' && <Suspense fallback={<SectionLoader />}><TrainerRatingSection /></Suspense>}
+          {activeTab === 'call-rating' && <Suspense fallback={<SectionLoader />}><CallRatingSection /></Suspense>}
           {activeTab === 'responsibilities' && <OwnerRoleContentManager category="RESPONSIBILITY" />}
           {activeTab === 'regulations' && <OwnerRoleContentManager category="REGULATION" />}
           {activeTab === 'info' && <OwnerRoleContentManager category="IMPORTANT_INFO" />}
@@ -100,7 +134,7 @@ export function OwnerDashboard() {
 }
 
 export function ControlCenterSection() {
-  const { state, ownerChecklistReports, refreshState } = useLibrary();
+  const { state, ownerChecklistReports, refreshSlice } = useLibrary();
   const today = localDateKey();
   const reports = ownerChecklistReports();
   const todayReports = reports.filter((report) => localDateKey(report.checklist.date) === today);
@@ -128,7 +162,7 @@ export function ControlCenterSection() {
           <h2 className="text-2xl text-[#f5f3f0]">Центр контроля</h2>
           <p className="mt-2 text-sm text-[#a89b8f]">Оперативная сводка по сменам, отчётам, задачам и возвратам.</p>
         </div>
-        <button onClick={() => void refreshState()} className="primary-action inline-flex items-center gap-2">
+        <button onClick={() => void refreshSlice('control')} className="primary-action inline-flex items-center gap-2">
           <Activity className="h-4 w-4" />
           Обновить из базы
         </button>
@@ -586,7 +620,7 @@ function OwnerUsefulContactsSection() {
 }
 
 function MonitoringSection() {
-  const { ownerChecklistReports, refreshState } = useLibrary();
+  const { ownerChecklistReports, refreshSlice } = useLibrary();
   const reports = ownerChecklistReports();
   const [selectedChecklistId, setSelectedChecklistId] = useState<string | null>(null);
   const selectedReport = reports.find((report) => report.checklist.id === selectedChecklistId) ?? null;
@@ -616,7 +650,7 @@ function MonitoringSection() {
         <h2 className="text-2xl text-[#f5f3f0]">Контроль чек-листов администраторов</h2>
         <p className="text-[#a89b8f] mt-2">Сегодня показаны только карточки чек-листов. Откройте карточку, чтобы посмотреть полный список пунктов и отчёты.</p>
       </div>
-      <button onClick={() => void refreshState()} className="px-4 py-2 rounded-lg border border-[#c9a98d]/20 text-[#f5f3f0] hover:bg-[#2a2630] w-fit">
+      <button onClick={() => void refreshSlice('checklists')} className="px-4 py-2 rounded-lg border border-[#c9a98d]/20 text-[#f5f3f0] hover:bg-[#2a2630] w-fit">
         Обновить из базы
       </button>
       {reports.length === 0 && (

@@ -110,6 +110,11 @@ type CreateExpenseInput = {
 };
 
 type TrainerEvaluationInput = Omit<TrainerEvaluationSheet, 'id' | 'createdAt' | 'createdById'>;
+type StateSlice = 'bootstrap' | 'tasks' | 'content' | 'checklists' | 'control' | 'financial-plan' | 'expenses' | 'ratings' | 'team' | 'audit' | 'refunds';
+
+type StateSliceMeta = {
+  month?: string;
+};
 
 type LibraryContextValue = {
   state: LibraryState;
@@ -122,6 +127,7 @@ type LibraryContextValue = {
   logout: () => void;
   resetDemoData: () => void;
   refreshState: () => Promise<void>;
+  refreshSlice: (slice: StateSlice, params?: StateSliceMeta) => Promise<void>;
   usersByRole: (role?: Role) => User[];
   checklistForUser: (userId: string) => DailyChecklist | null;
   adminChecklistReports: () => OwnerChecklistReport[];
@@ -658,6 +664,40 @@ async function loadDatabaseState() {
   return payload.state ? applyLocalSettings(normalizeState(payload.state)) : null;
 }
 
+async function loadDatabaseSlice(slice: StateSlice, params: StateSliceMeta = {}) {
+  const query = new URLSearchParams({ slice });
+  if (params.month) query.set('month', params.month);
+  const response = await fetch(`/api/state-slice?${query.toString()}`, { cache: 'no-store' });
+  if (!response.ok) throw new Error(await readApiError(response));
+  return response.json() as Promise<{ state: Partial<LibraryState> | null; sliceMeta?: StateSliceMeta }>;
+}
+
+function mergeStateSlice(current: LibraryState, patch: Partial<LibraryState> | null, sliceMeta: StateSliceMeta = {}) {
+  if (!patch) return current;
+  const next = cloneState(current);
+  const keys = Object.keys(patch) as Array<keyof LibraryState>;
+  keys.forEach((key) => {
+    if (key === 'financialPlans' && sliceMeta.month) {
+      const incomingPlans = patch.financialPlans ?? [];
+      next.financialPlans = [
+        ...next.financialPlans.filter((plan) => plan.month !== sliceMeta.month),
+        ...incomingPlans,
+      ];
+      return;
+    }
+    if (key === 'expenses' && sliceMeta.month) {
+      const incomingExpenses = patch.expenses ?? [];
+      next.expenses = [
+        ...next.expenses.filter((expense) => !expense.date.startsWith(sliceMeta.month ?? '')),
+        ...incomingExpenses,
+      ];
+      return;
+    }
+    (next as Record<string, unknown>)[key] = patch[key];
+  });
+  return applyLocalSettings(normalizeState(next));
+}
+
 async function saveDatabaseState(state: LibraryState) {
   const response = await fetch('/api/state', {
     method: 'PUT',
@@ -835,6 +875,21 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     setState(loadState());
   };
 
+  const refreshSlice = async (slice: StateSlice, params: StateSliceMeta = {}) => {
+    setIsDataLoading(true);
+    try {
+      const payload = await loadDatabaseSlice(slice, params);
+      setDatabaseReady(true);
+      setState((current) => mergeStateSlice(current, payload.state, payload.sliceMeta ?? params));
+      setDataError(null);
+    } catch (error) {
+      console.error(error);
+      setDataError(error instanceof Error ? error.message : 'Не удалось загрузить данные вкладки.');
+    } finally {
+      setIsDataLoading(false);
+    }
+  };
+
   useEffect(() => {
     void refreshState();
   }, []);
@@ -868,14 +923,14 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       const response = await fetch('/api/mutations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, payload, actorId: currentUserId }),
+        body: JSON.stringify({ action, payload, actorId: currentUserId, returnState: !optimistic }),
       });
       if (!response.ok) throw new Error(await readApiError(response));
-      const result = await response.json() as { state: Partial<LibraryState> | null };
+      const result = await response.json() as { state: Partial<LibraryState> | null; skipRefresh?: boolean };
       if (result.state) {
         setDatabaseReady(true);
         setState(applyLocalSettings(normalizeState(result.state)));
-      } else {
+      } else if (!result.skipRefresh) {
         await refreshState();
       }
     } catch (error) {
@@ -915,7 +970,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         const response = await fetch('/api/mutations', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'checklist.item.toggle', payload, actorId: currentUserId }),
+          body: JSON.stringify({ action: 'checklist.item.toggle', payload, actorId: currentUserId, returnState: false }),
         });
         if (!response.ok) throw new Error(await readApiError(response));
         const result = await response.json() as { state: Partial<LibraryState> | null };
@@ -1041,6 +1096,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       setCurrentUserId(null);
     },
     refreshState,
+    refreshSlice,
     usersByRole(role) {
       return role ? state.users.filter((user) => user.role === role) : state.users;
     },

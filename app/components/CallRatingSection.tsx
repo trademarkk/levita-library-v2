@@ -114,7 +114,7 @@ function RatingDot({ cx, cy, payload, selected, onSelect }: RatingDotProps) {
 }
 
 export function CallRatingSection() {
-  const { state, refreshState } = useLibrary();
+  const { state, refreshSlice } = useLibrary();
   const chartAreaRef = useRef<HTMLDivElement>(null);
   const [scope, setScope] = useState<RatingScope>('all');
   const [studio, setStudio] = useState<ExpenseStudio>('STAVROPOLSKAYA');
@@ -171,7 +171,7 @@ export function CallRatingSection() {
               Данные приходят из levita-calls. График показывает баллы по разборам звонков: X - дни, Y - итоговая оценка.
             </p>
           </div>
-          <button onClick={() => void refreshState()} className="soft-action self-start xl:self-auto">
+          <button onClick={() => void refreshSlice('ratings', { month })} className="soft-action self-start xl:self-auto">
             Обновить из базы
           </button>
         </div>

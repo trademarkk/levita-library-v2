@@ -110,6 +110,15 @@ function clampDate(targetMonth, sourceDate) {
   return `${targetMonth}-${String(safeDay).padStart(2, '0')}`;
 }
 
+function monthBounds(month) {
+  const safeMonth = /^\d{4}-\d{2}$/.test(String(month || '')) ? String(month) : localDateOnly().slice(0, 7);
+  const [year, monthIndex] = safeMonth.split('-').map(Number);
+  const start = `${safeMonth}-01`;
+  const endDate = new Date(Date.UTC(year, monthIndex, 0));
+  const end = `${endDate.getUTCFullYear()}-${String(endDate.getUTCMonth() + 1).padStart(2, '0')}-${String(endDate.getUTCDate()).padStart(2, '0')}`;
+  return { month: safeMonth, start, end };
+}
+
 function financialBaseId(rowId) {
   return String(rowId || '').replace(/^\d{4}-\d{2}:/, '');
 }
@@ -155,19 +164,69 @@ function iso(value) {
   return value?.toISOString?.() || value || null;
 }
 
-export async function readStateFromPrisma(prisma) {
-  const existingUsers = await selectTable(prisma, 'users', 'created_at asc');
-  const today = dateOnly();
-  const existingTodayChecklists = await prisma.$queryRaw`
-    select assigned_to from public.daily_checklists where checklist_date = ${today}::date
-  `;
-  const existingTodayAssignees = new Set(existingTodayChecklists.map((row) => row.assigned_to));
-  for (const user of existingUsers) {
-    if (user.status !== 'active') continue;
-    if (existingTodayAssignees.has(user.id)) continue;
-    await ensureChecklistForUser(prisma, { id: user.id, name: user.name, role: user.role });
+function mapChecklistRows(checklists, checklistItems, checklistReports) {
+  const itemsByChecklist = new Map();
+  for (const item of checklistItems) {
+    const list = itemsByChecklist.get(item.checklist_id) || [];
+    list.push({ id: item.id, label: item.label, completed: Boolean(item.completed), completedAt: iso(item.completed_at), completedBy: item.completed_by });
+    itemsByChecklist.set(item.checklist_id, list);
   }
 
+  const reportsByChecklist = new Map();
+  for (const report of checklistReports) {
+    const list = reportsByChecklist.get(report.checklist_id) || [];
+    list.push({
+      slot: report.slot,
+      studio: report.studio || 'STAVROPOLSKAYA',
+      adminName: report.admin_name,
+      calls: report.calls || '',
+      reached: report.reached || '',
+      bookings: report.bookings || '',
+      cash: report.cash || '',
+      came: report.came || '',
+      bought: report.bought || '',
+      submittedAt: iso(report.submitted_at),
+      sentToTelegram: Boolean(report.sent_to_telegram),
+      telegramSentAt: iso(report.telegram_sent_at),
+      sentToMax: Boolean(report.sent_to_max),
+      maxSentAt: iso(report.max_sent_at),
+      maxSendError: report.max_send_error,
+      maxMessageId: report.max_message_id,
+    });
+    reportsByChecklist.set(report.checklist_id, list);
+  }
+
+  return checklists.map((checklist) => ({
+    id: checklist.id,
+    title: checklist.title,
+    role: checklist.role,
+    assignedTo: checklist.assigned_to,
+    date: dateOnly(checklist.checklist_date),
+    createdAt: iso(checklist.created_at),
+    items: itemsByChecklist.get(checklist.id) || [],
+    reports: reportsByChecklist.get(checklist.id) || [],
+  }));
+}
+
+function mapFinancialPlans(financialMonths, financialRows, financialPayments) {
+  const paymentsByRow = new Map();
+  for (const payment of financialPayments) {
+    const payments = paymentsByRow.get(payment.row_id) || {};
+    payments[dateOnly(payment.payment_date)] = payment.value || '';
+    paymentsByRow.set(payment.row_id, payments);
+  }
+
+  const rowsByMonth = new Map();
+  for (const row of financialRows) {
+    const list = rowsByMonth.get(row.month) || [];
+    list.push({ id: row.id, title: row.title, payments: paymentsByRow.get(row.id) || {} });
+    rowsByMonth.set(row.month, list);
+  }
+
+  return financialMonths.map((month) => ({ month: month.month, rows: rowsByMonth.get(month.month) || [] }));
+}
+
+export async function readStateFromPrisma(prisma) {
   const [
     users, tasks, templates, links, documentTemplates, usefulContacts, knowledge, favorites, readReceipts,
     checklists, checklistItems, checklistReports, refunds, financialMonths, financialRows, financialPayments,
@@ -282,6 +341,124 @@ export async function readStateFromPrisma(prisma) {
       settings,
     },
   };
+}
+
+export async function readStateSliceFromPrisma(prisma, slice, params = {}) {
+  const month = params.month || localDateOnly().slice(0, 7);
+  const bounds = monthBounds(month);
+
+  switch (slice) {
+    case 'bootstrap': {
+      const [users, settingsRows] = await Promise.all([
+        selectTable(prisma, 'users', 'created_at asc'),
+        selectTable(prisma, 'app_settings'),
+      ]);
+      const settings = settingsRows.find((row) => row.id === 'main')?.payload || { colorMode: 'dark', density: 'comfortable', animations: true, telegramReports: true };
+      return { updatedAt: nowIso(), state: { users: users.map(mapUser), settings } };
+    }
+    case 'tasks': {
+      const tasks = await selectTable(prisma, 'tasks', 'created_at asc');
+      return { updatedAt: nowIso(), state: { tasks: tasks.map((task) => ({ id: task.id, title: task.title, description: task.description || '', period: task.period || '', role: task.role, priority: task.priority, status: task.status, deadline: dateOnly(task.deadline), addToCalendar: Boolean(task.add_to_calendar), calendarEventId: task.calendar_event_id, createdAt: iso(task.created_at) })) } };
+    }
+    case 'content': {
+      const [knowledge, templates, links, documentTemplates, usefulContacts, favorites, readReceipts] = await Promise.all([
+        selectTable(prisma, 'knowledge_entries', 'created_at asc'),
+        selectTable(prisma, 'response_templates', 'created_at asc'),
+        selectTable(prisma, 'helpful_links', 'created_at asc'),
+        selectTable(prisma, 'document_templates', 'created_at asc'),
+        selectTable(prisma, 'useful_contacts', 'created_at asc'),
+        selectTable(prisma, 'content_favorites', 'created_at asc'),
+        selectTable(prisma, 'content_read_receipts', 'read_at asc'),
+      ]);
+      return {
+        updatedAt: nowIso(),
+        state: {
+          knowledge: knowledge.map((entry) => ({ id: entry.id, title: entry.title, content: entry.content, role: entry.role, category: entry.category, businessModel: entry.business_model, hashtags: entry.hashtags, isActual: entry.is_actual, searchable: entry.searchable, createdAt: iso(entry.created_at) })),
+          templates: templates.map((template) => ({ id: template.id, title: template.title, body: template.body, role: template.role, businessModel: template.business_model, purpose: template.purpose, createdById: template.created_by_id, createdAt: iso(template.created_at) })),
+          links: links.map((link) => ({ id: link.id, title: link.title, url: link.url, category: link.category, role: link.role, description: link.description, createdAt: iso(link.created_at) })),
+          documentTemplates: documentTemplates.map((template) => ({ id: template.id, title: template.title, url: template.url, createdById: template.created_by_id, createdAt: iso(template.created_at) })),
+          usefulContacts: usefulContacts.map((contact) => ({ id: contact.id, name: contact.name, phone: contact.phone, company: contact.company, specialty: contact.specialty, createdAt: iso(contact.created_at) })),
+          favorites: favorites.map((favorite) => ({ id: favorite.id, userId: favorite.user_id, entityType: favorite.entity_type, entityId: favorite.entity_id, createdAt: iso(favorite.created_at) })),
+          readReceipts: readReceipts.map((receipt) => ({ id: receipt.id, userId: receipt.user_id, entityType: 'knowledge', entityId: receipt.entity_id, readAt: iso(receipt.read_at) })),
+        },
+      };
+    }
+    case 'checklists':
+    case 'control': {
+      const [users, checklists, checklistItems, checklistReports, adminShifts, refunds, tasks] = await Promise.all([
+        selectTable(prisma, 'users', 'created_at asc'),
+        selectTable(prisma, 'daily_checklists', 'checklist_date asc'),
+        selectTable(prisma, 'checklist_items', 'position asc'),
+        selectTable(prisma, 'checklist_reports', 'slot asc'),
+        selectTable(prisma, 'admin_shifts', 'started_at desc'),
+        selectTable(prisma, 'refunds', 'requested_at desc'),
+        selectTable(prisma, 'tasks', 'created_at asc'),
+      ]);
+      return {
+        updatedAt: nowIso(),
+        state: {
+          users: users.map(mapUser),
+          checklists: mapChecklistRows(checklists, checklistItems, checklistReports),
+          adminShifts: adminShifts.map((shift) => ({ id: shift.id, userId: shift.user_id, adminName: shift.admin_name, studio: shift.studio, date: dateOnly(shift.shift_date), startedAt: iso(shift.started_at), closedAt: iso(shift.closed_at), remindersScheduledAt: iso(shift.reminders_scheduled_at), reminderScheduleError: shift.reminder_schedule_error })),
+          refunds: refunds.map((refund) => ({ id: refund.id, clientName: refund.client_name, requestedAt: iso(refund.requested_at), amount: Number(refund.amount) || 0, reason: refund.reason, status: refund.status, comment: refund.comment, createdAt: iso(refund.created_at) })),
+          tasks: tasks.map((task) => ({ id: task.id, title: task.title, description: task.description || '', period: task.period || '', role: task.role, priority: task.priority, status: task.status, deadline: dateOnly(task.deadline), addToCalendar: Boolean(task.add_to_calendar), calendarEventId: task.calendar_event_id, createdAt: iso(task.created_at) })),
+        },
+      };
+    }
+    case 'financial-plan': {
+      const [financialMonths, financialRows, financialPayments] = await Promise.all([
+        prisma.$queryRaw`select * from public.financial_plan_months where month = ${bounds.month} order by month asc`,
+        prisma.$queryRaw`select * from public.financial_plan_rows where month = ${bounds.month} order by position asc`,
+        prisma.$queryRaw`select * from public.financial_plan_payments where payment_date >= ${bounds.start}::date and payment_date <= ${bounds.end}::date order by payment_date asc`,
+      ]);
+      return { updatedAt: nowIso(), state: { financialPlans: mapFinancialPlans(financialMonths, financialRows, financialPayments) }, sliceMeta: { month: bounds.month } };
+    }
+    case 'expenses': {
+      const [expenseCategories, expenses] = await Promise.all([
+        selectTable(prisma, 'expense_categories', 'created_at asc'),
+        prisma.$queryRaw`select * from public.expenses where expense_date >= ${bounds.start}::date and expense_date <= ${bounds.end}::date order by expense_date desc`,
+      ]);
+      return {
+        updatedAt: nowIso(),
+        state: {
+          expenseCategories: expenseCategories.map((category) => ({ id: category.id, name: category.name, createdAt: iso(category.created_at) })),
+          expenses: expenses.map((expense) => ({ id: expense.id, date: dateOnly(expense.expense_date), amount: Number(expense.amount) || 0, account: expense.account, category: expense.category, studio: expense.studio, comment: expense.comment, createdAt: iso(expense.created_at) })),
+        },
+        sliceMeta: { month: bounds.month },
+      };
+    }
+    case 'ratings': {
+      const [trainerEvaluations, callReviews] = await Promise.all([
+        prisma.$queryRaw`select * from public.trainer_evaluation_sheets where evaluated_at >= ${bounds.start}::date and evaluated_at <= ${bounds.end}::date order by evaluated_at desc`,
+        prisma.$queryRaw`select * from public.call_reviews where reviewed_at >= ${bounds.start}::date and reviewed_at <= ${bounds.end}::date order by reviewed_at desc`,
+      ]);
+      return {
+        updatedAt: nowIso(),
+        state: {
+          trainerEvaluations: trainerEvaluations.map((evaluation) => ({ id: evaluation.id, trainerName: evaluation.trainer_name, studio: evaluation.studio, direction: evaluation.direction, score: Number(evaluation.score) || 0, evaluatedAt: dateOnly(evaluation.evaluated_at), sheetUrl: evaluation.sheet_url, createdById: evaluation.created_by_id, createdAt: iso(evaluation.created_at) })),
+          callReviews: callReviews.map((review) => ({ id: review.id, source: review.source || 'levita-calls', externalId: review.external_id, adminName: review.admin_name, studio: review.studio, score: Number(review.score) || 0, reviewedAt: dateOnly(review.reviewed_at), amoCrmDealUrl: review.amo_crm_deal_url, callUrl: review.call_url, originalFilename: review.original_filename, comment: review.comment, createdAt: iso(review.created_at), updatedAt: iso(review.updated_at) })),
+        },
+        sliceMeta: { month: bounds.month },
+      };
+    }
+    case 'team': {
+      const users = await selectTable(prisma, 'users', 'created_at asc');
+      return { updatedAt: nowIso(), state: { users: users.map(mapUser) } };
+    }
+    case 'audit': {
+      const auditLog = await selectTable(prisma, 'audit_log', 'created_at desc');
+      return { updatedAt: nowIso(), state: { auditLog: auditLog.map((entry) => ({ id: entry.id, action: entry.action, entityType: entry.entity_type, entityId: entry.entity_id, entityLabel: entry.entity_label, description: entry.description, actorId: entry.actor_id, actorName: entry.actor_name, actorRole: entry.actor_role, createdAt: iso(entry.created_at) })) } };
+    }
+    case 'refunds': {
+      const refunds = await selectTable(prisma, 'refunds', 'requested_at desc');
+      return { updatedAt: nowIso(), state: { refunds: refunds.map((refund) => ({ id: refund.id, clientName: refund.client_name, requestedAt: iso(refund.requested_at), amount: Number(refund.amount) || 0, reason: refund.reason, status: refund.status, comment: refund.comment, createdAt: iso(refund.created_at) })) } };
+    }
+    default: {
+      const error = new Error(`Unknown state slice: ${slice}`);
+      error.statusCode = 400;
+      throw error;
+    }
+  }
 }
 
 async function audit(prisma, action, entityType, entityId, entityLabel, actor = null, description = null) {
@@ -630,9 +807,13 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
     case 'callChecklist.delete':
       await prisma.$executeRaw`delete from public.call_checklist_items where position = ${payload.index}`;
       return;
-    case 'shift.start':
+    case 'shift.start': {
+      const users = await prisma.$queryRaw`select id, name, role from public.users where id = ${payload.userId} limit 1`;
+      const user = users[0] || { id: payload.userId, name: payload.adminName, role: 'ADMIN' };
+      await ensureChecklistForUser(prisma, user);
       await prisma.$executeRaw`insert into public.admin_shifts (id, user_id, admin_name, studio, shift_date, started_at, reminders_scheduled_at, reminder_schedule_error, created_at, updated_at) values (${payload.id || newId('shift')}, ${payload.userId}, ${payload.adminName}, ${payload.studio}::text, ${dateOnly(payload.date)}::date, ${payload.startedAt || now}::timestamptz, ${payload.remindersScheduledAt || null}::timestamptz, ${payload.reminderScheduleError || null}, now(), now()) on conflict (user_id, shift_date) do update set admin_name = excluded.admin_name, studio = excluded.studio, started_at = excluded.started_at, reminders_scheduled_at = excluded.reminders_scheduled_at, reminder_schedule_error = excluded.reminder_schedule_error, updated_at = now()`;
       return;
+    }
     case 'callReview.upsert':
       await prisma.$executeRaw`insert into public.call_reviews (id, source, external_id, admin_name, studio, score, reviewed_at, amo_crm_deal_url, call_url, original_filename, comment, created_at, updated_at) values (${payload.id || newId('call-review')}, 'levita-calls', ${payload.externalId}, ${payload.adminName}, ${payload.studio}::public.expense_studio, ${toNumber(payload.score)}, ${dateOnly(payload.reviewedAt)}::date, ${payload.amoCrmDealUrl || null}, ${payload.callUrl || null}, ${payload.originalFilename || null}, ${payload.comment || null}, now(), now()) on conflict (source, external_id) do update set admin_name = excluded.admin_name, studio = excluded.studio, score = excluded.score, reviewed_at = excluded.reviewed_at, amo_crm_deal_url = excluded.amo_crm_deal_url, call_url = excluded.call_url, original_filename = excluded.original_filename, comment = excluded.comment, updated_at = now()`;
       return;

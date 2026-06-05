@@ -1,12 +1,10 @@
-import { type ReactNode, useEffect, useState } from 'react';
+import { lazy, Suspense, type ReactNode, useEffect, useState } from 'react';
 import { DashboardLayout } from './DashboardLayout';
 import { TabNavigation } from './TabNavigation';
 import { GlassCard } from './GlassCard';
 import { ConfirmChecklistDialog } from './ConfirmChecklistDialog';
 import { RoleContentViewer } from './RoleContent';
 import { ExpensesSection, FinancialPlanSection } from './SharedPlanningSections';
-import { TrainerEvaluationSheetsSection, TrainerRatingSection } from './TrainerEvaluationSections';
-import { CallRatingSection } from './CallRatingSection';
 import { AuditLogSection, ControlCenterSection, ShiftJournalSection } from './OwnerDashboard';
 import { useLibrary } from '../domain/LibraryContext';
 import { employeeStatusLabels, formatDate, formatTime, roleLabels, studioLabels } from '../domain/labels';
@@ -15,9 +13,17 @@ import type { ChecklistControlStatus, EmployeeStatus, Role } from '../domain/typ
 import { BookOpen, CheckSquare, Edit2, FileText, Info, Link as LinkIcon, ListChecks, Plus, Save, Trash2, UserRound, X } from 'lucide-react';
 import { SEARCH_NAVIGATION_EVENT, type SearchNavigationDetail } from './searchNavigation';
 
+const TrainerEvaluationSheetsSection = lazy(() => import('./TrainerEvaluationSections').then((module) => ({ default: module.TrainerEvaluationSheetsSection })));
+const TrainerRatingSection = lazy(() => import('./TrainerEvaluationSections').then((module) => ({ default: module.TrainerRatingSection })));
+const CallRatingSection = lazy(() => import('./CallRatingSection').then((module) => ({ default: module.CallRatingSection })));
+
+function SectionLoader() {
+  return <GlassCard><p className="text-sm text-[#a89b8f]">Загружаем раздел...</p></GlassCard>;
+}
+
 export function AssistantDashboard() {
   const [activeTab, setActiveTab] = useState('tasks');
-  const { currentUser, state, refreshState } = useLibrary();
+  const { currentUser, state, refreshSlice } = useLibrary();
   const assistant = currentUser?.role === 'ASSISTANT' ? currentUser : state.users.find((user) => user.role === 'ASSISTANT');
 
   const tabs = [
@@ -44,17 +50,45 @@ export function AssistantDashboard() {
     { id: 'checklist', label: 'Чек-лист дня' },
   ];
 
+  const refreshTabData = (tab: string) => {
+    const sliceByTab: Record<string, Parameters<typeof refreshSlice>[0]> = {
+      'control-center': 'control',
+      'shift-journal': 'control',
+      audit: 'audit',
+      tasks: 'tasks',
+      'financial-plan': 'financial-plan',
+      expenses: 'expenses',
+      team: 'team',
+      'evaluation-sheets': 'ratings',
+      'trainer-rating': 'ratings',
+      'call-rating': 'ratings',
+      'admin-checklists': 'checklists',
+      responsibilities: 'content',
+      regulations: 'content',
+      info: 'content',
+      knowledge: 'content',
+      templates: 'content',
+      'document-templates': 'content',
+      links: 'content',
+      contacts: 'content',
+      training: 'content',
+      checklist: 'checklists',
+    };
+    const slice = sliceByTab[tab];
+    if (slice) void refreshSlice(slice);
+  };
+
   useEffect(() => {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<SearchNavigationDetail>).detail;
       if (!detail?.tabId || !tabs.some((tab) => tab.id === detail.tabId)) return;
       setActiveTab(detail.tabId);
-      if (detail.tabId === 'admin-checklists' || detail.tabId === 'control-center') void refreshState();
+      refreshTabData(detail.tabId);
     };
 
     window.addEventListener(SEARCH_NAVIGATION_EVENT, handler);
     return () => window.removeEventListener(SEARCH_NAVIGATION_EVENT, handler);
-  }, [refreshState, tabs]);
+  }, [tabs]);
 
   return (
     <DashboardLayout role="ASSISTANT" userName={assistant?.name ?? 'Ассистент'}>
@@ -69,7 +103,7 @@ export function AssistantDashboard() {
           activeTab={activeTab}
           onTabChange={(tab) => {
             setActiveTab(tab);
-            if (tab === 'admin-checklists' || tab === 'control-center') void refreshState();
+            refreshTabData(tab);
           }}
         />
 
@@ -81,9 +115,9 @@ export function AssistantDashboard() {
           {activeTab === 'financial-plan' && <FinancialPlanSection />}
           {activeTab === 'expenses' && <ExpensesSection />}
           {activeTab === 'team' && <AssistantTeamSection />}
-          {activeTab === 'evaluation-sheets' && <TrainerEvaluationSheetsSection />}
-          {activeTab === 'trainer-rating' && <TrainerRatingSection />}
-          {activeTab === 'call-rating' && <CallRatingSection />}
+          {activeTab === 'evaluation-sheets' && <Suspense fallback={<SectionLoader />}><TrainerEvaluationSheetsSection /></Suspense>}
+          {activeTab === 'trainer-rating' && <Suspense fallback={<SectionLoader />}><TrainerRatingSection /></Suspense>}
+          {activeTab === 'call-rating' && <Suspense fallback={<SectionLoader />}><CallRatingSection /></Suspense>}
           {activeTab === 'admin-checklists' && <AdminChecklistMonitor />}
           {activeTab === 'responsibilities' && <RoleContentViewer role="ASSISTANT" category="RESPONSIBILITY" />}
           {activeTab === 'regulations' && <RoleContentViewer role="ASSISTANT" category="REGULATION" />}
@@ -307,7 +341,7 @@ function TasksSection() {
 }
 
 function AdminChecklistMonitor() {
-  const { adminChecklistReports, refreshState } = useLibrary();
+  const { adminChecklistReports, refreshSlice } = useLibrary();
   const reports = adminChecklistReports();
   const [selectedChecklistId, setSelectedChecklistId] = useState<string | null>(null);
   const selectedReport = reports.find((report) => report.checklist.id === selectedChecklistId) ?? null;
@@ -333,7 +367,7 @@ function AdminChecklistMonitor() {
 
   return (
     <div className="space-y-8">
-      <button onClick={() => void refreshState()} className="px-4 py-2 rounded-lg border border-[#c9a98d]/20 text-[#f5f3f0] hover:bg-[#2a2630]">
+      <button onClick={() => void refreshSlice('checklists')} className="px-4 py-2 rounded-lg border border-[#c9a98d]/20 text-[#f5f3f0] hover:bg-[#2a2630]">
         Обновить из базы
       </button>
       {reports.length === 0 && (

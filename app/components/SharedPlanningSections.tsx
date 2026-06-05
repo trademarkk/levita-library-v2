@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Download, Plus, Trash2 } from 'lucide-react';
 import { GlassCard } from './GlassCard';
 import { TabNavigation } from './TabNavigation';
@@ -65,11 +65,15 @@ function downloadExcel(filename: string, rows: Array<Array<string | number>>) {
 }
 
 export function FinancialPlanSection() {
-  const { state, addFinancialPlanRow, updateFinancialPlanRow, deleteFinancialPlanRow, updateFinancialPlanCell } = useLibrary();
+  const { state, refreshSlice, addFinancialPlanRow, updateFinancialPlanRow, deleteFinancialPlanRow, updateFinancialPlanCell } = useLibrary();
   const [month, setMonth] = useState(currentMonthKey());
   const [newTitle, setNewTitle] = useState('');
   const plan = state.financialPlans.find((item) => item.month === month);
   const days = useMemo(() => daysInMonth(month), [month]);
+
+  useEffect(() => {
+    void refreshSlice('financial-plan', { month });
+  }, [month]);
 
   const addRow = () => {
     addFinancialPlanRow(month, newTitle);
@@ -135,7 +139,7 @@ export function FinancialPlanSection() {
 }
 
 export function ExpensesSection() {
-  const { state, createExpense, deleteExpense, createExpenseCategory, deleteExpenseCategory } = useLibrary();
+  const { state, refreshSlice, createExpense, deleteExpense, createExpenseCategory, deleteExpenseCategory } = useLibrary();
   const [activeTab, setActiveTab] = useState('STAVROPOLSKAYA');
   const [month, setMonth] = useState(currentMonthKey());
   const [categoryName, setCategoryName] = useState('');
@@ -156,6 +160,10 @@ export function ExpensesSection() {
   const monthlyExpenses = state.expenses.filter((expense) => expense.date.startsWith(month));
   const visibleExpenses = activeTab === 'SUMMARY' ? monthlyExpenses : monthlyExpenses.filter((expense) => expense.studio === activeTab);
   const total = visibleExpenses.reduce((sum, expense) => sum + expense.amount, 0);
+
+  useEffect(() => {
+    void refreshSlice('expenses', { month });
+  }, [month]);
 
   const saveExpense = () => {
     if (!draft.date || !draft.amount || !draft.category) return;

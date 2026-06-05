@@ -1,0 +1,16 @@
+create index if not exists users_role_status_idx on public.users (role, status);
+create index if not exists daily_checklists_assigned_date_idx on public.daily_checklists (assigned_to, checklist_date);
+create index if not exists daily_checklists_role_date_idx on public.daily_checklists (role, checklist_date);
+create index if not exists checklist_items_checklist_position_idx on public.checklist_items (checklist_id, position);
+create index if not exists checklist_reports_checklist_slot_idx on public.checklist_reports (checklist_id, slot);
+create index if not exists knowledge_entries_role_category_model_idx on public.knowledge_entries (role, category, business_model);
+create index if not exists response_templates_role_model_idx on public.response_templates (role, business_model);
+create index if not exists helpful_links_role_category_idx on public.helpful_links (role, category);
+create index if not exists financial_plan_rows_month_position_idx on public.financial_plan_rows (month, position);
+create index if not exists financial_plan_payments_payment_date_idx on public.financial_plan_payments (payment_date);
+create index if not exists expenses_month_studio_idx on public.expenses (expense_date, studio);
+create index if not exists trainer_evaluation_sheets_month_studio_trainer_idx on public.trainer_evaluation_sheets (evaluated_at, studio, trainer_name);
+create index if not exists call_reviews_month_studio_admin_idx on public.call_reviews (reviewed_at, studio, admin_name);
+create index if not exists admin_shifts_date_user_idx on public.admin_shifts (shift_date, user_id);
+create index if not exists audit_log_created_at_idx on public.audit_log (created_at desc);
+create index if not exists refunds_status_requested_idx on public.refunds (status, requested_at desc);

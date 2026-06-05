@@ -1,15 +1,20 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { DashboardLayout } from './DashboardLayout';
 import { TabNavigation } from './TabNavigation';
 import { GlassCard } from './GlassCard';
 import { RoleContentViewer, RoleLinksManager, RoleLinksViewer, RoleTemplatesManager, RoleTemplatesViewer } from './RoleContent';
-import { CallRatingSection } from './CallRatingSection';
 import { useLibrary } from '../domain/LibraryContext';
 import { formatDate, formatTime, refundStatusLabels, reportSlotLabels, roleLabels, studioLabels } from '../domain/labels';
 import { can } from '../domain/permissions';
 import type { ChecklistReport, KnowledgeCategory, RefundStatus, Role, Studio } from '../domain/types';
 import { BookOpen, DollarSign, Edit2, FileText, Info, Link as LinkIcon, ListChecks, Phone, Plus, Save, Shield, Trash2, X } from 'lucide-react';
 import { SEARCH_NAVIGATION_EVENT, type SearchNavigationDetail } from './searchNavigation';
+
+const CallRatingSection = lazy(() => import('./CallRatingSection').then((module) => ({ default: module.CallRatingSection })));
+
+function SectionLoader() {
+  return <GlassCard><p className="text-sm text-[#a89b8f]">Загружаем раздел...</p></GlassCard>;
+}
 
 const adminTabs = [
   { id: 'responsibilities', label: 'Обязанности' },
@@ -34,18 +39,36 @@ export function AdminDashboard() {
 function AdminWorkspace({ role, canManageTemplates = false, canManageLinks = false, canManageRefunds = false }: { role: 'ADMIN' | 'SENIOR_ADMIN'; canManageTemplates?: boolean; canManageLinks?: boolean; canManageRefunds?: boolean }) {
   const [activeTab, setActiveTab] = useState('responsibilities');
   const [studyMode, setStudyMode] = useState(false);
-  const { currentUser, state, activeAdminShift } = useLibrary();
+  const { currentUser, state, activeAdminShift, refreshSlice } = useLibrary();
   const user = currentUser?.role === role ? currentUser : state.users.find((item) => item.role === role);
   const tabs = can(role, 'view', 'refunds') || canManageRefunds ? [...adminTabs, { id: 'refunds', label: 'Возвраты' }] : adminTabs;
   const shift = user ? activeAdminShift(user.id) : null;
   const canManageRoleTemplates = can(role, 'create', 'messageTemplates', { targetRole: role }) || canManageTemplates;
   const canManageRoleLinks = can(role, 'create', 'workLinks', { targetRole: role }) || canManageLinks;
 
+  const refreshTabData = (tab: string) => {
+    const sliceByTab: Record<string, Parameters<typeof refreshSlice>[0]> = {
+      responsibilities: 'content',
+      regulations: 'content',
+      info: 'content',
+      knowledge: 'content',
+      templates: 'content',
+      links: 'content',
+      'call-rating': 'ratings',
+      checklist: 'checklists',
+      calls: 'content',
+      refunds: 'refunds',
+    };
+    const slice = sliceByTab[tab];
+    if (slice) void refreshSlice(slice);
+  };
+
   useEffect(() => {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<SearchNavigationDetail>).detail;
       if (!detail?.tabId || !tabs.some((tab) => tab.id === detail.tabId)) return;
       setActiveTab(detail.tabId);
+      refreshTabData(detail.tabId);
       if (!shift) setStudyMode(true);
     };
 
@@ -84,7 +107,14 @@ function AdminWorkspace({ role, canManageTemplates = false, canManageLinks = fal
               {shift?.reminderScheduleError && <p className="mt-3 text-sm text-[#f0c5cf]">{shift.reminderScheduleError}</p>}
             </GlassCard>
 
-            <TabNavigation tabs={tabs} activeTab={activeTab} onTabChange={setActiveTab} />
+            <TabNavigation
+              tabs={tabs}
+              activeTab={activeTab}
+              onTabChange={(tab) => {
+                setActiveTab(tab);
+                refreshTabData(tab);
+              }}
+            />
 
             <div className="max-w-7xl">
               {activeTab === 'responsibilities' && <RoleContentViewer role={role} category="RESPONSIBILITY" />}
@@ -93,7 +123,7 @@ function AdminWorkspace({ role, canManageTemplates = false, canManageLinks = fal
               {activeTab === 'knowledge' && <RoleContentViewer role={role} category="KNOWLEDGE" />}
               {activeTab === 'templates' && (canManageRoleTemplates ? <RoleTemplatesManager role={role} /> : <RoleTemplatesViewer role={role} />)}
               {activeTab === 'links' && (canManageRoleLinks ? <RoleLinksManager role={role} /> : <RoleLinksViewer role={role} />)}
-              {activeTab === 'call-rating' && <CallRatingSection />}
+              {activeTab === 'call-rating' && <Suspense fallback={<SectionLoader />}><CallRatingSection /></Suspense>}
               {activeTab === 'checklist' && (shift ? <ChecklistSection userId={user?.id ?? ''} shiftStudio={shift.studio} shiftAdminName={shift.adminName} /> : <StudyModeChecklistNotice />)}
               {activeTab === 'calls' && <CallsSection />}
               {activeTab === 'refunds' && canManageRefunds && <RefundsSection />}

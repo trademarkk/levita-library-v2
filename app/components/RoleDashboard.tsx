@@ -1,16 +1,22 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { DashboardLayout } from './DashboardLayout';
 import { GlassCard } from './GlassCard';
 import { TabNavigation } from './TabNavigation';
 import { ConfirmChecklistDialog } from './ConfirmChecklistDialog';
 import { RoleContentViewer, RoleLinksManager, RoleLinksViewer, RoleTemplatesViewer } from './RoleContent';
-import { TrainerEvaluationSheetsSection, TrainerRatingSection } from './TrainerEvaluationSections';
 import { useLibrary } from '../domain/LibraryContext';
 import { roleLabels } from '../domain/labels';
 import { can } from '../domain/permissions';
 import type { Role } from '../domain/types';
 import { CheckSquare, Edit2, ListChecks, Plus, Save, Trash2, X } from 'lucide-react';
 import { SEARCH_NAVIGATION_EVENT, type SearchNavigationDetail } from './searchNavigation';
+
+const TrainerEvaluationSheetsSection = lazy(() => import('./TrainerEvaluationSections').then((module) => ({ default: module.TrainerEvaluationSheetsSection })));
+const TrainerRatingSection = lazy(() => import('./TrainerEvaluationSections').then((module) => ({ default: module.TrainerRatingSection })));
+
+function SectionLoader() {
+  return <GlassCard><p className="text-sm text-[#a89b8f]">Загружаем раздел...</p></GlassCard>;
+}
 
 type RoleDashboardRole = 'ADMIN' | 'SENIOR_TRAINER' | 'TRAINER';
 
@@ -60,15 +66,32 @@ const roleContent = {
 
 export function RoleDashboard({ role }: RoleDashboardProps) {
   const [activeTab, setActiveTab] = useState(roleContent[role].tabs[0].id);
-  const { currentUser, state } = useLibrary();
+  const { currentUser, state, refreshSlice } = useLibrary();
   const user = currentUser?.role === role ? currentUser : state.users.find((item) => item.role === role);
   const canManageRoleLinks = can(role, 'create', 'workLinks', { targetRole: role });
+
+  const refreshTabData = (tab: string) => {
+    const sliceByTab: Record<string, Parameters<typeof refreshSlice>[0]> = {
+      responsibilities: 'content',
+      regulations: 'content',
+      info: 'content',
+      knowledge: 'content',
+      templates: 'content',
+      links: 'content',
+      'evaluation-sheets': 'ratings',
+      'trainer-rating': 'ratings',
+      checklist: 'checklists',
+    };
+    const slice = sliceByTab[tab];
+    if (slice) void refreshSlice(slice);
+  };
 
   useEffect(() => {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<SearchNavigationDetail>).detail;
       if (!detail?.tabId || !roleContent[role].tabs.some((tab) => tab.id === detail.tabId)) return;
       setActiveTab(detail.tabId);
+      refreshTabData(detail.tabId);
     };
 
     window.addEventListener(SEARCH_NAVIGATION_EVENT, handler);
@@ -83,7 +106,14 @@ export function RoleDashboard({ role }: RoleDashboardProps) {
           <p className="text-[#a89b8f]">{roleContent[role].subtitle}</p>
         </div>
 
-        <TabNavigation tabs={roleContent[role].tabs} activeTab={activeTab} onTabChange={setActiveTab} />
+        <TabNavigation
+          tabs={roleContent[role].tabs}
+          activeTab={activeTab}
+          onTabChange={(tab) => {
+            setActiveTab(tab);
+            refreshTabData(tab);
+          }}
+        />
 
         <div className="max-w-6xl">
           {activeTab === 'responsibilities' && <RoleContentViewer role={role} category="RESPONSIBILITY" />}
@@ -92,8 +122,8 @@ export function RoleDashboard({ role }: RoleDashboardProps) {
           {activeTab === 'knowledge' && <RoleContentViewer role={role} category="KNOWLEDGE" />}
           {activeTab === 'templates' && <RoleTemplatesViewer role={role} />}
           {activeTab === 'links' && (canManageRoleLinks ? <RoleLinksManager role={role} /> : <RoleLinksViewer role={role} />)}
-          {activeTab === 'evaluation-sheets' && <TrainerEvaluationSheetsSection />}
-          {activeTab === 'trainer-rating' && <TrainerRatingSection />}
+          {activeTab === 'evaluation-sheets' && <Suspense fallback={<SectionLoader />}><TrainerEvaluationSheetsSection /></Suspense>}
+          {activeTab === 'trainer-rating' && <Suspense fallback={<SectionLoader />}><TrainerRatingSection /></Suspense>}
           {activeTab === 'checklist' && <RoleChecklist userId={user?.id ?? ''} role={role} />}
         </div>
       </div>
