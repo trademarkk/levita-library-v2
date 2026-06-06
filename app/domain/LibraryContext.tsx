@@ -907,6 +907,30 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     [currentUserId, state.users],
   );
 
+  const resolveActiveUser = () => {
+    if (currentUser) return currentUser;
+    if (currentUserId) {
+      const sessionUser = state.users.find((user) => user.id === currentUserId);
+      if (sessionUser) return sessionUser;
+    }
+    if (typeof window === 'undefined') return null;
+
+    const pathname = window.location.pathname;
+    const routeRole: Role | null =
+      pathname.startsWith('/assistant') ? 'ASSISTANT'
+        : pathname.startsWith('/senior-admin') ? 'SENIOR_ADMIN'
+          : pathname.startsWith('/admin') ? 'ADMIN'
+            : pathname.startsWith('/owner') ? 'OWNER'
+              : pathname.startsWith('/senior-trainer') ? 'SENIOR_TRAINER'
+                : pathname.startsWith('/trainer') ? 'TRAINER'
+                  : null;
+
+    if (!routeRole) return null;
+    return state.users.find((user) => user.role === routeRole && user.status !== 'blocked')
+      ?? state.users.find((user) => user.role === routeRole)
+      ?? null;
+  };
+
   const runMutation = async (
     action: string,
     payload: Record<string, unknown> = {},
@@ -1538,8 +1562,12 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       mutateOnServer('settings.update', { input });
     },
     toggleFavorite(entityType, entityId) {
-      if (!currentUser) return;
-      const userId = currentUser.id;
+      const activeUser = resolveActiveUser();
+      if (!activeUser) {
+        setDataError('Не удалось определить пользователя для избранного. Войдите заново.');
+        return;
+      }
+      const userId = activeUser.id;
       const favoriteId = newId('favorite');
       const payload = { entityType, entityId, userId, id: favoriteId };
       setDataError(null);
@@ -1562,7 +1590,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       void fetch('/api/mutations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'favorite.toggle', payload, actorId: currentUserId, returnState: false }),
+        body: JSON.stringify({ action: 'favorite.toggle', payload, actorId: userId, returnState: false }),
       })
         .then(async (response) => {
           if (!response.ok) throw new Error(await readApiError(response));
@@ -1575,13 +1603,14 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         });
     },
     isFavorite(entityType, entityId, userId) {
-      const targetUserId = userId ?? currentUser?.id ?? null;
+      const targetUserId = userId ?? resolveActiveUser()?.id ?? null;
       if (!targetUserId) return false;
       return state.favorites.some((favorite) => favorite.userId === targetUserId && favorite.entityType === entityType && favorite.entityId === entityId);
     },
     favoritesForCurrentUser() {
-      if (!currentUser) return [];
-      return state.favorites.filter((favorite) => favorite.userId === currentUser.id);
+      const activeUser = resolveActiveUser();
+      if (!activeUser) return [];
+      return state.favorites.filter((favorite) => favorite.userId === activeUser.id);
     },
     markKnowledgeAsRead(entityId) {
       if (!currentUser) return;
