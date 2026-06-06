@@ -794,6 +794,16 @@ function isReportItemLabel(label: string, slot: ChecklistReportSlot) {
   return REPORT_ALIASES[slot].some((alias) => normalizeText(alias) === normalized);
 }
 
+function roleFromPathname(pathname: string): Role | null {
+  if (pathname.startsWith('/assistant')) return 'ASSISTANT';
+  if (pathname.startsWith('/senior-admin')) return 'SENIOR_ADMIN';
+  if (pathname.startsWith('/admin')) return 'ADMIN';
+  if (pathname.startsWith('/owner')) return 'OWNER';
+  if (pathname.startsWith('/senior-trainer')) return 'SENIOR_TRAINER';
+  if (pathname.startsWith('/trainer')) return 'TRAINER';
+  return null;
+}
+
 function findReportItem(checklist: DailyChecklist, slot: ChecklistReportSlot) {
   const exact = checklist.items.find((entry) => isReportItemLabel(entry.label, slot));
   if (exact) return exact;
@@ -915,16 +925,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     }
     if (typeof window === 'undefined') return null;
 
-    const pathname = window.location.pathname;
-    const routeRole: Role | null =
-      pathname.startsWith('/assistant') ? 'ASSISTANT'
-        : pathname.startsWith('/senior-admin') ? 'SENIOR_ADMIN'
-          : pathname.startsWith('/admin') ? 'ADMIN'
-            : pathname.startsWith('/owner') ? 'OWNER'
-              : pathname.startsWith('/senior-trainer') ? 'SENIOR_TRAINER'
-                : pathname.startsWith('/trainer') ? 'TRAINER'
-                  : null;
-
+    const routeRole = roleFromPathname(window.location.pathname);
     if (!routeRole) return null;
     return state.users.find((user) => user.role === routeRole && user.status !== 'blocked')
       ?? state.users.find((user) => user.role === routeRole)
@@ -1563,37 +1564,43 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     },
     toggleFavorite(entityType, entityId) {
       const activeUser = resolveActiveUser();
-      if (!activeUser) {
-        setDataError('Не удалось определить пользователя для избранного. Войдите заново.');
-        return;
-      }
-      const userId = activeUser.id;
+      const routeRole = typeof window === 'undefined' ? null : roleFromPathname(window.location.pathname);
+      const userId = activeUser?.id ?? null;
       const favoriteId = newId('favorite');
-      const payload = { entityType, entityId, userId, id: favoriteId };
+      const payload = { entityType, entityId, userId, actorRole: activeUser?.role ?? routeRole, id: favoriteId };
       setDataError(null);
-      setState((current) => {
-        const draft = cloneState(current);
-        const index = draft.favorites.findIndex((favorite) => favorite.userId === userId && favorite.entityType === entityType && favorite.entityId === entityId);
-        if (index >= 0) {
-          draft.favorites.splice(index, 1);
-        } else {
-          draft.favorites.unshift({
-            id: favoriteId,
-            userId,
-            entityType,
-            entityId,
-            createdAt: new Date().toISOString(),
-          });
-        }
-        return normalizeState(draft);
-      });
+      if (userId) {
+        setState((current) => {
+          const draft = cloneState(current);
+          const index = draft.favorites.findIndex((favorite) => favorite.userId === userId && favorite.entityType === entityType && favorite.entityId === entityId);
+          if (index >= 0) {
+            draft.favorites.splice(index, 1);
+          } else {
+            draft.favorites.unshift({
+              id: favoriteId,
+              userId,
+              entityType,
+              entityId,
+              createdAt: new Date().toISOString(),
+            });
+          }
+          return normalizeState(draft);
+        });
+      }
       void fetch('/api/mutations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'favorite.toggle', payload, actorId: userId, returnState: false }),
+        body: JSON.stringify({ action: 'favorite.toggle', payload, actorId: userId, returnState: Boolean(!userId) }),
       })
         .then(async (response) => {
           if (!response.ok) throw new Error(await readApiError(response));
+          if (!userId) {
+            const result = await response.json() as { state: Partial<LibraryState> | null };
+            if (result.state) {
+              setDatabaseReady(true);
+              setState(applyLocalSettings(normalizeState(result.state)));
+            }
+          }
         })
         .catch(async (error) => {
           const message = error instanceof Error ? error.message : 'Could not update favorite.';

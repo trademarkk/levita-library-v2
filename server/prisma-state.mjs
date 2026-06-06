@@ -885,7 +885,18 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
       await prisma.$executeRaw`insert into public.app_settings (id, payload, updated_at) values ('main', ${jsonValue(payload.input || {})}, now()) on conflict (id) do update set payload = public.app_settings.payload || excluded.payload, updated_at = now()`;
       return;
     case 'favorite.toggle': {
-      const userId = payload.userId || actor?.id || null;
+      let userId = payload.userId || actor?.id || null;
+      if (!userId && payload.actorRole) {
+        const users = await prisma.$queryRaw`
+          select id
+          from public.users
+          where role = ${payload.actorRole}::public.levtia_role
+            and status <> 'blocked'::public.employee_status
+          order by created_at asc
+          limit 1
+        `;
+        userId = users[0]?.id || null;
+      }
       if (!userId) {
         const error = new Error('Favorite user is required.');
         error.statusCode = 400;
