@@ -768,13 +768,31 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
       return;
     case 'financial.row.add': {
       const baseId = payload.id || newId('financial-row');
-      for (let index = 0; index <= FINANCIAL_PLAN_FORWARD_MONTHS; index += 1) {
-        const month = addMonths(payload.month, index);
-        const id = storageFinancialRowId(month, baseId);
-        await prisma.$executeRaw`insert into public.financial_plan_months (month, updated_at) values (${month}, now()) on conflict (month) do update set updated_at = excluded.updated_at`;
-        const [{ count }] = await prisma.$queryRaw`select count(*)::int as count from public.financial_plan_rows where month = ${month}`;
-        await prisma.$executeRaw`insert into public.financial_plan_rows (id, month, title, position, created_at, updated_at) values (${id}, ${month}, ${payload.title}, ${count || 0}, now(), now()) on conflict (id) do nothing`;
-      }
+      const base = financialBaseId(baseId);
+      const startMonth = /^\d{4}-\d{2}$/.test(String(payload.month || '')) ? String(payload.month) : localDateOnly().slice(0, 7);
+      await prisma.$executeRaw`
+        with generated_months as (
+          select to_char((${startMonth} || '-01')::date + (step || ' months')::interval, 'YYYY-MM') as month
+          from generate_series(0, ${FINANCIAL_PLAN_FORWARD_MONTHS}) as step
+        ),
+        upserted_months as (
+          insert into public.financial_plan_months (month, updated_at)
+          select month, now()
+          from generated_months
+          on conflict (month) do update set updated_at = excluded.updated_at
+          returning month
+        ),
+        row_positions as (
+          select generated_months.month, coalesce(max(financial_plan_rows.position), -1) + 1 as position
+          from generated_months
+          left join public.financial_plan_rows on financial_plan_rows.month = generated_months.month
+          group by generated_months.month
+        )
+        insert into public.financial_plan_rows (id, month, title, position, created_at, updated_at)
+        select row_positions.month || ':' || ${base}, row_positions.month, ${payload.title}, row_positions.position, now(), now()
+        from row_positions
+        on conflict (id) do nothing
+      `;
       return;
     }
     case 'financial.row.update': {

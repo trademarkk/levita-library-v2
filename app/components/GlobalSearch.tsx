@@ -151,6 +151,7 @@ export function GlobalSearch() {
               </button>
               <button
                 type="button"
+                data-allow-while-saving="true"
                 className={favorite ? 'global-search-star is-active' : 'global-search-star'}
                 onClick={(event) => {
                   event.preventDefault();

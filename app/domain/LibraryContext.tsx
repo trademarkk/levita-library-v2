@@ -1448,7 +1448,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           const id = `${targetMonth}:${baseId}`;
           if (!plan.rows.some((row) => row.id === id)) plan.rows.push({ id, title: title.trim(), payments: {} });
         }
-      });
+      }, { showSaving: false });
     },
     updateFinancialPlanRow(month, rowId, title) {
       mutateOnServer('financial.row.update', { month, rowId, title }, (draft) => {
@@ -1459,7 +1459,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
             if (row.id === rowId || row.id.endsWith(`:${base}`) || row.id === base) row.title = title;
           });
         });
-      });
+      }, { showSaving: false });
     },
     deleteFinancialPlanRow(month, rowId) {
       mutateOnServer('financial.row.delete', { month, rowId }, (draft) => {
@@ -1468,7 +1468,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           if (plan.month < month) return;
           plan.rows = plan.rows.filter((row) => row.id !== rowId && !row.id.endsWith(`:${base}`) && row.id !== base);
         });
-      });
+      }, { showSaving: false });
     },
     updateFinancialPlanCell(month, rowId, date, value) {
       mutateOnServer('financial.cell.update', { month, rowId, date, value }, (draft) => {
@@ -1481,7 +1481,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           if (String(value).trim()) row.payments[targetDate] = value;
           else delete row.payments[targetDate];
         });
-      });
+      }, { showSaving: false });
     },
     createExpenseCategory(name) {
       if (!name.trim()) return;

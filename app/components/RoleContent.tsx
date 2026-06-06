@@ -134,19 +134,30 @@ function BusinessModelFilter({ value, onChange }: { value: BusinessModelScope; o
 function FavoriteButton({ entityType, entityId, label }: { entityType: FavoriteEntityType; entityId: string; label: string }) {
   const { isFavorite, toggleFavorite } = useLibrary();
   const favorite = isFavorite(entityType, entityId);
+  const [optimisticFavorite, setOptimisticFavorite] = useState(favorite);
+  useEffect(() => {
+    setOptimisticFavorite(favorite);
+  }, [entityId, entityType, favorite]);
+
   return (
     <button
       type="button"
+      data-allow-while-saving="true"
+      onMouseDown={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
       onClick={(event) => {
         event.preventDefault();
         event.stopPropagation();
+        setOptimisticFavorite((current) => !current);
         toggleFavorite(entityType, entityId);
       }}
-      className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition-colors ${favorite ? 'border-[#c9a98d]/50 bg-[#c9a98d]/22 text-[#c9a98d]' : 'border-[#c9a98d]/15 text-[#a89b8f] hover:border-[#c9a98d]/35 hover:text-[#c9a98d]'}`}
-      aria-label={favorite ? `Убрать из избранного: ${label}` : `Добавить в избранное: ${label}`}
-      title={favorite ? 'Убрать из избранного' : 'Добавить в избранное'}
+      className={`inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full border transition-colors ${optimisticFavorite ? 'border-[#c9a98d]/50 bg-[#c9a98d]/22 text-[#c9a98d]' : 'border-[#c9a98d]/15 text-[#a89b8f] hover:border-[#c9a98d]/35 hover:text-[#c9a98d]'}`}
+      aria-label={optimisticFavorite ? `Убрать из избранного: ${label}` : `Добавить в избранное: ${label}`}
+      title={optimisticFavorite ? 'Убрать из избранного' : 'Добавить в избранное'}
     >
-      <Star className="h-4 w-4" fill={favorite ? 'currentColor' : 'none'} />
+      <Star className="h-4 w-4" fill={optimisticFavorite ? 'currentColor' : 'none'} />
     </button>
   );
 }
