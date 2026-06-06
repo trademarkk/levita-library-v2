@@ -307,30 +307,12 @@ function ensureFinancialPlanRow(plan: FinancialPlanMonth, sourceRow: FinancialPl
 }
 
 function normalizeFinancialPlans(plans: FinancialPlanMonth[]): FinancialPlanMonth[] {
-  const normalized = { financialPlans: cloneState(plans) } as LibraryState;
-  const sourceRowsById = new Map<string, { month: string; row: FinancialPlanRow }>();
-  [...plans]
-    .sort((left, right) => left.month.localeCompare(right.month))
-    .forEach((plan) => {
-      plan.rows.forEach((row) => {
-        if (!sourceRowsById.has(row.id)) sourceRowsById.set(row.id, { month: plan.month, row });
-      });
-    });
-  const sourceRows = Array.from(sourceRowsById.values());
-  sourceRows.forEach(({ month, row }) => {
-    for (let index = 0; index <= FINANCIAL_PLAN_FORWARD_MONTHS; index += 1) {
-      const targetMonth = addFinancialPlanMonths(month, index);
-      const targetPlan = ensureFinancialPlan(normalized, targetMonth);
-      const targetRow = ensureFinancialPlanRow(targetPlan, row);
-      targetRow.title = targetRow.title || row.title;
-      Object.entries(row.payments || {}).forEach(([date, value]) => {
-        if (!date.startsWith(month) || !String(value).trim()) return;
-        const targetDate = index === 0 ? date : clampFinancialPlanDate(targetMonth, date);
-        if (targetRow.payments[targetDate] === undefined) targetRow.payments[targetDate] = value;
-      });
-    }
-  });
-  return normalized.financialPlans.sort((left, right) => left.month.localeCompare(right.month));
+  return cloneState(plans)
+    .map((plan) => ({
+      ...plan,
+      rows: [...(plan.rows || [])].map((row) => ({ ...row, payments: { ...(row.payments || {}) } })),
+    }))
+    .sort((left, right) => left.month.localeCompare(right.month));
 }
 
 function checklistDateKey(checklist: Pick<DailyChecklist, 'date' | 'createdAt'>) {
@@ -697,6 +679,22 @@ function mergeStateSlice(current: LibraryState, patch: Partial<LibraryState> | n
       ];
       return;
     }
+    if (key === 'trainerEvaluations' && sliceMeta.month) {
+      const incomingEvaluations = patch.trainerEvaluations ?? [];
+      next.trainerEvaluations = [
+        ...next.trainerEvaluations.filter((evaluation) => !evaluation.evaluatedAt.startsWith(sliceMeta.month ?? '')),
+        ...incomingEvaluations,
+      ];
+      return;
+    }
+    if (key === 'callReviews' && sliceMeta.month) {
+      const incomingReviews = patch.callReviews ?? [];
+      next.callReviews = [
+        ...next.callReviews.filter((review) => !review.reviewedAt.startsWith(sliceMeta.month ?? '')),
+        ...incomingReviews,
+      ];
+      return;
+    }
     (next as Record<string, unknown>)[key] = patch[key];
   });
   return applyLocalSettings(normalizeState(next));
@@ -1034,6 +1032,12 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         const assignee = state.users.find((user) => user.id === checklist.assignedTo);
         if (!assignee) return null;
         if (assignee.role !== 'ADMIN' && assignee.role !== 'SENIOR_ADMIN') return null;
+        const shift = state.adminShifts.find((item) => (
+          item.userId === assignee.id
+          && item.date === checklistDateKey(checklist)
+          && !item.closedAt
+        ));
+        if (!shift) return null;
         return {
           checklist,
           assignee,
@@ -1360,7 +1364,13 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       });
     },
     deleteChecklistItem(checklistId, itemId) {
-      mutateOnServer('checklist.item.delete', { checklistId, itemId });
+      const checklist = state.checklists.find((entry) => entry.id === checklistId);
+      const item = checklist?.items.find((entry) => entry.id === itemId);
+      mutateOnServer('checklist.item.delete', { checklistId, itemId, assignedTo: checklist?.assignedTo ?? null, label: item?.label ?? null }, (draft) => {
+        const checklist = draft.checklists.find((entry) => entry.id === checklistId);
+        if (!checklist) return;
+        checklist.items = checklist.items.filter((item) => item.id !== itemId);
+      });
     },
     addRoleChecklistItem(roles, label) {
       if (!label.trim()) return;
@@ -1530,14 +1540,15 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     toggleFavorite(entityType, entityId) {
       if (!currentUser) return;
       const userId = currentUser.id;
-      mutateOnServer('favorite.toggle', { entityType, entityId, userId }, (draft) => {
+      const favoriteId = newId('favorite');
+      mutateOnServer('favorite.toggle', { entityType, entityId, userId, id: favoriteId }, (draft) => {
         const index = draft.favorites.findIndex((favorite) => favorite.userId === userId && favorite.entityType === entityType && favorite.entityId === entityId);
         if (index >= 0) {
           draft.favorites.splice(index, 1);
           return;
         }
         draft.favorites.unshift({
-          id: newId('favorite'),
+          id: favoriteId,
           userId,
           entityType,
           entityId,

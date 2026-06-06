@@ -97,12 +97,12 @@ export function DashboardLayout({ children, role, userName = 'Сотрудник
 
         <div className="relative z-10">
           {(isDataLoading || isSaving) && (
-            <div className="sticky top-0 z-50 border-b border-[#c9a98d]/20 bg-[#1f1a22]/95 px-4 py-3 text-sm text-[#f5f3f0] backdrop-blur">
+            <div className="fixed right-4 top-4 z-50 rounded-xl border border-[#c9a98d]/20 bg-[#1f1a22]/95 px-4 py-3 text-sm text-[#f5f3f0] shadow-2xl backdrop-blur">
               {isSaving ? 'Сохраняем данные в базе...' : 'Загружаем актуальные данные из базы...'}
             </div>
           )}
           {dataError && (
-            <div className="sticky top-0 z-50 border-b border-[#8b3a52]/40 bg-[#3a1f2b]/95 px-4 py-3 text-sm text-[#f5f3f0] backdrop-blur">
+            <div className="fixed left-1/2 top-4 z-50 max-w-[min(720px,calc(100vw-2rem))] -translate-x-1/2 rounded-xl border border-[#8b3a52]/40 bg-[#3a1f2b]/95 px-4 py-3 text-sm text-[#f5f3f0] shadow-2xl backdrop-blur">
               {dataError}
             </div>
           )}

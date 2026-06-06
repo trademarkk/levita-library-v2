@@ -138,6 +138,7 @@ function FavoriteButton({ entityType, entityId, label }: { entityType: FavoriteE
     <button
       type="button"
       onClick={(event) => {
+        event.preventDefault();
         event.stopPropagation();
         toggleFavorite(entityType, entityId);
       }}

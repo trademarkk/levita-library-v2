@@ -118,7 +118,6 @@ export function CallRatingSection() {
   const chartAreaRef = useRef<HTMLDivElement>(null);
   const [scope, setScope] = useState<RatingScope>('all');
   const [studio, setStudio] = useState<ExpenseStudio>('STAVROPOLSKAYA');
-  const adminNames = useMemo(() => adminNamesFrom(state.callReviews), [state.callReviews]);
   const [adminName, setAdminName] = useState('');
   const availableMonths = useMemo(() => {
     const currentMonth = monthKey(todayKey());
@@ -133,17 +132,26 @@ export function CallRatingSection() {
     void refreshSlice('ratings', { month: selectedMonth });
   }, [selectedMonth]);
 
+  const monthReviews = useMemo(
+    () => state.callReviews.filter((review) => monthKey(review.reviewedAt) === selectedMonth),
+    [selectedMonth, state.callReviews],
+  );
+  const adminNames = useMemo(() => adminNamesFrom(monthReviews), [monthReviews]);
+
+  useEffect(() => {
+    if (adminName && !adminNames.includes(adminName)) setAdminName('');
+  }, [adminName, adminNames]);
+
   const filtered = useMemo(() => {
     const targetAdmin = adminName || adminNames[0] || '';
-    return [...state.callReviews]
+    return [...monthReviews]
       .filter((review) => {
-        if (monthKey(review.reviewedAt) !== selectedMonth) return false;
         if (scope === 'studio') return review.studio === studio;
         if (scope === 'admin') return review.adminName === targetAdmin;
         return true;
       })
       .sort((left, right) => left.reviewedAt.localeCompare(right.reviewedAt) || left.updatedAt.localeCompare(right.updatedAt));
-  }, [adminName, adminNames, scope, selectedMonth, state.callReviews, studio]);
+  }, [adminName, adminNames, monthReviews, scope, studio]);
 
   const average = filtered.length ? filtered.reduce((sum, review) => sum + review.score, 0) / filtered.length : 0;
   const maxScore = Math.max(100, ...filtered.map((review) => review.score));

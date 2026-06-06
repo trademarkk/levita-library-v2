@@ -152,7 +152,11 @@ export function GlobalSearch() {
               <button
                 type="button"
                 className={favorite ? 'global-search-star is-active' : 'global-search-star'}
-                onClick={() => toggleFavorite(result.entityType, result.entityId)}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  toggleFavorite(result.entityType, result.entityId);
+                }}
                 aria-label={favorite ? 'Убрать из избранного' : 'Добавить в избранное'}
               >
                 <Star className="h-4 w-4" fill={favorite ? 'currentColor' : 'none'} />
@@ -164,4 +168,3 @@ export function GlobalSearch() {
     </div>
   );
 }
-

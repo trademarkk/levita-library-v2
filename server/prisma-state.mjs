@@ -355,7 +355,9 @@ export async function readStateFromPrisma(prisma) {
 }
 
 export async function readStateSliceFromPrisma(prisma, slice, params = {}) {
-  const month = params.month || localDateOnly().slice(0, 7);
+  const rawMonth = String(params.month || '').slice(0, 7);
+  const hasMonthFilter = /^\d{4}-\d{2}$/.test(rawMonth);
+  const month = hasMonthFilter ? rawMonth : localDateOnly().slice(0, 7);
   const bounds = monthBounds(month);
 
   switch (slice) {
@@ -440,8 +442,12 @@ export async function readStateSliceFromPrisma(prisma, slice, params = {}) {
     }
     case 'ratings': {
       const [trainerEvaluations, callReviews] = await Promise.all([
-        prisma.$queryRaw`select * from public.trainer_evaluation_sheets where evaluated_at >= ${bounds.start}::date and evaluated_at <= ${bounds.end}::date order by evaluated_at desc`,
-        prisma.$queryRaw`select * from public.call_reviews where reviewed_at >= ${bounds.start}::date and reviewed_at <= ${bounds.end}::date order by reviewed_at desc`,
+        hasMonthFilter
+          ? prisma.$queryRaw`select * from public.trainer_evaluation_sheets where evaluated_at >= ${bounds.start}::date and evaluated_at <= ${bounds.end}::date order by evaluated_at desc`
+          : prisma.$queryRaw`select * from public.trainer_evaluation_sheets order by evaluated_at desc`,
+        hasMonthFilter
+          ? prisma.$queryRaw`select * from public.call_reviews where reviewed_at >= ${bounds.start}::date and reviewed_at <= ${bounds.end}::date order by reviewed_at desc`
+          : prisma.$queryRaw`select * from public.call_reviews order by reviewed_at desc`,
       ]);
       return {
         updatedAt: nowIso(),
@@ -449,7 +455,7 @@ export async function readStateSliceFromPrisma(prisma, slice, params = {}) {
           trainerEvaluations: trainerEvaluations.map((evaluation) => ({ id: evaluation.id, trainerName: evaluation.trainer_name, studio: evaluation.studio, direction: evaluation.direction, score: Number(evaluation.score) || 0, evaluatedAt: dateOnly(evaluation.evaluated_at), sheetUrl: evaluation.sheet_url, createdById: evaluation.created_by_id, createdAt: iso(evaluation.created_at) })),
           callReviews: callReviews.map((review) => ({ id: review.id, source: review.source || 'levita-calls', externalId: review.external_id, adminName: review.admin_name, studio: review.studio, score: Number(review.score) || 0, reviewedAt: dateOnly(review.reviewed_at), amoCrmDealUrl: review.amo_crm_deal_url, callUrl: review.call_url, originalFilename: review.original_filename, comment: review.comment, createdAt: iso(review.created_at), updatedAt: iso(review.updated_at) })),
         },
-        sliceMeta: { month: bounds.month },
+        sliceMeta: hasMonthFilter ? { month: bounds.month } : undefined,
       };
     }
     case 'team': {
@@ -524,7 +530,9 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
         insert into public.users (id, name, email, password_hash, role, status, join_date, created_at, updated_at)
         values (${id}, ${payload.name}, ${normalizeEmail(payload.email)}, ${passwordHash}, ${payload.role}::public.levtia_role, ${payload.status || 'active'}::public.employee_status, ${payload.joinDate || ''}, now(), now())
       `;
-      await ensureChecklistForUser(prisma, { id, name: payload.name, role: payload.role });
+      if (payload.role !== 'ADMIN' && payload.role !== 'SENIOR_ADMIN') {
+        await ensureChecklistForUser(prisma, { id, name: payload.name, role: payload.role });
+      }
       await audit(prisma, 'employee.create', 'user', id, payload.name, actor, 'Создан сотрудник.');
       return;
     }
@@ -541,7 +549,7 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
         where id = ${payload.id}
       `;
       const rows = await prisma.$queryRaw`select id, name, role from public.users where id = ${payload.id}`;
-      if (rows[0]) await ensureChecklistForUser(prisma, rows[0]);
+      if (rows[0] && rows[0].role !== 'ADMIN' && rows[0].role !== 'SENIOR_ADMIN') await ensureChecklistForUser(prisma, rows[0]);
       await audit(prisma, 'employee.update', 'user', payload.id, payload.input?.name || payload.id, actor, 'Обновлен сотрудник.');
       return;
     }
@@ -702,9 +710,17 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
       await prisma.$executeRaw`insert into public.checklist_items (id, checklist_id, label, completed, position) values (${payload.id || newId('checklist-item')}, ${checklistId}, ${payload.label}, false, ${count || 0})`;
       return;
     }
-    case 'checklist.item.delete':
-      await prisma.$executeRaw`delete from public.checklist_items where checklist_id = ${payload.checklistId} and id = ${payload.itemId}`;
+    case 'checklist.item.delete': {
+      let deleted = await prisma.$executeRaw`delete from public.checklist_items where id = ${payload.itemId}`;
+      if (!deleted && payload.assignedTo) {
+        const users = await prisma.$queryRaw`select id, name, role from public.users where id = ${payload.assignedTo} limit 1`;
+        const checklistId = users[0] ? await ensureChecklistForUser(prisma, users[0]) : null;
+        if (checklistId) {
+          deleted = await prisma.$executeRaw`delete from public.checklist_items where checklist_id = ${checklistId} and (id = ${payload.itemId} or label = ${payload.label || ''})`;
+        }
+      }
       return;
+    }
     case 'checklist.roleItem.add': {
       for (const role of payload.roles || []) {
         const lists = await prisma.$queryRaw`select id from public.daily_checklists where role = ${role}::public.levtia_role`;
@@ -833,9 +849,15 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
       await prisma.$executeRaw`insert into public.app_settings (id, payload, updated_at) values ('main', ${jsonValue(payload.input || {})}, now()) on conflict (id) do update set payload = public.app_settings.payload || excluded.payload, updated_at = now()`;
       return;
     case 'favorite.toggle': {
-      const existing = await prisma.$queryRaw`select id from public.content_favorites where user_id = ${payload.userId || actor?.id} and entity_type = ${payload.entityType} and entity_id = ${payload.entityId}`;
+      const userId = payload.userId || actor?.id || null;
+      if (!userId) {
+        const error = new Error('Favorite user is required.');
+        error.statusCode = 400;
+        throw error;
+      }
+      const existing = await prisma.$queryRaw`select id from public.content_favorites where user_id = ${userId} and entity_type = ${payload.entityType} and entity_id = ${payload.entityId}`;
       if (existing.length) await prisma.$executeRaw`delete from public.content_favorites where id = ${existing[0].id}`;
-      else await prisma.$executeRaw`insert into public.content_favorites (id, user_id, entity_type, entity_id, created_at) values (${newId('favorite')}, ${payload.userId || actor?.id}, ${payload.entityType}, ${payload.entityId}, now())`;
+      else await prisma.$executeRaw`insert into public.content_favorites (id, user_id, entity_type, entity_id, created_at) values (${payload.id || newId('favorite')}, ${userId}, ${payload.entityType}, ${payload.entityId}, now()) on conflict (user_id, entity_type, entity_id) do nothing`;
       return;
     }
     case 'knowledge.read':

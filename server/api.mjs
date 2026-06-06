@@ -773,6 +773,35 @@ async function closeDueAdminShifts() {
   return { ok: true, skipped: false, closed, date: current.date, closedAt };
 }
 
+async function createDatabaseBackup() {
+  const stored = await getState();
+  const state = stored?.state || null;
+  if (!state) return { ok: false, error: 'State is empty.' };
+  const id = randomUUID();
+  const backedUpAt = new Date().toISOString();
+  if (usePrismaState) {
+    await prisma.$executeRaw`
+      insert into public.app_state_backups (id, state_id, payload, backed_up_at)
+      values (${id}, 'prisma-snapshot', ${JSON.stringify(state)}::jsonb, ${backedUpAt}::timestamptz)
+    `;
+    return { ok: true, id, backedUpAt, mode: 'prisma' };
+  }
+  if (useSupabase) {
+    await supabaseRun(
+      supabase.from('app_state_backups').insert({
+        id,
+        state_id: 'snapshot',
+        payload: state,
+        backed_up_at: backedUpAt,
+      }),
+      'create app state backup',
+    );
+    return { ok: true, id, backedUpAt, mode: 'supabase' };
+  }
+  db.prepare('INSERT INTO app_state_backups (id, state_id, payload, backed_up_at) VALUES (?, ?, ?, ?)').run(id, 'snapshot', JSON.stringify(state), backedUpAt);
+  return { ok: true, id, backedUpAt, mode: 'sqlite' };
+}
+
 async function runMaxReminderJob() {
   const released = await releaseStaleProcessingMaxReminders();
   const reminders = await claimDueMaxReminders();
@@ -1965,6 +1994,15 @@ export async function handleApiRequest(request, response) {
         return;
       }
       send(response, 200, await closeDueAdminShifts());
+      return;
+    }
+
+    if (url.pathname === '/api/jobs/backup' && (request.method === 'GET' || request.method === 'POST')) {
+      if (!isCronAuthorized(request, url)) {
+        send(response, 401, { error: 'Unauthorized cron request' });
+        return;
+      }
+      send(response, 200, await createDatabaseBackup());
       return;
     }
 

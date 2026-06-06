@@ -68,6 +68,7 @@ export function FinancialPlanSection() {
   const { state, refreshSlice, addFinancialPlanRow, updateFinancialPlanRow, deleteFinancialPlanRow, updateFinancialPlanCell } = useLibrary();
   const [month, setMonth] = useState(currentMonthKey());
   const [newTitle, setNewTitle] = useState('');
+  const [cellDrafts, setCellDrafts] = useState<Record<string, string>>({});
   const plan = state.financialPlans.find((item) => item.month === month);
   const days = useMemo(() => daysInMonth(month), [month]);
 
@@ -78,6 +79,14 @@ export function FinancialPlanSection() {
   const addRow = () => {
     addFinancialPlanRow(month, newTitle);
     setNewTitle('');
+  };
+
+  const cellKey = (rowId: string, day: string) => `${rowId}:${day}`;
+
+  const commitCell = (rowId: string, day: string, value: string) => {
+    const currentValue = plan?.rows.find((row) => row.id === rowId)?.payments[day] ?? '';
+    if (value === currentValue) return;
+    updateFinancialPlanCell(month, rowId, day, value);
   };
 
   return (
@@ -119,7 +128,27 @@ export function FinancialPlanSection() {
                   </td>
                   {days.map((day) => (
                     <td key={day} className="financial-table-cell">
-                      <input value={row.payments[day] ?? ''} onChange={(event) => updateFinancialPlanCell(month, row.id, day, event.target.value)} className="field px-2 py-1 text-sm text-center" placeholder="₽" />
+                      <input
+                        value={cellDrafts[cellKey(row.id, day)] ?? row.payments[day] ?? ''}
+                        onChange={(event) => {
+                          const nextValue = event.target.value;
+                          setCellDrafts((current) => ({ ...current, [cellKey(row.id, day)]: nextValue }));
+                        }}
+                        onBlur={(event) => {
+                          const key = cellKey(row.id, day);
+                          commitCell(row.id, day, event.target.value);
+                          setCellDrafts((current) => {
+                            const next = { ...current };
+                            delete next[key];
+                            return next;
+                          });
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') event.currentTarget.blur();
+                        }}
+                        className="field px-2 py-1 text-sm text-center"
+                        placeholder="₽"
+                      />
                     </td>
                   ))}
                   <td className="financial-table-cell text-center">

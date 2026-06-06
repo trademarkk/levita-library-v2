@@ -121,7 +121,7 @@ export function AssistantDashboard() {
           {activeTab === 'responsibilities' && <RoleContentViewer role="ASSISTANT" category="RESPONSIBILITY" />}
           {activeTab === 'regulations' && <RoleContentViewer role="ASSISTANT" category="REGULATION" />}
           {activeTab === 'info' && <RoleContentViewer role="ASSISTANT" category="IMPORTANT_INFO" />}
-          {activeTab === 'knowledge' && <RoleContentViewer role="ASSISTANT" category="KNOWLEDGE" />}
+          {activeTab === 'knowledge' && <AssistantKnowledgeSection />}
           {activeTab === 'templates' && <TemplatesSection />}
           {activeTab === 'document-templates' && <DocumentTemplatesSection />}
           {activeTab === 'links' && <LinksSection />}
@@ -335,6 +335,55 @@ function TasksSection() {
           </GlassCard>
         );
       })}
+    </div>
+  );
+}
+
+function AssistantKnowledgeSection() {
+  const { createKnowledge } = useLibrary();
+  const [title, setTitle] = useState('');
+  const [content, setContent] = useState('');
+  const [hashtags, setHashtags] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const save = () => {
+    const nextTitle = title.trim();
+    const nextContent = content.trim();
+    if (!nextTitle || !nextContent) {
+      setError('Заполните название и текст материала.');
+      return;
+    }
+    createKnowledge({
+      title: nextTitle,
+      content: nextContent,
+      role: 'ASSISTANT',
+      category: 'KNOWLEDGE',
+      hashtags: hashtags.trim(),
+      businessModel: 'ALL',
+    });
+    setTitle('');
+    setContent('');
+    setHashtags('');
+    setError(null);
+  };
+
+  return (
+    <div className="space-y-5">
+      <GlassCard>
+        <h2 className="text-2xl text-[#f5f3f0]">Добавить материал в базу знаний</h2>
+        <p className="mt-1 text-sm text-[#a89b8f]">Ассистент может добавлять материалы только в свою базу знаний. Редактирование и удаление недоступны.</p>
+        <div className="mt-5 grid gap-3">
+          <input value={title} onChange={(event) => setTitle(event.target.value)} className="field" placeholder="Название материала" />
+          <textarea value={content} onChange={(event) => setContent(event.target.value)} className="field min-h-28" placeholder="Текст материала" />
+          <input value={hashtags} onChange={(event) => setHashtags(event.target.value)} className="field" placeholder="#теги, если нужны" />
+          {error && <p className="text-sm text-[#f0c5cf]">{error}</p>}
+          <button type="button" onClick={save} className="primary-action inline-flex items-center gap-2 justify-self-start">
+            <Plus className="h-4 w-4" />
+            Добавить
+          </button>
+        </div>
+      </GlassCard>
+      <RoleContentViewer role="ASSISTANT" category="KNOWLEDGE" />
     </div>
   );
 }
