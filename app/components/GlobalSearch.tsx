@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Search, Star } from 'lucide-react';
 import { useLibrary } from '../domain/LibraryContext';
 import { roleLabels } from '../domain/labels';
@@ -41,6 +41,7 @@ function matches(result: SearchResult, query: string) {
 export function GlobalSearch() {
   const { state, currentUser, isFavorite, toggleFavorite } = useLibrary();
   const [query, setQuery] = useState('');
+  const favoritePointerHandledRef = useRef<string | null>(null);
 
   const results = useMemo<SearchResult[]>(() => {
     const role = currentUser?.role ?? 'OWNER';
@@ -153,9 +154,21 @@ export function GlobalSearch() {
                 type="button"
                 data-allow-while-saving="true"
                 className={favorite ? 'global-search-star is-active' : 'global-search-star'}
+                onPointerDown={(event) => {
+                  if (event.button !== 0) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  favoritePointerHandledRef.current = `${result.entityType}:${result.entityId}`;
+                  toggleFavorite(result.entityType, result.entityId);
+                }}
                 onClick={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
+                  const key = `${result.entityType}:${result.entityId}`;
+                  if (favoritePointerHandledRef.current === key) {
+                    favoritePointerHandledRef.current = null;
+                    return;
+                  }
                   toggleFavorite(result.entityType, result.entityId);
                 }}
                 aria-label={favorite ? 'Убрать из избранного' : 'Добавить в избранное'}

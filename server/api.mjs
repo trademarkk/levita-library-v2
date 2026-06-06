@@ -782,7 +782,7 @@ async function createDatabaseBackup() {
   if (usePrismaState) {
     await prisma.$executeRaw`
       insert into public.app_state_backups (id, state_id, payload, backed_up_at)
-      values (${id}, 'prisma-snapshot', ${JSON.stringify(state)}::jsonb, ${backedUpAt}::timestamptz)
+      values (${id}::uuid, 'prisma-snapshot', ${JSON.stringify(state)}::jsonb, ${backedUpAt}::timestamptz)
     `;
     await cleanupAppStateBackups(backedUpAt, 'prisma-snapshot');
     return { ok: true, id, backedUpAt, mode: 'prisma' };

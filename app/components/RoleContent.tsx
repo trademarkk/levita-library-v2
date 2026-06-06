@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, CheckCircle2, Edit2, FileText, Info, Link as LinkIcon, Plus, Save, Shield, Star, Trash2, X } from 'lucide-react';
 import { GlassCard } from './GlassCard';
 import { TabNavigation } from './TabNavigation';
@@ -135,23 +135,35 @@ function FavoriteButton({ entityType, entityId, label }: { entityType: FavoriteE
   const { isFavorite, toggleFavorite } = useLibrary();
   const favorite = isFavorite(entityType, entityId);
   const [optimisticFavorite, setOptimisticFavorite] = useState(favorite);
+  const pointerHandledRef = useRef(false);
   useEffect(() => {
     setOptimisticFavorite(favorite);
   }, [entityId, entityType, favorite]);
+
+  const activate = () => {
+    setOptimisticFavorite((current) => !current);
+    toggleFavorite(entityType, entityId);
+  };
 
   return (
     <button
       type="button"
       data-allow-while-saving="true"
-      onMouseDown={(event) => {
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
         event.preventDefault();
         event.stopPropagation();
+        pointerHandledRef.current = true;
+        activate();
       }}
       onClick={(event) => {
         event.preventDefault();
         event.stopPropagation();
-        setOptimisticFavorite((current) => !current);
-        toggleFavorite(entityType, entityId);
+        if (pointerHandledRef.current) {
+          pointerHandledRef.current = false;
+          return;
+        }
+        activate();
       }}
       className={`inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full border transition-colors ${optimisticFavorite ? 'border-[#c9a98d]/50 bg-[#c9a98d]/22 text-[#c9a98d]' : 'border-[#c9a98d]/15 text-[#a89b8f] hover:border-[#c9a98d]/35 hover:text-[#c9a98d]'}`}
       aria-label={optimisticFavorite ? `Убрать из избранного: ${label}` : `Добавить в избранное: ${label}`}

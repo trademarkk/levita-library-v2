@@ -9,7 +9,7 @@ import { TrainerEvaluationSheetsSection, TrainerRatingSection } from './TrainerE
 import { useLibrary } from '../domain/LibraryContext';
 import { employeeStatusLabels, formatDate, formatTime, refundStatusLabels, roleLabels, studioLabels } from '../domain/labels';
 import { can } from '../domain/permissions';
-import type { ChecklistControlStatus, EmployeeStatus, KnowledgeCategory, RefundStatus, Role } from '../domain/types';
+import type { ChecklistControlStatus, EmployeeStatus, HelpfulLink, KnowledgeCategory, LinkCategory, RefundStatus, Role } from '../domain/types';
 import { Activity, AlertCircle, Clock3, DollarSign, Edit2, FileText, Info, Link as LinkIcon, ListChecks, Plus, Save, ShieldCheck, Trash2, UserRound, X } from 'lucide-react';
 import { SEARCH_NAVIGATION_EVENT, type SearchNavigationDetail } from './searchNavigation';
 
@@ -19,6 +19,7 @@ function SectionLoader() {
 }
 
 const tabs = [
+  { id: 'owner-links', label: 'Мои таблицы и ссылки' },
   { id: 'control-center', label: 'Центр контроля' },
   { id: 'shift-journal', label: 'Журнал смен' },
   { id: 'audit', label: 'Аудит действий' },
@@ -64,6 +65,7 @@ export function OwnerDashboard() {
       knowledge: 'content',
       templates: 'content',
       'document-templates': 'content',
+      'owner-links': 'content',
       links: 'content',
       contacts: 'content',
       training: 'content',
@@ -120,6 +122,7 @@ export function OwnerDashboard() {
           {activeTab === 'knowledge' && <OwnerRoleContentManager category="KNOWLEDGE" />}
           {activeTab === 'templates' && <OwnerTemplatesManager />}
           {activeTab === 'document-templates' && <OwnerDocumentTemplatesSection />}
+          {activeTab === 'owner-links' && <OwnerPersonalLinksSection />}
           {activeTab === 'links' && <OwnerLinksManager />}
           {activeTab === 'contacts' && <OwnerUsefulContactsSection />}
           {activeTab === 'training' && <OwnerRoleContentManager category="TRAINING" />}
@@ -503,6 +506,95 @@ function LinksSection() {
           </div>
         </GlassCard>
       ))}
+    </div>
+  );
+}
+
+function OwnerPersonalLinksSection() {
+  const { state, createLink, updateLink, deleteLink } = useLibrary();
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ title: '', url: '', description: '', category: 'WORK_TABLE' as LinkCategory });
+  const [error, setError] = useState<string | null>(null);
+  const links = state.links.filter((link) => link.role === 'OWNER');
+
+  const reset = () => {
+    setEditingId(null);
+    setDraft({ title: '', url: '', description: '', category: 'WORK_TABLE' });
+  };
+
+  const startEdit = (link: HelpfulLink) => {
+    setEditingId(link.id);
+    setDraft({
+      title: link.title,
+      url: link.url,
+      description: link.description ?? '',
+      category: link.category,
+    });
+    setError(null);
+  };
+
+  const save = () => {
+    if (!draft.title.trim()) {
+      setError('Укажите название.');
+      return;
+    }
+    if (!draft.url.trim()) {
+      setError('Поле ссылки обязательно.');
+      return;
+    }
+    setError(null);
+    const input = { ...draft, role: 'OWNER' as Role };
+    if (editingId) updateLink(editingId, input);
+    else createLink(input);
+    reset();
+  };
+
+  return (
+    <div className="space-y-5">
+      <GlassCard>
+        <div className="mb-4 flex items-start gap-3">
+          <LinkIcon className="mt-1 h-5 w-5 text-[#c9a98d]" />
+          <div>
+            <h2 className="text-2xl text-[#f5f3f0]">Мои таблицы и ссылки</h2>
+            <p className="mt-1 text-sm text-[#a89b8f]">Личные рабочие материалы руководителя. Доступ к созданию, редактированию и удалению есть только у руководителя.</p>
+          </div>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <input value={draft.title} onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))} placeholder="Название" className="field" />
+          <input value={draft.url} onChange={(event) => setDraft((value) => ({ ...value, url: event.target.value }))} placeholder="https://..." className="field" />
+          <select value={draft.category} onChange={(event) => setDraft((value) => ({ ...value, category: event.target.value as LinkCategory }))} className="field">
+            <option value="WORK_TABLE">Таблица</option>
+            <option value="HELPFUL">Ссылка</option>
+            <option value="TRAINING">Материал</option>
+          </select>
+          <textarea value={draft.description} onChange={(event) => setDraft((value) => ({ ...value, description: event.target.value }))} placeholder="Описание" className="field min-h-24 md:col-span-2" />
+        </div>
+        {error && <p className="mt-3 text-sm text-[#f0c5cf]">{error}</p>}
+        <div className="mt-4 flex flex-wrap gap-3">
+          <button onClick={save} className="primary-action inline-flex items-center gap-2"><Save className="h-4 w-4" />Сохранить</button>
+          {editingId && <button onClick={reset} className="rounded-lg border border-[#c9a98d]/20 px-4 py-2 text-[#f5f3f0] hover:bg-[#2a2630]">Отменить</button>}
+        </div>
+      </GlassCard>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        {links.length === 0 && <GlassCard><p className="text-[#a89b8f]">Личные таблицы и ссылки пока не добавлены.</p></GlassCard>}
+        {links.map((link) => (
+          <GlassCard key={link.id} data-search-target={`link:${link.id}`}>
+            <div className="flex justify-between gap-4">
+              <div className="min-w-0">
+                <p className="mb-2 text-xs uppercase tracking-[0.28em] text-[#c9a98d]">{link.category === 'WORK_TABLE' ? 'Таблица' : 'Ссылка'}</p>
+                <h3 className="text-lg text-[#f5f3f0]">{link.title}</h3>
+                <a href={link.url} target="_blank" rel="noreferrer" className="mt-2 block break-all text-sm text-[#a89b8f] hover:text-[#c9a98d]">{link.url}</a>
+                {link.description && <p className="mt-3 whitespace-pre-line text-sm text-[#a89b8f]">{link.description}</p>}
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <button onClick={() => startEdit(link)} className="text-[#a89b8f] hover:text-[#c9a98d]" aria-label={`Редактировать ${link.title}`}><Edit2 className="h-4 w-4" /></button>
+                <button onClick={() => deleteLink(link.id)} className="text-[#a89b8f] hover:text-[#8b3a52]" aria-label={`Удалить ${link.title}`}><Trash2 className="h-4 w-4" /></button>
+              </div>
+            </div>
+          </GlassCard>
+        ))}
+      </div>
     </div>
   );
 }
