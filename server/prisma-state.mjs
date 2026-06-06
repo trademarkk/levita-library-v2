@@ -134,6 +134,16 @@ function financialBaseId(rowId) {
   return String(rowId || '').replace(/^\d{4}-\d{2}:/, '');
 }
 
+function financialRowFilterSql(rowId) {
+  const base = financialBaseId(rowId);
+  if (!base) {
+    const error = new Error('financial row id is required');
+    error.statusCode = 400;
+    throw error;
+  }
+  return { base, pattern: `%:${base}` };
+}
+
 function storageFinancialRowId(month, rowId) {
   const base = financialBaseId(rowId);
   return String(rowId || '').startsWith(`${month}:`) ? rowId : `${month}:${base}`;
@@ -768,24 +778,32 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
       return;
     }
     case 'financial.row.update': {
-      const base = financialBaseId(payload.rowId);
-      await prisma.$executeRaw`update public.financial_plan_rows set title = ${payload.title}, updated_at = now() where month >= ${payload.month} and (id = ${payload.rowId} or id like ${`%:${base}`})`;
+      const { pattern } = financialRowFilterSql(payload.rowId);
+      await prisma.$executeRaw`update public.financial_plan_rows set title = ${payload.title}, updated_at = now() where month >= ${payload.month} and (id = ${payload.rowId} or id like ${pattern})`;
       return;
     }
     case 'financial.row.delete': {
-      const base = financialBaseId(payload.rowId);
+      const { pattern } = financialRowFilterSql(payload.rowId);
       await prisma.$transaction(async (tx) => {
-        const rows = await tx.$queryRaw`select id from public.financial_plan_rows where month >= ${payload.month} and (id = ${payload.rowId} or id like ${`%:${base}`})`;
-        for (const row of rows) {
-          await tx.$executeRaw`delete from public.financial_plan_payments where row_id = ${row.id}`;
-        }
-        await tx.$executeRaw`delete from public.financial_plan_rows where month >= ${payload.month} and (id = ${payload.rowId} or id like ${`%:${base}`})`;
+        await tx.$executeRaw`
+          delete from public.financial_plan_payments
+          where row_id in (
+            select id from public.financial_plan_rows
+            where month >= ${payload.month}
+              and (id = ${payload.rowId} or id like ${pattern})
+          )
+        `;
+        await tx.$executeRaw`
+          delete from public.financial_plan_rows
+          where month >= ${payload.month}
+            and (id = ${payload.rowId} or id like ${pattern})
+        `;
       });
       return;
     }
     case 'financial.cell.update': {
-      const base = financialBaseId(payload.rowId);
-      const rows = await prisma.$queryRaw`select id, month, title, position from public.financial_plan_rows where month >= ${payload.month} and (id = ${payload.rowId} or id like ${`%:${base}`}) order by month asc`;
+      const { pattern } = financialRowFilterSql(payload.rowId);
+      const rows = await prisma.$queryRaw`select id, month, title, position from public.financial_plan_rows where month >= ${payload.month} and (id = ${payload.rowId} or id like ${pattern}) order by month asc`;
       for (const row of rows) {
         const targetDate = row.month === payload.month ? dateOnly(payload.date) : clampDate(row.month, payload.date);
         if (String(payload.value || '').trim()) {

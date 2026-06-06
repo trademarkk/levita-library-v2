@@ -784,6 +784,7 @@ async function createDatabaseBackup() {
       insert into public.app_state_backups (id, state_id, payload, backed_up_at)
       values (${id}, 'prisma-snapshot', ${JSON.stringify(state)}::jsonb, ${backedUpAt}::timestamptz)
     `;
+    await cleanupAppStateBackups(backedUpAt, 'prisma-snapshot');
     return { ok: true, id, backedUpAt, mode: 'prisma' };
   }
   if (useSupabase) {
@@ -796,9 +797,11 @@ async function createDatabaseBackup() {
       }),
       'create app state backup',
     );
+    await cleanupAppStateBackups(backedUpAt, 'snapshot');
     return { ok: true, id, backedUpAt, mode: 'supabase' };
   }
   db.prepare('INSERT INTO app_state_backups (id, state_id, payload, backed_up_at) VALUES (?, ?, ?, ?)').run(id, 'snapshot', JSON.stringify(state), backedUpAt);
+  await cleanupAppStateBackups(backedUpAt, 'snapshot');
   return { ok: true, id, backedUpAt, mode: 'sqlite' };
 }
 
@@ -1591,15 +1594,15 @@ export async function saveState(state) {
   return { state: sanitizeStateForClient(stateToSave), updatedAt };
 }
 
-async function cleanupAppStateBackups(nowIso = new Date().toISOString()) {
+async function cleanupAppStateBackups(nowIso = new Date().toISOString(), stateId = 'main') {
   const cutoff = new Date(new Date(nowIso).getTime() - APP_STATE_BACKUP_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
   if (useSupabase) {
-    await supabaseRun(supabase.from('app_state_backups').delete().lt('backed_up_at', cutoff), 'cleanup old app state backups');
+    await supabaseRun(supabase.from('app_state_backups').delete().eq('state_id', stateId).lt('backed_up_at', cutoff), 'cleanup old app state backups');
     if (APP_STATE_BACKUP_MAX_ROWS > 0) {
       const { data, error } = await supabase
         .from('app_state_backups')
         .select('id')
-        .eq('state_id', 'main')
+        .eq('state_id', stateId)
         .order('backed_up_at', { ascending: false })
         .range(APP_STATE_BACKUP_MAX_ROWS, APP_STATE_BACKUP_MAX_ROWS + 500);
       if (error) throw new Error(`Supabase select extra app state backups failed: ${error.message}`);
@@ -1608,7 +1611,7 @@ async function cleanupAppStateBackups(nowIso = new Date().toISOString()) {
     }
     return;
   }
-  db.prepare('DELETE FROM app_state_backups WHERE backed_up_at < ?').run(cutoff);
+  db.prepare('DELETE FROM app_state_backups WHERE state_id = ? AND backed_up_at < ?').run(stateId, cutoff);
   if (APP_STATE_BACKUP_MAX_ROWS > 0) {
     db.prepare(`
       DELETE FROM app_state_backups

@@ -1541,20 +1541,38 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       if (!currentUser) return;
       const userId = currentUser.id;
       const favoriteId = newId('favorite');
-      mutateOnServer('favorite.toggle', { entityType, entityId, userId, id: favoriteId }, (draft) => {
+      const payload = { entityType, entityId, userId, id: favoriteId };
+      setDataError(null);
+      setState((current) => {
+        const draft = cloneState(current);
         const index = draft.favorites.findIndex((favorite) => favorite.userId === userId && favorite.entityType === entityType && favorite.entityId === entityId);
         if (index >= 0) {
           draft.favorites.splice(index, 1);
-          return;
+        } else {
+          draft.favorites.unshift({
+            id: favoriteId,
+            userId,
+            entityType,
+            entityId,
+            createdAt: new Date().toISOString(),
+          });
         }
-        draft.favorites.unshift({
-          id: favoriteId,
-          userId,
-          entityType,
-          entityId,
-          createdAt: new Date().toISOString(),
+        return normalizeState(draft);
+      });
+      void fetch('/api/mutations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'favorite.toggle', payload, actorId: currentUserId, returnState: false }),
+      })
+        .then(async (response) => {
+          if (!response.ok) throw new Error(await readApiError(response));
+        })
+        .catch(async (error) => {
+          const message = error instanceof Error ? error.message : 'Could not update favorite.';
+          console.error(error);
+          setDataError(message);
+          await refreshState();
         });
-      }, { showSaving: false });
     },
     isFavorite(entityType, entityId, userId) {
       const targetUserId = userId ?? currentUser?.id ?? null;
