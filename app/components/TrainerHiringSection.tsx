@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Ban, CalendarDays, ExternalLink, Save, UserPlus } from 'lucide-react';
+import { Ban, CalendarDays, ChevronRight, ExternalLink, Save, UserPlus, X } from 'lucide-react';
 import { GlassCard } from './GlassCard';
 import { useLibrary } from '../domain/LibraryContext';
 import type { TrainerCertificationResult, TrainerHiringCandidate } from '../domain/types';
@@ -101,7 +101,7 @@ function BooleanField({
   );
 }
 
-function CandidateCard({ candidate }: { candidate: TrainerHiringCandidate }) {
+function CandidateDetailsCard({ candidate, onClose }: { candidate: TrainerHiringCandidate; onClose: () => void }) {
   const { updateTrainerHiringCandidate, rejectTrainerHiringCandidate, isSaving } = useLibrary();
   const [draft, setDraft] = useState<CandidateDraft>(() => draftFromCandidate(candidate));
 
@@ -165,6 +165,10 @@ function CandidateCard({ candidate }: { candidate: TrainerHiringCandidate }) {
               Кандидату отказано
             </button>
           )}
+          <button type="button" onClick={onClose} className="secondary-action inline-flex items-center gap-2">
+            <X className="h-4 w-4" />
+            Закрыть
+          </button>
         </div>
       </div>
 
@@ -285,6 +289,46 @@ function CandidateCard({ candidate }: { candidate: TrainerHiringCandidate }) {
   );
 }
 
+function CandidateSummaryCard({
+  candidate,
+  isSelected,
+  onOpen,
+}: {
+  candidate: TrainerHiringCandidate;
+  isSelected: boolean;
+  onOpen: () => void;
+}) {
+  const done = completedSteps(draftFromCandidate(candidate));
+  const isRejected = candidate.status === 'rejected';
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className={`group rounded-xl border p-5 text-left transition-all hover:-translate-y-0.5 hover:border-[#c9a98d] hover:bg-[#2a2328] ${
+        isSelected ? 'border-[#c9a98d] bg-[#2a2328]' : 'border-[#c9a98d]/20 bg-[#1a1820]/70'
+      } ${isRejected ? 'opacity-60 grayscale' : ''}`}
+    >
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="truncate text-xl font-semibold text-[#f5f3f0]">{candidate.fullName}</p>
+          <p className="mt-1 text-sm text-[#a89b8f]">{isRejected ? 'Кандидату отказано' : `Этапов заполнено: ${done} из 11`}</p>
+        </div>
+        <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold ${isRejected ? 'bg-[#5a2f3d] text-[#f0c5cf]' : 'bg-[#324535] text-[#cfe8cf]'}`}>
+          {isRejected ? 'Отказ' : 'В работе'}
+        </span>
+      </div>
+      <div className="mb-3 h-2 overflow-hidden rounded-full bg-[#2b2430]">
+        <div className="h-full rounded-full bg-[#c9a98d] transition-all" style={{ width: `${Math.round((done / 11) * 100)}%` }} />
+      </div>
+      <span className="inline-flex items-center gap-2 text-sm font-semibold text-[#d8b99f]">
+        Открыть карточку
+        <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+      </span>
+    </button>
+  );
+}
+
 function BooleanPanel(props: { title: string; checked: boolean; disabled?: boolean; label: string; onChange: (value: boolean) => void }) {
   return (
     <div className="rounded-xl border border-[#4d3f3a] bg-[#1c1820] p-4">
@@ -309,11 +353,17 @@ function DatePanel({ disabled, onChange, title, value }: { disabled?: boolean; o
 export function TrainerHiringSection() {
   const { state, createTrainerHiringCandidate, refreshSlice } = useLibrary();
   const [fullName, setFullName] = useState('');
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
 
   const candidates = useMemo(() => [...state.trainerHiringCandidates].sort((left, right) => {
     if (left.status !== right.status) return left.status === 'active' ? -1 : 1;
     return String(right.updatedAt || '').localeCompare(String(left.updatedAt || ''));
   }), [state.trainerHiringCandidates]);
+  const selectedCandidate = candidates.find((candidate) => candidate.id === selectedCandidateId) ?? null;
+
+  useEffect(() => {
+    if (selectedCandidateId && !selectedCandidate) setSelectedCandidateId(null);
+  }, [selectedCandidate, selectedCandidateId]);
 
   const createCandidate = () => {
     if (!fullName.trim()) return;
@@ -350,7 +400,25 @@ export function TrainerHiringSection() {
           <p className="text-[#a89b8f]">Кандидатов пока нет. Добавьте первого кандидата, чтобы начать вести воронку.</p>
         </GlassCard>
       ) : (
-        candidates.map((candidate) => <CandidateCard key={candidate.id} candidate={candidate} />)
+        <>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {candidates.map((candidate) => (
+              <CandidateSummaryCard
+                key={candidate.id}
+                candidate={candidate}
+                isSelected={candidate.id === selectedCandidateId}
+                onOpen={() => setSelectedCandidateId(candidate.id)}
+              />
+            ))}
+          </div>
+
+          {selectedCandidate && (
+            <CandidateDetailsCard
+              candidate={selectedCandidate}
+              onClose={() => setSelectedCandidateId(null)}
+            />
+          )}
+        </>
       )}
     </div>
   );
