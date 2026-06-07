@@ -223,6 +223,36 @@ export interface TrainerEvaluationSheet {
   createdById?: string | null;
 }
 
+export type TrainerHiringStatus = 'active' | 'rejected';
+export type TrainerCertificationResult = 'pending' | 'passed' | 'failed';
+
+export interface TrainerHiringCandidate {
+  id: string;
+  fullName: string;
+  status: TrainerHiringStatus;
+  videoIntroApproved?: boolean | null;
+  primaryDocumentsReceived: boolean;
+  ndaSigned: boolean;
+  ndaLink?: string | null;
+  introZoomScheduled: boolean;
+  introZoomDate?: string | null;
+  secondCertificationScheduled: boolean;
+  secondCertificationDate?: string | null;
+  secondCertificationResult: TrainerCertificationResult;
+  secondCertificationRetakeDate?: string | null;
+  trainingsVisitedAfterSecondCertification: boolean;
+  mediaCollected: boolean;
+  thirdCertificationScheduled: boolean;
+  thirdCertificationDate?: string | null;
+  thirdCertificationPreparationZoomDate?: string | null;
+  workingHoursAssigned: boolean;
+  firstShiftDate?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  rejectedAt?: string | null;
+  createdById?: string | null;
+}
+
 export interface CallReview {
   id: string;
   source: 'levita-calls';
@@ -271,6 +301,7 @@ export interface LibraryState {
   expenseCategories: ExpenseCategory[];
   expenses: ExpenseRecord[];
   trainerEvaluations: TrainerEvaluationSheet[];
+  trainerHiringCandidates: TrainerHiringCandidate[];
   callReviews: CallReview[];
   favorites: ContentFavorite[];
   readReceipts: ContentReadReceipt[];

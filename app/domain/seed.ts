@@ -144,6 +144,7 @@ export const initialState: LibraryState = {
     { id: 'trainer-evaluation-2', trainerName: 'Мила Тренер', studio: 'MACHUGI', direction: 'Растяжка', score: 9.1, evaluatedAt: '2026-05-14', sheetUrl: 'https://docs.google.com/spreadsheets/', createdAt: now, createdById: 'user-assistant' },
     { id: 'trainer-evaluation-3', trainerName: 'Мила Тренер', studio: 'MACHUGI', direction: 'Балет', score: 8.4, evaluatedAt: '2026-05-21', sheetUrl: 'https://docs.google.com/spreadsheets/', createdAt: now, createdById: 'user-senior-trainer' },
   ],
+  trainerHiringCandidates: [],
   callReviews: [],
   favorites: [],
   readReceipts: [],

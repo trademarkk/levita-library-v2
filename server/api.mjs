@@ -1535,6 +1535,7 @@ async function getStateSlice(slice, params = {}) {
   else if (slice === 'financial-plan') Object.assign(sliceState, { financialPlans: (state.financialPlans || []).filter((plan) => !month || plan.month === month) });
   else if (slice === 'expenses') Object.assign(sliceState, { expenseCategories: state.expenseCategories || [], expenses: (state.expenses || []).filter((expense) => pickMonth(expense.date)) });
   else if (slice === 'ratings') Object.assign(sliceState, { trainerEvaluations: (state.trainerEvaluations || []).filter((item) => pickMonth(item.evaluatedAt)), callReviews: (state.callReviews || []).filter((item) => pickMonth(item.reviewedAt)) });
+  else if (slice === 'trainer-hiring') Object.assign(sliceState, { trainerHiringCandidates: state.trainerHiringCandidates || [] });
   else if (slice === 'audit') Object.assign(sliceState, { auditLog: state.auditLog || [] });
   else if (slice === 'refunds') Object.assign(sliceState, { refunds: state.refunds || [] });
   else {
@@ -1765,6 +1766,7 @@ async function resetState() {
       ['expense_categories', 'id'],
       ['expenses', 'id'],
       ['trainer_evaluation_sheets', 'id'],
+      ['trainer_hiring_candidates', 'id'],
       ['call_checklist_items', 'id'],
       ['app_settings', 'id'],
       ['users', 'id'],
@@ -1798,6 +1800,7 @@ async function resetState() {
       ['expense_categories', 'id'],
       ['expenses', 'id'],
       ['trainer_evaluation_sheets', 'id'],
+      ['trainer_hiring_candidates', 'id'],
       ['call_checklist_items', 'id'],
       ['app_settings', 'id'],
       ['users', 'id'],

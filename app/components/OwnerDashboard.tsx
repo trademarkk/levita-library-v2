@@ -6,6 +6,7 @@ import { OwnerLinksManager, OwnerRoleContentManager, OwnerTemplatesManager } fro
 import { ExpensesSection, FinancialPlanSection } from './SharedPlanningSections';
 import { CallRatingSection } from './CallRatingSection';
 import { TrainerEvaluationSheetsSection, TrainerRatingSection } from './TrainerEvaluationSections';
+import { TrainerHiringSection } from './TrainerHiringSection';
 import { useLibrary } from '../domain/LibraryContext';
 import { employeeStatusLabels, formatDate, formatTime, refundStatusLabels, roleLabels, studioLabels } from '../domain/labels';
 import { can } from '../domain/permissions';
@@ -27,6 +28,7 @@ const tabs = [
   { id: 'financial-plan', label: 'Финансовый план' },
   { id: 'expenses', label: 'Расходы' },
   { id: 'evaluation-sheets', label: 'Листы оценивания' },
+  { id: 'trainer-hiring', label: 'Приём тренера' },
   { id: 'trainer-rating', label: 'Рейтинг тренеров' },
   { id: 'call-rating', label: 'Рейтинг звонков' },
   { id: 'responsibilities', label: 'Обязанности' },
@@ -57,6 +59,7 @@ export function OwnerDashboard() {
       'financial-plan': 'financial-plan',
       expenses: 'expenses',
       'evaluation-sheets': 'ratings',
+      'trainer-hiring': 'trainer-hiring',
       'trainer-rating': 'ratings',
       'call-rating': 'ratings',
       responsibilities: 'content',
@@ -114,6 +117,7 @@ export function OwnerDashboard() {
           {activeTab === 'financial-plan' && <FinancialPlanSection />}
           {activeTab === 'expenses' && <ExpensesSection />}
           {activeTab === 'evaluation-sheets' && <TrainerEvaluationSheetsSection />}
+          {activeTab === 'trainer-hiring' && <TrainerHiringSection />}
           {activeTab === 'trainer-rating' && <TrainerRatingSection />}
           {activeTab === 'call-rating' && <CallRatingSection />}
           {activeTab === 'responsibilities' && <OwnerRoleContentManager category="RESPONSIBILITY" />}

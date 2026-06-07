@@ -32,6 +32,7 @@ import type {
   Studio,
   TaskTemplate,
   TrainerEvaluationSheet,
+  TrainerHiringCandidate,
   UsefulContact,
   User,
 } from './types';
@@ -110,7 +111,8 @@ type CreateExpenseInput = {
 };
 
 type TrainerEvaluationInput = Omit<TrainerEvaluationSheet, 'id' | 'createdAt' | 'createdById'>;
-type StateSlice = 'bootstrap' | 'tasks' | 'content' | 'checklists' | 'control' | 'financial-plan' | 'expenses' | 'ratings' | 'team' | 'audit' | 'refunds';
+type TrainerHiringCandidateInput = Omit<TrainerHiringCandidate, 'id' | 'createdAt' | 'updatedAt' | 'rejectedAt' | 'createdById'>;
+type StateSlice = 'bootstrap' | 'tasks' | 'content' | 'checklists' | 'control' | 'financial-plan' | 'expenses' | 'ratings' | 'trainer-hiring' | 'team' | 'audit' | 'refunds';
 
 type StateSliceMeta = {
   month?: string;
@@ -187,6 +189,9 @@ type LibraryContextValue = {
   createTrainerEvaluation: (input: TrainerEvaluationInput) => void;
   updateTrainerEvaluation: (id: string, input: Partial<TrainerEvaluationInput>) => void;
   deleteTrainerEvaluation: (id: string) => void;
+  createTrainerHiringCandidate: (input: TrainerHiringCandidateInput) => void;
+  updateTrainerHiringCandidate: (id: string, input: Partial<TrainerHiringCandidateInput>) => void;
+  rejectTrainerHiringCandidate: (id: string) => void;
   updateSettings: (input: Partial<AppSettings>) => void;
   toggleFavorite: (entityType: FavoriteEntityType, entityId: string) => void;
   isFavorite: (entityType: FavoriteEntityType, entityId: string, userId?: string | null) => boolean;
@@ -217,6 +222,7 @@ function createEmptyState(): LibraryState {
   state.expenseCategories = [];
   state.expenses = [];
   state.trainerEvaluations = [];
+  state.trainerHiringCandidates = [];
   state.callReviews = [];
   state.favorites = [];
   state.readReceipts = [];
@@ -592,6 +598,32 @@ function normalizeState(raw: Partial<LibraryState> | null): LibraryState {
       evaluatedAt: /^\d{4}-\d{2}-\d{2}$/.test(evaluation.evaluatedAt) ? evaluation.evaluatedAt : dateKey(evaluation.evaluatedAt) || dateKey(),
       createdById: evaluation.createdById ?? null,
     })),
+    trainerHiringCandidates: (raw.trainerHiringCandidates ?? []).map((candidate) => ({
+      ...candidate,
+      status: candidate.status === 'rejected' ? 'rejected' : 'active',
+      fullName: candidate.fullName || '',
+      videoIntroApproved: candidate.videoIntroApproved ?? null,
+      primaryDocumentsReceived: Boolean(candidate.primaryDocumentsReceived),
+      ndaSigned: Boolean(candidate.ndaSigned),
+      ndaLink: candidate.ndaLink ?? null,
+      introZoomScheduled: Boolean(candidate.introZoomScheduled),
+      introZoomDate: candidate.introZoomDate || null,
+      secondCertificationScheduled: Boolean(candidate.secondCertificationScheduled),
+      secondCertificationDate: candidate.secondCertificationDate || null,
+      secondCertificationResult: candidate.secondCertificationResult === 'passed' || candidate.secondCertificationResult === 'failed' ? candidate.secondCertificationResult : 'pending',
+      secondCertificationRetakeDate: candidate.secondCertificationRetakeDate || null,
+      trainingsVisitedAfterSecondCertification: Boolean(candidate.trainingsVisitedAfterSecondCertification),
+      mediaCollected: Boolean(candidate.mediaCollected),
+      thirdCertificationScheduled: Boolean(candidate.thirdCertificationScheduled),
+      thirdCertificationDate: candidate.thirdCertificationDate || null,
+      thirdCertificationPreparationZoomDate: candidate.thirdCertificationPreparationZoomDate || null,
+      workingHoursAssigned: Boolean(candidate.workingHoursAssigned),
+      firstShiftDate: candidate.firstShiftDate || null,
+      createdAt: candidate.createdAt || new Date().toISOString(),
+      updatedAt: candidate.updatedAt || candidate.createdAt || new Date().toISOString(),
+      rejectedAt: candidate.rejectedAt ?? null,
+      createdById: candidate.createdById ?? null,
+    })) as TrainerHiringCandidate[],
     callReviews: (raw.callReviews ?? []).map((review) => ({
       ...review,
       source: 'levita-calls',
@@ -1553,6 +1585,58 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     deleteTrainerEvaluation(id) {
       mutateOnServer('trainerEvaluation.delete', { id }, (draft) => {
         draft.trainerEvaluations = draft.trainerEvaluations.filter((item) => item.id !== id);
+      });
+    },
+    createTrainerHiringCandidate(input) {
+      if (!input.fullName.trim()) return;
+      const now = new Date().toISOString();
+      const candidate: TrainerHiringCandidate = {
+        id: newId('trainer-hiring'),
+        fullName: input.fullName.trim(),
+        status: input.status === 'rejected' ? 'rejected' : 'active',
+        videoIntroApproved: input.videoIntroApproved ?? null,
+        primaryDocumentsReceived: Boolean(input.primaryDocumentsReceived),
+        ndaSigned: Boolean(input.ndaSigned),
+        ndaLink: input.ndaLink?.trim() || null,
+        introZoomScheduled: Boolean(input.introZoomScheduled),
+        introZoomDate: input.introZoomDate || null,
+        secondCertificationScheduled: Boolean(input.secondCertificationScheduled),
+        secondCertificationDate: input.secondCertificationDate || null,
+        secondCertificationResult: input.secondCertificationResult === 'passed' || input.secondCertificationResult === 'failed' ? input.secondCertificationResult : 'pending',
+        secondCertificationRetakeDate: input.secondCertificationRetakeDate || null,
+        trainingsVisitedAfterSecondCertification: Boolean(input.trainingsVisitedAfterSecondCertification),
+        mediaCollected: Boolean(input.mediaCollected),
+        thirdCertificationScheduled: Boolean(input.thirdCertificationScheduled),
+        thirdCertificationDate: input.thirdCertificationDate || null,
+        thirdCertificationPreparationZoomDate: input.thirdCertificationPreparationZoomDate || null,
+        workingHoursAssigned: Boolean(input.workingHoursAssigned),
+        firstShiftDate: input.firstShiftDate || null,
+        createdById: currentUser?.id ?? null,
+        createdAt: now,
+        updatedAt: now,
+        rejectedAt: null,
+      };
+      mutateOnServer('trainerHiring.create', candidate as unknown as Record<string, unknown>, (draft) => {
+        draft.trainerHiringCandidates.unshift(candidate);
+      });
+    },
+    updateTrainerHiringCandidate(id, input) {
+      const normalizedInput = {
+        ...input,
+        fullName: input.fullName?.trim(),
+        ndaLink: input.ndaLink?.trim() || null,
+        secondCertificationResult: input.secondCertificationResult === 'passed' || input.secondCertificationResult === 'failed' ? input.secondCertificationResult : input.secondCertificationResult === 'pending' ? 'pending' : undefined,
+      };
+      mutateOnServer('trainerHiring.update', { id, input: normalizedInput }, (draft) => {
+        const candidate = draft.trainerHiringCandidates.find((item) => item.id === id);
+        if (candidate) Object.assign(candidate, normalizedInput, { updatedAt: new Date().toISOString() });
+      });
+    },
+    rejectTrainerHiringCandidate(id) {
+      const now = new Date().toISOString();
+      mutateOnServer('trainerHiring.reject', { id, rejectedAt: now }, (draft) => {
+        const candidate = draft.trainerHiringCandidates.find((item) => item.id === id);
+        if (candidate) Object.assign(candidate, { status: 'rejected' as const, rejectedAt: now, updatedAt: now });
       });
     },
     updateSettings(input) {

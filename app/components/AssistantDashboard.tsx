@@ -8,6 +8,7 @@ import { ExpensesSection, FinancialPlanSection } from './SharedPlanningSections'
 import { AuditLogSection, ControlCenterSection, ShiftJournalSection } from './OwnerDashboard';
 import { CallRatingSection } from './CallRatingSection';
 import { TrainerEvaluationSheetsSection, TrainerRatingSection } from './TrainerEvaluationSections';
+import { TrainerHiringSection } from './TrainerHiringSection';
 import { useLibrary } from '../domain/LibraryContext';
 import { employeeStatusLabels, formatDate, formatTime, roleLabels, studioLabels } from '../domain/labels';
 import { assistantManagedTeamRoles, can } from '../domain/permissions';
@@ -34,6 +35,7 @@ export function AssistantDashboard() {
     { id: 'expenses', label: 'Расходы' },
     { id: 'team', label: 'Команда' },
     { id: 'evaluation-sheets', label: 'Листы оценивания' },
+    { id: 'trainer-hiring', label: 'Приём тренера' },
     { id: 'trainer-rating', label: 'Рейтинг тренеров' },
     { id: 'call-rating', label: 'Рейтинг звонков' },
     { id: 'admin-checklists', label: 'Контроль чек-листов' },
@@ -59,6 +61,7 @@ export function AssistantDashboard() {
       expenses: 'expenses',
       team: 'team',
       'evaluation-sheets': 'ratings',
+      'trainer-hiring': 'trainer-hiring',
       'trainer-rating': 'ratings',
       'call-rating': 'ratings',
       'admin-checklists': 'checklists',
@@ -115,6 +118,7 @@ export function AssistantDashboard() {
           {activeTab === 'expenses' && <ExpensesSection />}
           {activeTab === 'team' && <AssistantTeamSection />}
           {activeTab === 'evaluation-sheets' && <TrainerEvaluationSheetsSection />}
+          {activeTab === 'trainer-hiring' && <TrainerHiringSection />}
           {activeTab === 'trainer-rating' && <TrainerRatingSection />}
           {activeTab === 'call-rating' && <CallRatingSection />}
           {activeTab === 'admin-checklists' && <AdminChecklistMonitor />}

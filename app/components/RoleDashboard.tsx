@@ -5,6 +5,7 @@ import { TabNavigation } from './TabNavigation';
 import { ConfirmChecklistDialog } from './ConfirmChecklistDialog';
 import { RoleContentViewer, RoleLinksManager, RoleLinksViewer, RoleTemplatesViewer } from './RoleContent';
 import { TrainerEvaluationSheetsSection, TrainerRatingSection } from './TrainerEvaluationSections';
+import { TrainerHiringSection } from './TrainerHiringSection';
 import { useLibrary } from '../domain/LibraryContext';
 import { roleLabels } from '../domain/labels';
 import { can } from '../domain/permissions';
@@ -44,6 +45,7 @@ const roleContent = {
       { id: 'knowledge', label: 'База знаний' },
       { id: 'links', label: 'Рабочие ссылки' },
       { id: 'evaluation-sheets', label: 'Листы оценивания' },
+      { id: 'trainer-hiring', label: 'Приём тренера' },
       { id: 'trainer-rating', label: 'Рейтинг тренеров' },
       { id: 'checklist', label: 'Чек-лист' },
     ],
@@ -77,6 +79,7 @@ export function RoleDashboard({ role }: RoleDashboardProps) {
       templates: 'content',
       links: 'content',
       'evaluation-sheets': 'ratings',
+      'trainer-hiring': 'trainer-hiring',
       'trainer-rating': 'ratings',
       checklist: 'checklists',
     };
@@ -121,6 +124,7 @@ export function RoleDashboard({ role }: RoleDashboardProps) {
           {activeTab === 'templates' && <RoleTemplatesViewer role={role} />}
           {activeTab === 'links' && (canManageRoleLinks ? <RoleLinksManager role={role} /> : <RoleLinksViewer role={role} />)}
           {activeTab === 'evaluation-sheets' && <TrainerEvaluationSheetsSection />}
+          {activeTab === 'trainer-hiring' && <TrainerHiringSection />}
           {activeTab === 'trainer-rating' && <TrainerRatingSection />}
           {activeTab === 'checklist' && <RoleChecklist userId={user?.id ?? ''} role={role} />}
         </div>

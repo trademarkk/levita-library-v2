@@ -86,6 +86,10 @@ function dateOnly(value) {
   return localDateOnly(date);
 }
 
+function nullableDateOnly(value) {
+  return value ? dateOnly(value) : null;
+}
+
 function timeOnly(value) {
   return value ? String(value).slice(0, 5) : null;
 }
@@ -247,11 +251,40 @@ function mapFinancialPlans(financialMonths, financialRows, financialPayments) {
   return financialMonths.map((month) => ({ month: month.month, rows: rowsByMonth.get(month.month) || [] }));
 }
 
+function mapTrainerHiringCandidate(candidate) {
+  return {
+    id: candidate.id,
+    fullName: candidate.full_name,
+    status: candidate.status || 'active',
+    videoIntroApproved: candidate.video_intro_approved,
+    primaryDocumentsReceived: Boolean(candidate.primary_documents_received),
+    ndaSigned: Boolean(candidate.nda_signed),
+    ndaLink: candidate.nda_link,
+    introZoomScheduled: Boolean(candidate.intro_zoom_scheduled),
+    introZoomDate: nullableDateOnly(candidate.intro_zoom_date),
+    secondCertificationScheduled: Boolean(candidate.second_certification_scheduled),
+    secondCertificationDate: nullableDateOnly(candidate.second_certification_date),
+    secondCertificationResult: candidate.second_certification_result || 'pending',
+    secondCertificationRetakeDate: nullableDateOnly(candidate.second_certification_retake_date),
+    trainingsVisitedAfterSecondCertification: Boolean(candidate.trainings_visited_after_second_certification),
+    mediaCollected: Boolean(candidate.media_collected),
+    thirdCertificationScheduled: Boolean(candidate.third_certification_scheduled),
+    thirdCertificationDate: nullableDateOnly(candidate.third_certification_date),
+    thirdCertificationPreparationZoomDate: nullableDateOnly(candidate.third_certification_preparation_zoom_date),
+    workingHoursAssigned: Boolean(candidate.working_hours_assigned),
+    firstShiftDate: nullableDateOnly(candidate.first_shift_date),
+    createdById: candidate.created_by_id,
+    createdAt: iso(candidate.created_at),
+    updatedAt: iso(candidate.updated_at),
+    rejectedAt: iso(candidate.rejected_at),
+  };
+}
+
 export async function readStateFromPrisma(prisma) {
   const [
     users, tasks, templates, links, documentTemplates, usefulContacts, knowledge, favorites, readReceipts,
     checklists, checklistItems, checklistReports, refunds, financialMonths, financialRows, financialPayments,
-    calendarEvents, expenseCategories, expenses, trainerEvaluations, callReviews, callChecklistItems,
+    calendarEvents, expenseCategories, expenses, trainerEvaluations, trainerHiringCandidates, callReviews, callChecklistItems,
     adminShifts, auditLog, settingsRows,
   ] = await Promise.all([
     selectTable(prisma, 'users', 'created_at asc'),
@@ -274,6 +307,7 @@ export async function readStateFromPrisma(prisma) {
     selectTable(prisma, 'expense_categories', 'created_at asc'),
     selectTable(prisma, 'expenses', 'expense_date desc'),
     selectTable(prisma, 'trainer_evaluation_sheets', 'evaluated_at desc'),
+    selectTable(prisma, 'trainer_hiring_candidates', 'updated_at desc'),
     selectTable(prisma, 'call_reviews', 'reviewed_at desc'),
     selectTable(prisma, 'call_checklist_items', 'position asc'),
     selectTable(prisma, 'admin_shifts', 'started_at desc'),
@@ -353,6 +387,7 @@ export async function readStateFromPrisma(prisma) {
       expenseCategories: expenseCategories.map((category) => ({ id: category.id, name: category.name, createdAt: iso(category.created_at) })),
       expenses: expenses.map((expense) => ({ id: expense.id, date: dateOnly(expense.expense_date), amount: Number(expense.amount) || 0, account: expense.account, category: expense.category, studio: expense.studio, comment: expense.comment, createdAt: iso(expense.created_at) })),
       trainerEvaluations: trainerEvaluations.map((evaluation) => ({ id: evaluation.id, trainerName: evaluation.trainer_name, studio: evaluation.studio, direction: evaluation.direction, score: Number(evaluation.score) || 0, evaluatedAt: dateOnly(evaluation.evaluated_at), sheetUrl: evaluation.sheet_url, createdById: evaluation.created_by_id, createdAt: iso(evaluation.created_at) })),
+      trainerHiringCandidates: trainerHiringCandidates.map(mapTrainerHiringCandidate),
       callReviews: callReviews.map((review) => ({ id: review.id, source: review.source || 'levita-calls', externalId: review.external_id, adminName: review.admin_name, studio: review.studio, score: Number(review.score) || 0, reviewedAt: dateOnly(review.reviewed_at), amoCrmDealUrl: review.amo_crm_deal_url, callUrl: review.call_url, originalFilename: review.original_filename, comment: review.comment, createdAt: iso(review.created_at), updatedAt: iso(review.updated_at) })),
       favorites: favorites.map((favorite) => ({ id: favorite.id, userId: favorite.user_id, entityType: favorite.entity_type, entityId: favorite.entity_id, createdAt: iso(favorite.created_at) })),
       readReceipts: readReceipts.map((receipt) => ({ id: receipt.id, userId: receipt.user_id, entityType: 'knowledge', entityId: receipt.entity_id, readAt: iso(receipt.read_at) })),
@@ -467,6 +502,10 @@ export async function readStateSliceFromPrisma(prisma, slice, params = {}) {
         },
         sliceMeta: hasMonthFilter ? { month: bounds.month } : undefined,
       };
+    }
+    case 'trainer-hiring': {
+      const trainerHiringCandidates = await selectTable(prisma, 'trainer_hiring_candidates', 'status asc, updated_at desc');
+      return { updatedAt: nowIso(), state: { trainerHiringCandidates: trainerHiringCandidates.map(mapTrainerHiringCandidate) } };
     }
     case 'team': {
       const users = await selectTable(prisma, 'users', 'created_at asc');
@@ -880,6 +919,77 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
       return;
     case 'trainerEvaluation.delete':
       await prisma.$executeRaw`delete from public.trainer_evaluation_sheets where id = ${payload.id}`;
+      return;
+    case 'trainerHiring.create':
+      await prisma.$executeRaw`
+        insert into public.trainer_hiring_candidates (
+          id, full_name, status, video_intro_approved, primary_documents_received, nda_signed, nda_link,
+          intro_zoom_scheduled, intro_zoom_date, second_certification_scheduled, second_certification_date,
+          second_certification_result, second_certification_retake_date, trainings_visited_after_second_certification,
+          media_collected, third_certification_scheduled, third_certification_date, third_certification_preparation_zoom_date,
+          working_hours_assigned, first_shift_date, created_by_id, created_at, updated_at, rejected_at
+        )
+        values (
+          ${payload.id || newId('trainer-hiring')}, ${String(payload.fullName || '').trim()}, ${payload.status === 'rejected' ? 'rejected' : 'active'},
+          ${payload.videoIntroApproved === undefined ? null : payload.videoIntroApproved}, ${Boolean(payload.primaryDocumentsReceived)},
+          ${Boolean(payload.ndaSigned)}, ${payload.ndaLink || null}, ${Boolean(payload.introZoomScheduled)},
+          ${payload.introZoomDate ? dateOnly(payload.introZoomDate) : null}::date, ${Boolean(payload.secondCertificationScheduled)},
+          ${payload.secondCertificationDate ? dateOnly(payload.secondCertificationDate) : null}::date,
+          ${['passed', 'failed'].includes(payload.secondCertificationResult) ? payload.secondCertificationResult : 'pending'},
+          ${payload.secondCertificationRetakeDate ? dateOnly(payload.secondCertificationRetakeDate) : null}::date,
+          ${Boolean(payload.trainingsVisitedAfterSecondCertification)}, ${Boolean(payload.mediaCollected)},
+          ${Boolean(payload.thirdCertificationScheduled)}, ${payload.thirdCertificationDate ? dateOnly(payload.thirdCertificationDate) : null}::date,
+          ${payload.thirdCertificationPreparationZoomDate ? dateOnly(payload.thirdCertificationPreparationZoomDate) : null}::date,
+          ${Boolean(payload.workingHoursAssigned)}, ${payload.firstShiftDate ? dateOnly(payload.firstShiftDate) : null}::date,
+          ${actor?.id || payload.createdById || null}, now(), now(), ${payload.status === 'rejected' ? now : null}::timestamptz
+        )
+      `;
+      await audit(prisma, 'trainerHiring.create', 'trainer_hiring_candidate', payload.id || '', payload.fullName || '', actor, 'Создан кандидат тренера.');
+      return;
+    case 'trainerHiring.update': {
+      const input = payload.input || {};
+      if (!String(input.fullName || '').trim()) {
+        const error = new Error('Candidate full name is required.');
+        error.statusCode = 400;
+        throw error;
+      }
+      await prisma.$executeRaw`
+        update public.trainer_hiring_candidates
+        set full_name = ${String(input.fullName || '').trim()},
+            status = ${input.status === 'rejected' ? 'rejected' : 'active'},
+            video_intro_approved = ${input.videoIntroApproved === undefined ? null : input.videoIntroApproved},
+            primary_documents_received = ${Boolean(input.primaryDocumentsReceived)},
+            nda_signed = ${Boolean(input.ndaSigned)},
+            nda_link = ${input.ndaLink || null},
+            intro_zoom_scheduled = ${Boolean(input.introZoomScheduled)},
+            intro_zoom_date = ${input.introZoomDate ? dateOnly(input.introZoomDate) : null}::date,
+            second_certification_scheduled = ${Boolean(input.secondCertificationScheduled)},
+            second_certification_date = ${input.secondCertificationDate ? dateOnly(input.secondCertificationDate) : null}::date,
+            second_certification_result = ${['passed', 'failed'].includes(input.secondCertificationResult) ? input.secondCertificationResult : 'pending'},
+            second_certification_retake_date = ${input.secondCertificationRetakeDate ? dateOnly(input.secondCertificationRetakeDate) : null}::date,
+            trainings_visited_after_second_certification = ${Boolean(input.trainingsVisitedAfterSecondCertification)},
+            media_collected = ${Boolean(input.mediaCollected)},
+            third_certification_scheduled = ${Boolean(input.thirdCertificationScheduled)},
+            third_certification_date = ${input.thirdCertificationDate ? dateOnly(input.thirdCertificationDate) : null}::date,
+            third_certification_preparation_zoom_date = ${input.thirdCertificationPreparationZoomDate ? dateOnly(input.thirdCertificationPreparationZoomDate) : null}::date,
+            working_hours_assigned = ${Boolean(input.workingHoursAssigned)},
+            first_shift_date = ${input.firstShiftDate ? dateOnly(input.firstShiftDate) : null}::date,
+            rejected_at = case when ${input.status === 'rejected'} then coalesce(rejected_at, now()) else null end,
+            updated_at = now()
+        where id = ${payload.id}
+      `;
+      await audit(prisma, 'trainerHiring.update', 'trainer_hiring_candidate', payload.id, input.fullName || payload.id, actor, 'Обновлена карточка кандидата тренера.');
+      return;
+    }
+    case 'trainerHiring.reject':
+      await prisma.$executeRaw`
+        update public.trainer_hiring_candidates
+        set status = 'rejected',
+            rejected_at = coalesce(${payload.rejectedAt || null}::timestamptz, now()),
+            updated_at = now()
+        where id = ${payload.id}
+      `;
+      await audit(prisma, 'trainerHiring.reject', 'trainer_hiring_candidate', payload.id, payload.id, actor, 'Кандидату тренера отказано.');
       return;
     case 'settings.update':
       await prisma.$executeRaw`insert into public.app_settings (id, payload, updated_at) values ('main', ${jsonValue(payload.input || {})}, now()) on conflict (id) do update set payload = public.app_settings.payload || excluded.payload, updated_at = now()`;
