@@ -915,6 +915,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
   const checklistToggleQueueRef = useRef<Promise<void>>(Promise.resolve());
   const checklistToggleVersionRef = useRef(0);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [sessionUser, setSessionUser] = useState<User | null>(null);
 
   const refreshState = async () => {
     setIsDataLoading(true);
@@ -962,6 +963,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         if (!session.ok) {
           if (!cancelled) {
             setCurrentUserId(null);
+            setSessionUser(null);
             setState(loadState());
             setDatabaseReady(false);
             setDataError(null);
@@ -972,6 +974,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         const databaseState = await loadDatabaseState();
         if (!cancelled) {
           setCurrentUserId(session.user.id);
+          setSessionUser(session.user);
           if (databaseState) {
             setState(databaseState);
             setDatabaseReady(true);
@@ -982,6 +985,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         console.error(error);
         if (!cancelled) {
           setCurrentUserId(null);
+          setSessionUser(null);
           setState(loadState());
           setDatabaseReady(false);
           setDataError(error instanceof Error ? error.message : 'Не удалось проверить вход.');
@@ -1001,15 +1005,16 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const currentUser = useMemo(
-    () => state.users.find((user) => user.id === currentUserId) ?? null,
-    [currentUserId, state.users],
+    () => state.users.find((user) => user.id === currentUserId) ?? (sessionUser?.id === currentUserId ? sessionUser : null),
+    [currentUserId, sessionUser, state.users],
   );
 
   const resolveActiveUser = () => {
     if (currentUser) return currentUser;
+    if (sessionUser?.id === currentUserId) return sessionUser;
     if (currentUserId) {
-      const sessionUser = state.users.find((user) => user.id === currentUserId);
-      if (sessionUser) return sessionUser;
+      const stateUser = state.users.find((user) => user.id === currentUserId);
+      if (stateUser) return stateUser;
     }
     return null;
   };
@@ -1182,6 +1187,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         setState(nextState);
       }
       setCurrentUserId(result.user.id);
+      setSessionUser(result.user);
       return { ok: true, route: result.route ?? roleRoutes[result.user.role] };
     },
     async resetPassword(email, password) {
@@ -1207,12 +1213,14 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     logout() {
       void logoutOnServer();
       setCurrentUserId(null);
+      setSessionUser(null);
       setState(loadState());
       setDatabaseReady(false);
     },
     resetDemoData() {
       void fetch('/api/reset', { method: 'POST', credentials: 'same-origin' }).then(() => refreshState());
       setCurrentUserId(null);
+      setSessionUser(null);
     },
     refreshState,
     refreshSlice,
