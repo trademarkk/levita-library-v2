@@ -770,11 +770,47 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
     }
     case 'checklist.item.delete': {
       let deleted = await prisma.$executeRaw`delete from public.checklist_items where id = ${payload.itemId}`;
+      if (!deleted && payload.checklistId && payload.label) {
+        deleted = await prisma.$executeRaw`
+          delete from public.checklist_items
+          where id = (
+            select id from public.checklist_items
+            where checklist_id = ${payload.checklistId}
+              and label = ${payload.label}
+            order by position asc, id asc
+            limit 1
+          )
+        `;
+      }
       if (!deleted && payload.assignedTo) {
         const users = await prisma.$queryRaw`select id, name, role from public.users where id = ${payload.assignedTo} limit 1`;
         const checklistId = users[0] ? await ensureChecklistForUser(prisma, users[0]) : null;
         if (checklistId) {
-          deleted = await prisma.$executeRaw`delete from public.checklist_items where checklist_id = ${checklistId} and (id = ${payload.itemId} or label = ${payload.label || ''})`;
+          deleted = await prisma.$executeRaw`
+            delete from public.checklist_items
+            where id = (
+              select id from public.checklist_items
+              where checklist_id = ${checklistId}
+                and (id = ${payload.itemId} or label = ${payload.label || ''})
+              order by position asc, id asc
+              limit 1
+            )
+          `;
+        }
+      }
+      if (payload.checklistId || payload.assignedTo) {
+        const targetChecklistId = payload.checklistId || null;
+        if (targetChecklistId) {
+          await prisma.$executeRaw`
+            update public.checklist_items item
+            set position = ordered.new_position
+            from (
+              select id, row_number() over (order by position asc, id asc) - 1 as new_position
+              from public.checklist_items
+              where checklist_id = ${targetChecklistId}
+            ) ordered
+            where item.id = ordered.id
+          `;
         }
       }
       return;

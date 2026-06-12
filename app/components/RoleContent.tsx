@@ -706,7 +706,7 @@ export function OwnerRoleContentManager({ category }: { category: KnowledgeCateg
                 {category === 'IMPORTANT_INFO' && (
                   <p className="text-xs text-[#c9a98d] mt-1">{formatDate(entry.createdAt)} · {entry.isActual === false ? 'не актуально' : 'актуально'} · ознакомились: {knowledgeReadCount(entry.id)}</p>
                 )}
-                {category !== 'RESPONSIBILITY' && <p className="text-sm text-[#a89b8f] mt-3 whitespace-pre-line">{entry.content}</p>}
+                {entry.content && <p className="text-sm text-[#a89b8f] mt-3 whitespace-pre-line">{entry.content}</p>}
               </div>
               <div className="flex gap-2">
                 <button onClick={() => startEdit(entry)} className="text-[#a89b8f] hover:text-[#c9a98d]" aria-label={`Редактировать ${entry.title}`}><Edit2 className="w-4 h-4" /></button>
