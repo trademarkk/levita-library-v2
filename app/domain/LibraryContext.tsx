@@ -52,7 +52,7 @@ const ACTIVE_REPORT_SLOTS: ChecklistReportSlot[] = ['14:00', '18:00'];
 const CONTROL_REPORT_SLOTS: ChecklistReportSlot[] = ['14:00', '18:00', '22:00'];
 const DEFAULT_STUDIO: Studio = 'STAVROPOLSKAYA';
 const FINANCIAL_PLAN_FORWARD_MONTHS = 36;
-const SLICE_REQUEST_TIMEOUT_MS = 12_000;
+const SLICE_REQUEST_DEBOUNCE_MS = 120;
 const CANONICAL_ADMIN_CHECKLIST_ITEMS = [
   'Проверить чистоту студии: зеркала, углы и поверхности',
   'Отправить кружок об открытии студии до 09:30',
@@ -919,24 +919,40 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
   const [dataError, setDataError] = useState<string | null>(null);
   const checklistToggleQueueRef = useRef<Promise<void>>(Promise.resolve());
   const checklistToggleVersionRef = useRef(0);
-  const activeDataLoadsRef = useRef(0);
+  const activeDataLoadIdsRef = useRef(new Set<number>());
+  const nextDataLoadIdRef = useRef(0);
   const activeSliceRequestsRef = useRef(new Map<string, { controller: AbortController; requestId: number }>());
+  const sliceRequestDelayRef = useRef<number | null>(null);
+  const sliceRequestDelayResolveRef = useRef<(() => void) | null>(null);
   const latestSliceRequestIdRef = useRef(0);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [sessionUser, setSessionUser] = useState<User | null>(null);
 
   const beginDataLoad = () => {
-    activeDataLoadsRef.current += 1;
+    const loadId = nextDataLoadIdRef.current + 1;
+    nextDataLoadIdRef.current = loadId;
+    activeDataLoadIdsRef.current.add(loadId);
     setIsDataLoading(true);
     return () => {
-      activeDataLoadsRef.current = Math.max(0, activeDataLoadsRef.current - 1);
-      setIsDataLoading(activeDataLoadsRef.current > 0);
+      activeDataLoadIdsRef.current.delete(loadId);
+      setIsDataLoading(activeDataLoadIdsRef.current.size > 0);
     };
   };
 
-  const cancelSliceRequests = () => {
+  const cancelSliceRequests = (resetLoading = false) => {
+    if (sliceRequestDelayRef.current !== null) {
+      window.clearTimeout(sliceRequestDelayRef.current);
+      sliceRequestDelayRef.current = null;
+    }
+    sliceRequestDelayResolveRef.current?.();
+    sliceRequestDelayResolveRef.current = null;
     activeSliceRequestsRef.current.forEach(({ controller }) => controller.abort());
     activeSliceRequestsRef.current.clear();
+    latestSliceRequestIdRef.current += 1;
+    if (resetLoading) {
+      activeDataLoadIdsRef.current.clear();
+      setIsDataLoading(false);
+    }
   };
 
   const refreshState = async () => {
@@ -962,12 +978,21 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
   };
 
   const refreshSlice = async (slice: StateSlice, params: StateSliceMeta = {}) => {
-    cancelSliceRequests();
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), SLICE_REQUEST_TIMEOUT_MS);
+    cancelSliceRequests(true);
     const requestId = latestSliceRequestIdRef.current + 1;
     latestSliceRequestIdRef.current = requestId;
     const requestKey = `${slice}:${JSON.stringify(params)}`;
+    await new Promise<void>((resolve) => {
+      sliceRequestDelayResolveRef.current = resolve;
+      sliceRequestDelayRef.current = window.setTimeout(() => {
+        sliceRequestDelayRef.current = null;
+        sliceRequestDelayResolveRef.current = null;
+        resolve();
+      }, SLICE_REQUEST_DEBOUNCE_MS);
+    });
+    if (requestId !== latestSliceRequestIdRef.current) return;
+
+    const controller = new AbortController();
     activeSliceRequestsRef.current.set(requestKey, { controller, requestId });
     const finishDataLoad = beginDataLoad();
     try {
@@ -981,7 +1006,6 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       console.error(error);
       setDataError(error instanceof Error ? error.message : 'Не удалось загрузить данные вкладки.');
     } finally {
-      window.clearTimeout(timeoutId);
       const activeRequest = activeSliceRequestsRef.current.get(requestKey);
       if (activeRequest?.requestId === requestId) activeSliceRequestsRef.current.delete(requestKey);
       finishDataLoad();
