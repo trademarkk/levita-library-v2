@@ -78,9 +78,7 @@ export function RoleDashboard({ role }: RoleDashboardProps) {
       knowledge: 'content',
       templates: 'content',
       links: 'content',
-      'evaluation-sheets': 'ratings',
       'trainer-hiring': 'trainer-hiring',
-      'trainer-rating': 'ratings',
       checklist: 'checklists',
     };
     const slice = sliceByTab[tab];

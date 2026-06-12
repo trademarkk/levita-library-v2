@@ -158,7 +158,7 @@ function RatingDot({ cx, cy, payload, selected, onSelect }: RatingDotProps) {
 }
 
 export function TrainerEvaluationSheetsSection() {
-  const { state, createTrainerEvaluation, updateTrainerEvaluation, deleteTrainerEvaluation } = useLibrary();
+  const { state, refreshSlice, createTrainerEvaluation, updateTrainerEvaluation, deleteTrainerEvaluation } = useLibrary();
   const [draft, setDraft] = useState<EvaluationDraft>(() => emptyDraft());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -167,6 +167,10 @@ export function TrainerEvaluationSheetsSection() {
     ...trainerNamesFrom(state.trainerEvaluations),
   ])).sort((left, right) => left.localeCompare(right)), [state.trainerEvaluations, state.users]);
   const evaluations = useMemo(() => [...state.trainerEvaluations].sort(evaluationSort), [state.trainerEvaluations]);
+
+  useEffect(() => {
+    void refreshSlice('ratings');
+  }, []);
 
   const reset = () => {
     setDraft(emptyDraft());

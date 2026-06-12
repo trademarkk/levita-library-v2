@@ -52,6 +52,7 @@ const ACTIVE_REPORT_SLOTS: ChecklistReportSlot[] = ['14:00', '18:00'];
 const CONTROL_REPORT_SLOTS: ChecklistReportSlot[] = ['14:00', '18:00', '22:00'];
 const DEFAULT_STUDIO: Studio = 'STAVROPOLSKAYA';
 const FINANCIAL_PLAN_FORWARD_MONTHS = 36;
+const SLICE_REQUEST_TIMEOUT_MS = 12_000;
 const CANONICAL_ADMIN_CHECKLIST_ITEMS = [
   'Проверить чистоту студии: зеркала, углы и поверхности',
   'Отправить кружок об открытии студии до 09:30',
@@ -963,6 +964,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
   const refreshSlice = async (slice: StateSlice, params: StateSliceMeta = {}) => {
     cancelSliceRequests();
     const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), SLICE_REQUEST_TIMEOUT_MS);
     const requestId = latestSliceRequestIdRef.current + 1;
     latestSliceRequestIdRef.current = requestId;
     const requestKey = `${slice}:${JSON.stringify(params)}`;
@@ -979,6 +981,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       console.error(error);
       setDataError(error instanceof Error ? error.message : 'Не удалось загрузить данные вкладки.');
     } finally {
+      window.clearTimeout(timeoutId);
       const activeRequest = activeSliceRequestsRef.current.get(requestKey);
       if (activeRequest?.requestId === requestId) activeSliceRequestsRef.current.delete(requestKey);
       finishDataLoad();
