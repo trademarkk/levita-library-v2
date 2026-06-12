@@ -27,6 +27,21 @@ function loadDotEnv() {
 }
 
 loadDotEnv();
+
+function tunePrismaDatabaseUrlForServerless() {
+  if (!process.env.DATABASE_URL || process.env.LEVTIA_TUNE_PRISMA_POOL === 'false') return;
+  try {
+    const url = new URL(process.env.DATABASE_URL);
+    if (!url.searchParams.has('connection_limit')) url.searchParams.set('connection_limit', process.env.PRISMA_CONNECTION_LIMIT || '1');
+    if (!url.searchParams.has('pool_timeout')) url.searchParams.set('pool_timeout', process.env.PRISMA_POOL_TIMEOUT || '20');
+    process.env.DATABASE_URL = url.toString();
+  } catch {
+    // Keep the original DATABASE_URL if it cannot be parsed.
+  }
+}
+
+tunePrismaDatabaseUrlForServerless();
+
 const PORT = Number(process.env.LEVTIA_API_PORT || 4174);
 const GOOGLE_REQUEST_TIMEOUT_MS = Number(process.env.GOOGLE_REQUEST_TIMEOUT_MS || 12000);
 const GOOGLE_TASK_HISTORY_LIMIT = Number(process.env.GOOGLE_TASK_HISTORY_LIMIT || 500);
