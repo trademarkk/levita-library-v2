@@ -53,7 +53,6 @@ function AdminWorkspace({ role, canManageTemplates = false, canManageLinks = fal
       knowledge: 'content',
       templates: 'content',
       links: 'content',
-      'call-rating': 'ratings',
       checklist: 'checklists',
       calls: 'content',
       refunds: 'refunds',
@@ -61,6 +60,10 @@ function AdminWorkspace({ role, canManageTemplates = false, canManageLinks = fal
     const slice = sliceByTab[tab];
     if (slice) void refreshSlice(slice);
   };
+
+  useEffect(() => {
+    refreshTabData(activeTab);
+  }, []);
 
   useEffect(() => {
     const handler = (event: Event) => {

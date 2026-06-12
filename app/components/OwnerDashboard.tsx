@@ -76,6 +76,10 @@ export function OwnerDashboard() {
   };
 
   useEffect(() => {
+    refreshTabData(activeTab);
+  }, []);
+
+  useEffect(() => {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<SearchNavigationDetail>).detail;
       if (!detail?.tabId || !tabs.some((tab) => tab.id === detail.tabId)) return;

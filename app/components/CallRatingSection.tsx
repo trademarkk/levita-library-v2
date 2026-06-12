@@ -129,7 +129,7 @@ export function CallRatingSection() {
   const [chartPoint, setChartPoint] = useState<ChartPointSelection | null>(null);
 
   useEffect(() => {
-    void refreshSlice('ratings', { month: selectedMonth });
+    void refreshSlice('call-rating', { month: selectedMonth });
   }, [selectedMonth]);
 
   const monthReviews = useMemo(
@@ -184,7 +184,7 @@ export function CallRatingSection() {
               Данные приходят из levita-calls. График показывает баллы по разборам звонков: X - дни, Y - итоговая оценка.
             </p>
           </div>
-          <button onClick={() => void refreshSlice('ratings', { month: selectedMonth })} className="soft-action self-start xl:self-auto">
+          <button onClick={() => void refreshSlice('call-rating', { month: selectedMonth }, { force: true })} className="soft-action self-start xl:self-auto">
             Обновить из базы
           </button>
         </div>

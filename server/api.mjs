@@ -1639,6 +1639,9 @@ async function getStateSlice(slice, params = {}) {
   });
   else if (slice === 'financial-plan') Object.assign(sliceState, { financialPlans: (state.financialPlans || []).filter((plan) => !month || plan.month === month) });
   else if (slice === 'expenses') Object.assign(sliceState, { expenseCategories: state.expenseCategories || [], expenses: (state.expenses || []).filter((expense) => pickMonth(expense.date)) });
+  else if (slice === 'trainer-evaluations') Object.assign(sliceState, { trainerEvaluations: (state.trainerEvaluations || []).slice(0, 500) });
+  else if (slice === 'trainer-rating') Object.assign(sliceState, { trainerEvaluations: (state.trainerEvaluations || []).filter((item) => pickMonth(item.evaluatedAt)) });
+  else if (slice === 'call-rating') Object.assign(sliceState, { callReviews: (state.callReviews || []).filter((item) => pickMonth(item.reviewedAt)) });
   else if (slice === 'ratings') Object.assign(sliceState, { trainerEvaluations: (state.trainerEvaluations || []).filter((item) => pickMonth(item.evaluatedAt)), callReviews: (state.callReviews || []).filter((item) => pickMonth(item.reviewedAt)) });
   else if (slice === 'trainer-hiring') Object.assign(sliceState, { trainerHiringCandidates: state.trainerHiringCandidates || [] });
   else if (slice === 'audit') Object.assign(sliceState, { auditLog: state.auditLog || [] });

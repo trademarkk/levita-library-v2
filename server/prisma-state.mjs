@@ -40,10 +40,24 @@ function serverRoleLabel(role) {
   return SERVER_ROLE_LABELS[role] || role || '';
 }
 
+function prismaPoolUrl(rawUrl) {
+  if (!rawUrl) return rawUrl;
+  try {
+    const url = new URL(rawUrl);
+    if (!url.searchParams.has('connection_limit')) url.searchParams.set('connection_limit', '1');
+    if (!url.searchParams.has('pool_timeout')) url.searchParams.set('pool_timeout', '20');
+    if (!url.searchParams.has('sslmode')) url.searchParams.set('sslmode', 'require');
+    return url.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
 export function createPrisma() {
   const globalKey = '__levtiaPrismaClient';
   if (globalThis[globalKey]) return globalThis[globalKey];
   globalThis[globalKey] = new PrismaClient({
+    datasources: process.env.DATABASE_URL ? { db: { url: prismaPoolUrl(process.env.DATABASE_URL) } } : undefined,
     log: process.env.PRISMA_QUERY_LOG === 'true' ? ['query', 'warn', 'error'] : ['warn', 'error'],
   });
   return globalThis[globalKey];
@@ -424,8 +438,10 @@ export async function readStateSliceFromPrisma(prisma, slice, params = {}) {
 
   switch (slice) {
     case 'bootstrap': {
-      const users = await selectTable(prisma, 'users', 'created_at asc');
-      const settingsRows = await selectTable(prisma, 'app_settings');
+      const [users, settingsRows] = await Promise.all([
+        selectTable(prisma, 'users', 'created_at asc'),
+        selectTable(prisma, 'app_settings'),
+      ]);
       const settings = settingsRows.find((row) => row.id === 'main')?.payload || { colorMode: 'dark', density: 'comfortable', animations: true, telegramReports: true };
       return { updatedAt: nowIso(), state: { users: users.map(mapUser), settings } };
     }
@@ -434,13 +450,15 @@ export async function readStateSliceFromPrisma(prisma, slice, params = {}) {
       return { updatedAt: nowIso(), state: { tasks: tasks.map((task) => ({ id: task.id, title: task.title, description: task.description || '', period: task.period || '', role: task.role, priority: task.priority, status: task.status, deadline: dateOnly(task.deadline), addToCalendar: Boolean(task.add_to_calendar), calendarEventId: task.calendar_event_id, createdAt: iso(task.created_at) })) } };
     }
     case 'content': {
-      const knowledge = await selectTable(prisma, 'knowledge_entries', 'created_at asc');
-      const templates = await selectTable(prisma, 'response_templates', 'created_at asc');
-      const links = await selectTable(prisma, 'helpful_links', 'created_at asc');
-      const documentTemplates = await selectTable(prisma, 'document_templates', 'created_at asc');
-      const usefulContacts = await selectTable(prisma, 'useful_contacts', 'created_at asc');
-      const favorites = await selectTable(prisma, 'content_favorites', 'created_at asc');
-      const readReceipts = await selectTable(prisma, 'content_read_receipts', 'read_at asc');
+      const [knowledge, templates, links, documentTemplates, usefulContacts, favorites, readReceipts] = await Promise.all([
+        selectTable(prisma, 'knowledge_entries', 'created_at asc'),
+        selectTable(prisma, 'response_templates', 'created_at asc'),
+        selectTable(prisma, 'helpful_links', 'created_at asc'),
+        selectTable(prisma, 'document_templates', 'created_at asc'),
+        selectTable(prisma, 'useful_contacts', 'created_at asc'),
+        selectTable(prisma, 'content_favorites', 'created_at asc'),
+        selectTable(prisma, 'content_read_receipts', 'read_at asc'),
+      ]);
       return {
         updatedAt: nowIso(),
         state: {
@@ -456,13 +474,15 @@ export async function readStateSliceFromPrisma(prisma, slice, params = {}) {
     }
     case 'checklists':
     case 'control': {
-      const users = await selectTable(prisma, 'users', 'created_at asc');
-      const checklists = await selectTable(prisma, 'daily_checklists', 'checklist_date asc');
-      const checklistItems = await selectTable(prisma, 'checklist_items', 'position asc');
-      const checklistReports = await selectTable(prisma, 'checklist_reports', 'slot asc');
-      const adminShifts = await selectTable(prisma, 'admin_shifts', 'started_at desc');
-      const refunds = await selectTable(prisma, 'refunds', 'requested_at desc');
-      const tasks = await selectTable(prisma, 'tasks', 'created_at asc');
+      const [users, checklists, checklistItems, checklistReports, adminShifts, refunds, tasks] = await Promise.all([
+        selectTable(prisma, 'users', 'created_at asc'),
+        selectTable(prisma, 'daily_checklists', 'checklist_date asc'),
+        selectTable(prisma, 'checklist_items', 'position asc'),
+        selectTable(prisma, 'checklist_reports', 'slot asc'),
+        selectTable(prisma, 'admin_shifts', 'started_at desc'),
+        selectTable(prisma, 'refunds', 'requested_at desc'),
+        selectTable(prisma, 'tasks', 'created_at asc'),
+      ]);
       return {
         updatedAt: nowIso(),
         state: {
@@ -475,19 +495,52 @@ export async function readStateSliceFromPrisma(prisma, slice, params = {}) {
       };
     }
     case 'financial-plan': {
-      const financialMonths = await prisma.$queryRaw`select * from public.financial_plan_months where month = ${bounds.month} order by month asc`;
-      const financialRows = await prisma.$queryRaw`select * from public.financial_plan_rows where month = ${bounds.month} order by position asc`;
-      const financialPayments = await prisma.$queryRaw`select * from public.financial_plan_payments where payment_date >= ${bounds.start}::date and payment_date <= ${bounds.end}::date order by payment_date asc`;
+      const [financialMonths, financialRows, financialPayments] = await Promise.all([
+        prisma.$queryRaw`select * from public.financial_plan_months where month = ${bounds.month} order by month asc`,
+        prisma.$queryRaw`select * from public.financial_plan_rows where month = ${bounds.month} order by position asc`,
+        prisma.$queryRaw`select * from public.financial_plan_payments where payment_date >= ${bounds.start}::date and payment_date <= ${bounds.end}::date order by payment_date asc`,
+      ]);
       return { updatedAt: nowIso(), state: { financialPlans: mapFinancialPlans(financialMonths, financialRows, financialPayments) }, sliceMeta: { month: bounds.month } };
     }
     case 'expenses': {
-      const expenseCategories = await selectTable(prisma, 'expense_categories', 'created_at asc');
-      const expenses = await prisma.$queryRaw`select * from public.expenses where expense_date >= ${bounds.start}::date and expense_date <= ${bounds.end}::date order by expense_date desc`;
+      const [expenseCategories, expenses] = await Promise.all([
+        selectTable(prisma, 'expense_categories', 'created_at asc'),
+        prisma.$queryRaw`select * from public.expenses where expense_date >= ${bounds.start}::date and expense_date <= ${bounds.end}::date order by expense_date desc`,
+      ]);
       return {
         updatedAt: nowIso(),
         state: {
           expenseCategories: expenseCategories.map((category) => ({ id: category.id, name: category.name, createdAt: iso(category.created_at) })),
           expenses: expenses.map((expense) => ({ id: expense.id, date: dateOnly(expense.expense_date), amount: Number(expense.amount) || 0, account: expense.account, category: expense.category, studio: expense.studio, comment: expense.comment, createdAt: iso(expense.created_at) })),
+        },
+        sliceMeta: { month: bounds.month },
+      };
+    }
+    case 'trainer-evaluations': {
+      const trainerEvaluations = await prisma.$queryRaw`select * from public.trainer_evaluation_sheets order by evaluated_at desc, created_at desc limit 500`;
+      return {
+        updatedAt: nowIso(),
+        state: {
+          trainerEvaluations: trainerEvaluations.map((evaluation) => ({ id: evaluation.id, trainerName: evaluation.trainer_name, studio: evaluation.studio, direction: evaluation.direction, score: Number(evaluation.score) || 0, evaluatedAt: dateOnly(evaluation.evaluated_at), sheetUrl: evaluation.sheet_url, createdById: evaluation.created_by_id, createdAt: iso(evaluation.created_at) })),
+        },
+      };
+    }
+    case 'trainer-rating': {
+      const trainerEvaluations = await prisma.$queryRaw`select * from public.trainer_evaluation_sheets where evaluated_at >= ${bounds.start}::date and evaluated_at <= ${bounds.end}::date order by evaluated_at desc, created_at desc`;
+      return {
+        updatedAt: nowIso(),
+        state: {
+          trainerEvaluations: trainerEvaluations.map((evaluation) => ({ id: evaluation.id, trainerName: evaluation.trainer_name, studio: evaluation.studio, direction: evaluation.direction, score: Number(evaluation.score) || 0, evaluatedAt: dateOnly(evaluation.evaluated_at), sheetUrl: evaluation.sheet_url, createdById: evaluation.created_by_id, createdAt: iso(evaluation.created_at) })),
+        },
+        sliceMeta: { month: bounds.month },
+      };
+    }
+    case 'call-rating': {
+      const callReviews = await prisma.$queryRaw`select * from public.call_reviews where reviewed_at >= ${bounds.start}::date and reviewed_at <= ${bounds.end}::date order by reviewed_at desc, updated_at desc`;
+      return {
+        updatedAt: nowIso(),
+        state: {
+          callReviews: callReviews.map((review) => ({ id: review.id, source: review.source || 'levita-calls', externalId: review.external_id, adminName: review.admin_name, studio: review.studio, score: Number(review.score) || 0, reviewedAt: dateOnly(review.reviewed_at), amoCrmDealUrl: review.amo_crm_deal_url, callUrl: review.call_url, originalFilename: review.original_filename, comment: review.comment, createdAt: iso(review.created_at), updatedAt: iso(review.updated_at) })),
         },
         sliceMeta: { month: bounds.month },
       };

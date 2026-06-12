@@ -169,7 +169,7 @@ export function TrainerEvaluationSheetsSection() {
   const evaluations = useMemo(() => [...state.trainerEvaluations].sort(evaluationSort), [state.trainerEvaluations]);
 
   useEffect(() => {
-    void refreshSlice('ratings');
+    void refreshSlice('trainer-evaluations');
   }, []);
 
   const reset = () => {
@@ -297,7 +297,7 @@ export function TrainerRatingSection() {
   const [chartPoint, setChartPoint] = useState<ChartPointSelection | null>(null);
 
   useEffect(() => {
-    void refreshSlice('ratings', { month: selectedMonth });
+    void refreshSlice('trainer-rating', { month: selectedMonth });
   }, [selectedMonth]);
 
   const filtered = useMemo(() => {

@@ -86,6 +86,10 @@ export function RoleDashboard({ role }: RoleDashboardProps) {
   };
 
   useEffect(() => {
+    refreshTabData(activeTab);
+  }, []);
+
+  useEffect(() => {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<SearchNavigationDetail>).detail;
       if (!detail?.tabId || !roleContent[role].tabs.some((tab) => tab.id === detail.tabId)) return;

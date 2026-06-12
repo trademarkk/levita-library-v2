@@ -1,4 +1,5 @@
 import { createContext, ReactNode, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { initialState } from './seed';
 import { normalizeHashtags, roleRoutes } from './labels';
 import type {
@@ -112,10 +113,14 @@ type CreateExpenseInput = {
 
 type TrainerEvaluationInput = Omit<TrainerEvaluationSheet, 'id' | 'createdAt' | 'createdById'>;
 type TrainerHiringCandidateInput = Omit<TrainerHiringCandidate, 'id' | 'createdAt' | 'updatedAt' | 'rejectedAt' | 'createdById'>;
-type StateSlice = 'bootstrap' | 'tasks' | 'content' | 'checklists' | 'control' | 'financial-plan' | 'expenses' | 'ratings' | 'trainer-hiring' | 'team' | 'audit' | 'refunds';
+type StateSlice = 'bootstrap' | 'tasks' | 'content' | 'checklists' | 'control' | 'financial-plan' | 'expenses' | 'ratings' | 'trainer-evaluations' | 'trainer-rating' | 'call-rating' | 'trainer-hiring' | 'team' | 'audit' | 'refunds';
 
 type StateSliceMeta = {
   month?: string;
+};
+
+type RefreshSliceOptions = {
+  force?: boolean;
 };
 
 type MutationOptions = {
@@ -134,7 +139,7 @@ type LibraryContextValue = {
   logout: () => void;
   resetDemoData: () => void;
   refreshState: () => Promise<void>;
-  refreshSlice: (slice: StateSlice, params?: StateSliceMeta) => Promise<void>;
+  refreshSlice: (slice: StateSlice, params?: StateSliceMeta, options?: RefreshSliceOptions) => Promise<void>;
   usersByRole: (role?: Role) => User[];
   checklistForUser: (userId: string) => DailyChecklist | null;
   adminChecklistReports: () => OwnerChecklistReport[];
@@ -692,7 +697,10 @@ async function loadDatabaseState() {
 }
 
 function isAbortError(error: unknown) {
-  return error instanceof DOMException && error.name === 'AbortError';
+  return (
+    (error instanceof DOMException && error.name === 'AbortError')
+    || (error instanceof Error && (error.name === 'CanceledError' || error.name === 'CancelledError'))
+  );
 }
 
 async function loadDatabaseSlice(slice: StateSlice, params: StateSliceMeta = {}, signal?: AbortSignal) {
@@ -911,6 +919,7 @@ function getReportStatus(checklist: DailyChecklist, slot: ChecklistReportSlot): 
 }
 
 export function LibraryProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient();
   const [state, setState] = useState<LibraryState>(() => loadState());
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [databaseReady, setDatabaseReady] = useState(false);
@@ -946,6 +955,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     }
     sliceRequestDelayResolveRef.current?.();
     sliceRequestDelayResolveRef.current = null;
+    void queryClient.cancelQueries({ queryKey: ['state-slice'], exact: false });
     activeSliceRequestsRef.current.forEach(({ controller }) => controller.abort());
     activeSliceRequestsRef.current.clear();
     latestSliceRequestIdRef.current += 1;
@@ -959,7 +969,14 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     cancelSliceRequests();
     const finishDataLoad = beginDataLoad();
     try {
-      const databaseState = await loadDatabaseState();
+      await queryClient.cancelQueries({ queryKey: ['state-slice'], exact: false });
+      queryClient.removeQueries({ queryKey: ['state-slice'], exact: false });
+      const bootstrapPayload = await queryClient.fetchQuery({
+        queryKey: ['state-slice', 'bootstrap', null],
+        queryFn: ({ signal }) => loadDatabaseSlice('bootstrap', {}, signal),
+        staleTime: 0,
+      });
+      const databaseState = mergeStateSlice(loadState(), bootstrapPayload.state, bootstrapPayload.sliceMeta);
       if (databaseState) {
         setDatabaseReady(true);
         setState(databaseState);
@@ -977,7 +994,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     setState(loadState());
   };
 
-  const refreshSlice = async (slice: StateSlice, params: StateSliceMeta = {}) => {
+  const refreshSlice = async (slice: StateSlice, params: StateSliceMeta = {}, options: RefreshSliceOptions = {}) => {
     cancelSliceRequests(true);
     const requestId = latestSliceRequestIdRef.current + 1;
     latestSliceRequestIdRef.current = requestId;
@@ -992,12 +1009,18 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     });
     if (requestId !== latestSliceRequestIdRef.current) return;
 
-    const controller = new AbortController();
-    activeSliceRequestsRef.current.set(requestKey, { controller, requestId });
     const finishDataLoad = beginDataLoad();
     try {
-      const payload = await loadDatabaseSlice(slice, params, controller.signal);
-      if (controller.signal.aborted || requestId !== latestSliceRequestIdRef.current) return;
+      const queryKey = ['state-slice', slice, params.month ?? null] as const;
+      await queryClient.cancelQueries({ queryKey: ['state-slice'], exact: false });
+      if (requestId !== latestSliceRequestIdRef.current) return;
+      if (options.force) queryClient.removeQueries({ queryKey, exact: true });
+      const payload = await queryClient.fetchQuery({
+        queryKey,
+        queryFn: ({ signal }) => loadDatabaseSlice(slice, params, signal),
+        staleTime: options.force ? 0 : 30_000,
+      });
+      if (requestId !== latestSliceRequestIdRef.current) return;
       setDatabaseReady(true);
       setState((current) => mergeStateSlice(current, payload.state, payload.sliceMeta ?? params));
       setDataError(null);
@@ -1030,14 +1053,17 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        const databaseState = await loadDatabaseState();
+        const payload = await queryClient.fetchQuery({
+          queryKey: ['state-slice', 'bootstrap', null],
+          queryFn: ({ signal }) => loadDatabaseSlice('bootstrap', {}, signal),
+          staleTime: 30_000,
+        });
+        const databaseState = mergeStateSlice(loadState(), payload.state, payload.sliceMeta);
         if (!cancelled) {
           setCurrentUserId(session.user.id);
           setSessionUser(session.user);
-          if (databaseState) {
-            setState(databaseState);
-            setDatabaseReady(true);
-          }
+          setState(databaseState);
+          setDatabaseReady(true);
           setDataError(null);
         }
       } catch (error) {
@@ -1103,6 +1129,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({ action, payload, actorId: currentUserId, returnState: !optimistic }),
       });
       if (!response.ok) throw new Error(await readApiError(response));
+      void queryClient.invalidateQueries({ queryKey: ['state-slice'], exact: false });
       const result = await response.json() as { state: Partial<LibraryState> | null; skipRefresh?: boolean };
       if (result.state) {
         setDatabaseReady(true);
@@ -1152,6 +1179,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           body: JSON.stringify({ action: 'checklist.item.toggle', payload, actorId: currentUserId, returnState: false }),
         });
         if (!response.ok) throw new Error(await readApiError(response));
+        void queryClient.invalidateQueries({ queryKey: ['state-slice'], exact: false });
         const result = await response.json() as { state: Partial<LibraryState> | null };
         if (version === checklistToggleVersionRef.current && result.state) {
           setDatabaseReady(true);
@@ -1235,7 +1263,13 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       if (!normalized || !password.trim()) return { ok: false, error: 'Введите email и пароль.' };
       const result = await loginOnServer(normalized, password);
       if (!result.ok) return result;
-      const databaseState = await loadDatabaseState();
+      queryClient.removeQueries({ queryKey: ['state-slice'], exact: false });
+      const bootstrapPayload = await queryClient.fetchQuery({
+        queryKey: ['state-slice', 'bootstrap', null],
+        queryFn: ({ signal }) => loadDatabaseSlice('bootstrap', {}, signal),
+        staleTime: 0,
+      });
+      const databaseState = mergeStateSlice(loadState(), bootstrapPayload.state, bootstrapPayload.sliceMeta);
       if (databaseState) {
         const nextState = normalizeState(databaseState);
         pushAudit(nextState, 'auth.login', 'user', result.user.name, {
@@ -1257,7 +1291,12 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       if (nextPassword.length < 6) return { ok: false, error: 'Пароль должен быть не короче 6 символов.' };
       const result = await resetPasswordOnServer(normalized, nextPassword);
       if (!result.ok) return result;
-      const databaseState = currentUserId ? await loadDatabaseState() : null;
+      const bootstrapPayload = currentUserId ? await queryClient.fetchQuery({
+        queryKey: ['state-slice', 'bootstrap', null],
+        queryFn: ({ signal }) => loadDatabaseSlice('bootstrap', {}, signal),
+        staleTime: 0,
+      }) : null;
+      const databaseState = bootstrapPayload ? mergeStateSlice(loadState(), bootstrapPayload.state, bootstrapPayload.sliceMeta) : null;
       if (databaseState) {
         const user = databaseState.users.find((item) => normalizeEmail(item.email) === normalized);
         pushAudit(databaseState, 'auth.password_reset', 'user', user?.name ?? normalized, {
@@ -1815,6 +1854,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       })
         .then(async (response) => {
           if (!response.ok) throw new Error(await readApiError(response));
+          void queryClient.invalidateQueries({ queryKey: ['state-slice'], exact: false });
           if (!userId) {
             const result = await response.json() as { state: Partial<LibraryState> | null };
             if (result.state) {
@@ -1863,7 +1903,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     knowledgeReadCount(entityId) {
       return state.readReceipts.filter((receipt) => receipt.entityType === 'knowledge' && receipt.entityId === entityId).length;
     },
-  }), [currentUser, currentUserId, dataError, isAuthLoading, isDataLoading, isSaving, state]);
+  }), [currentUser, currentUserId, dataError, isAuthLoading, isDataLoading, isSaving, queryClient, state]);
 
   return <LibraryContext.Provider value={value}>{children}</LibraryContext.Provider>;
 }
