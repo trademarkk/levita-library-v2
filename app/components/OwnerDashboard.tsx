@@ -898,10 +898,40 @@ function CallsSection() {
 
 function RefundsOverviewSection() {
   const { state, updateRefund } = useLibrary();
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ clientName: '', amount: 0, reason: '', status: 'NEW' as RefundStatus, comment: '' });
   const stats = {
     pending: state.refunds.filter((refund) => refund.status === 'NEW' || refund.status === 'IN_PROGRESS').length,
     approved: state.refunds.filter((refund) => refund.status === 'RESOLVED').length,
     totalAmount: state.refunds.reduce((sum, refund) => sum + refund.amount, 0),
+  };
+
+  const startEditing = (refund: typeof state.refunds[number]) => {
+    setEditingId(refund.id);
+    setDraft({
+      clientName: refund.clientName,
+      amount: refund.amount,
+      reason: refund.reason,
+      status: refund.status,
+      comment: refund.comment ?? '',
+    });
+  };
+
+  const cancelEditing = () => {
+    setEditingId(null);
+    setDraft({ clientName: '', amount: 0, reason: '', status: 'NEW', comment: '' });
+  };
+
+  const saveEditing = () => {
+    if (!editingId || !draft.clientName.trim() || !draft.reason.trim()) return;
+    updateRefund(editingId, {
+      clientName: draft.clientName.trim(),
+      amount: draft.amount,
+      reason: draft.reason.trim(),
+      status: draft.status,
+      comment: draft.comment.trim(),
+    });
+    cancelEditing();
   };
 
   return (
@@ -911,6 +941,32 @@ function RefundsOverviewSection() {
         <StatCard value={stats.approved} label="Решено" />
         <StatCard value={`${stats.totalAmount.toLocaleString('ru-RU')} ₽`} label="Сумма" />
       </div>
+      {editingId && (
+        <GlassCard className="mb-6">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h3 className="text-xl text-[#f5f3f0]">Редактирование возврата</h3>
+            <button type="button" onClick={cancelEditing} className="text-[#a89b8f] hover:text-[#c9a98d]" aria-label="Отменить редактирование">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <input value={draft.clientName} onChange={(event) => setDraft((value) => ({ ...value, clientName: event.target.value }))} placeholder="Клиент" className="field" />
+            <input type="number" value={draft.amount} onChange={(event) => setDraft((value) => ({ ...value, amount: Number(event.target.value) }))} placeholder="Сумма" className="field" />
+            <input value={draft.reason} onChange={(event) => setDraft((value) => ({ ...value, reason: event.target.value }))} placeholder="Причина" className="field" />
+            <select value={draft.status} onChange={(event) => setDraft((value) => ({ ...value, status: event.target.value as RefundStatus }))} className="field">
+              <option value="NEW">Новый</option>
+              <option value="IN_PROGRESS">В работе</option>
+              <option value="RESOLVED">Решён</option>
+              <option value="DECLINED">Отклонён</option>
+            </select>
+            <textarea value={draft.comment} onChange={(event) => setDraft((value) => ({ ...value, comment: event.target.value }))} placeholder="Комментарий" className="field min-h-20 md:col-span-2" />
+          </div>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <button type="button" onClick={saveEditing} className="primary-action">Сохранить</button>
+            <button type="button" onClick={cancelEditing} className="rounded-lg border border-[#c9a98d]/20 px-4 py-2 text-[#f5f3f0] hover:bg-[#2a2630]">Отмена</button>
+          </div>
+        </GlassCard>
+      )}
       <div className="space-y-4">
         {state.refunds.map((refund, idx) => (
           <GlassCard key={refund.id} delay={idx * 0.05}>
@@ -923,12 +979,17 @@ function RefundsOverviewSection() {
                   <p className="text-sm text-[#a89b8f] mt-1">{refund.comment}</p>
                 </div>
               </div>
-              <select value={refund.status} onChange={(event) => updateRefund(refund.id, { status: event.target.value as RefundStatus })} className="field max-w-44">
-                <option value="NEW">Новый</option>
-                <option value="IN_PROGRESS">В работе</option>
-                <option value="RESOLVED">Решён</option>
-                <option value="DECLINED">Отклонён</option>
-              </select>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <select value={refund.status} onChange={(event) => updateRefund(refund.id, { status: event.target.value as RefundStatus })} className="field max-w-44">
+                  <option value="NEW">Новый</option>
+                  <option value="IN_PROGRESS">В работе</option>
+                  <option value="RESOLVED">Решён</option>
+                  <option value="DECLINED">Отклонён</option>
+                </select>
+                <button type="button" onClick={() => startEditing(refund)} className="rounded-lg border border-[#c9a98d]/20 p-2 text-[#a89b8f] hover:text-[#c9a98d]" aria-label="Редактировать возврат">
+                  <Edit2 className="h-4 w-4" />
+                </button>
+              </div>
             </div>
           </GlassCard>
         ))}

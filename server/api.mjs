@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHmac, pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,6 +43,13 @@ const CRON_SECRET = process.env.CRON_SECRET || '';
 const MAX_REMINDER_RETENTION_DAYS = Number(process.env.MAX_REMINDER_RETENTION_DAYS || 20);
 const APP_STATE_BACKUP_RETENTION_DAYS = Number(process.env.APP_STATE_BACKUP_RETENTION_DAYS || 14);
 const APP_STATE_BACKUP_MAX_ROWS = Number(process.env.APP_STATE_BACKUP_MAX_ROWS || 20);
+const SESSION_COOKIE_NAME = 'levtia_session';
+const SESSION_TTL_MS = Number(process.env.LEVTIA_SESSION_TTL_DAYS || 7) * 24 * 60 * 60 * 1000;
+const AUTH_SECRET = process.env.LEVTIA_AUTH_SECRET
+  || process.env.CRON_SECRET
+  || process.env.SUPABASE_SERVICE_ROLE_KEY
+  || process.env.MAX_BOT_TOKEN
+  || 'levtia-local-dev-session-secret';
 const STORAGE_DRIVER = process.env.LEVTIA_STORAGE_DRIVER || 'sqlite';
 const DATA_MODE = process.env.LEVTIA_DATA_MODE || 'app_state';
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
@@ -146,12 +153,14 @@ function readBody(request) {
   });
 }
 
-function send(response, statusCode, payload) {
+function send(response, statusCode, payload, extraHeaders = {}) {
   response.writeHead(statusCode, {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET,PUT,POST,PATCH,DELETE,OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-LEVTIA-SYNC-TOKEN',
+    'Access-Control-Allow-Credentials': 'true',
+    ...extraHeaders,
   });
   response.end(JSON.stringify(payload));
 }
@@ -258,6 +267,87 @@ function publicUser(user) {
   if (!user) return null;
   const { password, passwordHash, ...safeUser } = user;
   return safeUser;
+}
+
+function base64UrlEncode(value) {
+  const buffer = Buffer.isBuffer(value) ? value : Buffer.from(String(value));
+  return buffer.toString('base64url');
+}
+
+function base64UrlDecode(value) {
+  return Buffer.from(String(value || ''), 'base64url');
+}
+
+function signSessionPayload(encodedPayload) {
+  return createHmac('sha256', AUTH_SECRET).update(encodedPayload).digest('base64url');
+}
+
+function createSessionToken(user) {
+  const payload = base64UrlEncode(JSON.stringify({
+    userId: user.id,
+    role: user.role,
+    exp: Date.now() + SESSION_TTL_MS,
+  }));
+  return `${payload}.${signSessionPayload(payload)}`;
+}
+
+function parseCookies(request) {
+  const header = request.headers.cookie || '';
+  return Object.fromEntries(header.split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const index = part.indexOf('=');
+      if (index === -1) return [part, ''];
+      return [part.slice(0, index), decodeURIComponent(part.slice(index + 1))];
+    }));
+}
+
+function verifySessionToken(token) {
+  const [payload, signature] = String(token || '').split('.');
+  if (!payload || !signature) return null;
+  const expected = signSessionPayload(payload);
+  const incoming = Buffer.from(signature);
+  const valid = Buffer.from(expected);
+  if (incoming.length !== valid.length || !timingSafeEqual(incoming, valid)) return null;
+  try {
+    const session = JSON.parse(base64UrlDecode(payload).toString('utf8'));
+    if (!session.userId || !session.exp || Number(session.exp) < Date.now()) return null;
+    return session;
+  } catch {
+    return null;
+  }
+}
+
+function isSecureCookieRequest(request) {
+  return Boolean(process.env.VERCEL || process.env.NODE_ENV === 'production' || String(request.headers['x-forwarded-proto'] || '').includes('https'));
+}
+
+function sessionCookie(token, request) {
+  const maxAge = Math.max(0, Math.floor(SESSION_TTL_MS / 1000));
+  return `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${maxAge}${isSecureCookieRequest(request) ? '; Secure' : ''}`;
+}
+
+function clearSessionCookie(request) {
+  return `${SESSION_COOKIE_NAME}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0${isSecureCookieRequest(request) ? '; Secure' : ''}`;
+}
+
+async function sessionUserFromRequest(request) {
+  const token = parseCookies(request)[SESSION_COOKIE_NAME];
+  const session = verifySessionToken(token);
+  if (!session?.userId) return null;
+  const payload = await getState();
+  const user = payload?.state?.users?.find((item) => item.id === session.userId) ?? null;
+  if (!user || user.status === 'blocked') return null;
+  return user;
+}
+
+async function requireSessionUser(request) {
+  const user = await sessionUserFromRequest(request);
+  if (user) return user;
+  const error = new Error('Требуется вход в приложение.');
+  error.statusCode = 401;
+  throw error;
 }
 
 function maxStudioName(studio) {
@@ -1878,6 +1968,7 @@ export async function handleApiRequest(request, response) {
     }
 
     if (url.pathname === '/api/max/status' && request.method === 'GET') {
+      await requireSessionUser(request);
       const config = getMaxConfig();
       send(response, 200, {
         configured: Boolean(config.botToken && config.reportChatIds.STAVROPOLSKAYA),
@@ -1886,6 +1977,16 @@ export async function handleApiRequest(request, response) {
           MACHUGI: config.reportChatIds.MACHUGI || null,
         },
       });
+      return;
+    }
+
+    if (url.pathname === '/api/auth/me' && request.method === 'GET') {
+      const user = await sessionUserFromRequest(request);
+      if (!user) {
+        send(response, 401, { error: 'Требуется вход в приложение.' }, { 'Set-Cookie': clearSessionCookie(request) });
+        return;
+      }
+      send(response, 200, { ok: true, user: publicUser(user), route: roleRoute(user.role) });
       return;
     }
 
@@ -1920,7 +2021,8 @@ export async function handleApiRequest(request, response) {
       if (legacyOk) {
         if (usePrismaState) {
           await applyPrismaMutation(prisma, 'employee.update', { id: user.id, input: { password } }, user);
-          send(response, 200, { ok: true, user: publicUser({ ...user, password: '', passwordHash: hashPassword(password) }), route: roleRoute(user.role) });
+          const nextUser = { ...user, password: '', passwordHash: hashPassword(password) };
+          send(response, 200, { ok: true, user: publicUser(nextUser), route: roleRoute(user.role) }, { 'Set-Cookie': sessionCookie(createSessionToken(nextUser), request) });
           return;
         }
         const nextState = {
@@ -1932,7 +2034,12 @@ export async function handleApiRequest(request, response) {
         await saveState(nextState);
       }
 
-      send(response, 200, { ok: true, user: publicUser(user), route: roleRoute(user.role) });
+      send(response, 200, { ok: true, user: publicUser(user), route: roleRoute(user.role) }, { 'Set-Cookie': sessionCookie(createSessionToken(user), request) });
+      return;
+    }
+
+    if (url.pathname === '/api/auth/logout' && request.method === 'POST') {
+      send(response, 200, { ok: true }, { 'Set-Cookie': clearSessionCookie(request) });
       return;
     }
 
@@ -1970,6 +2077,7 @@ export async function handleApiRequest(request, response) {
     }
 
     if (url.pathname === '/api/max/shift-reminders' && request.method === 'POST') {
+      await requireSessionUser(request);
       const body = JSON.parse(await readBody(request) || '{}');
       if (!body.shiftId || !body.adminName || !body.date) {
         send(response, 400, { error: 'shiftId, adminName and date are required' });
@@ -2013,6 +2121,7 @@ export async function handleApiRequest(request, response) {
     }
 
     if (url.pathname === '/api/max/reports' && request.method === 'POST') {
+      await requireSessionUser(request);
       const body = JSON.parse(await readBody(request) || '{}');
       if (!body.slot || !body.report || typeof body.report !== 'object') {
         send(response, 400, { error: 'slot and report are required' });
@@ -2068,7 +2177,7 @@ export async function handleApiRequest(request, response) {
         send(response, 400, { error: 'action is required' });
         return;
       }
-      const actor = await readMutationActor(body.actorId);
+      const actor = await requireSessionUser(request);
       await applyPrismaMutation(prisma, body.action, body.payload || {}, actor);
       if (body.returnState === false) {
         send(response, 200, { ok: true, state: null, updatedAt: new Date().toISOString(), skipRefresh: true });
@@ -2080,6 +2189,7 @@ export async function handleApiRequest(request, response) {
     }
 
     if (url.pathname === '/api/google/status' && request.method === 'GET') {
+      await requireSessionUser(request);
       const config = getGoogleConfig();
       const token = await getGoogleToken();
       let connected = Boolean(token?.refresh_token || token?.access_token);
@@ -2113,6 +2223,7 @@ export async function handleApiRequest(request, response) {
     }
 
     if (url.pathname === '/api/google/connect' && request.method === 'GET') {
+      await requireSessionUser(request);
       const config = getGoogleConfig();
       if (!config.clientId || !config.clientSecret) {
         send(response, 409, { error: 'Google Calendar не настроен: добавьте GOOGLE_CLIENT_ID и GOOGLE_CLIENT_SECRET.' });
@@ -2159,6 +2270,7 @@ export async function handleApiRequest(request, response) {
     }
 
     if (url.pathname === '/api/google/events' && request.method === 'POST') {
+      await requireSessionUser(request);
       const body = JSON.parse(await readBody(request) || '{}');
       if (!body.title || !body.date) {
         send(response, 400, { error: 'title and date are required' });
@@ -2173,6 +2285,7 @@ export async function handleApiRequest(request, response) {
     }
 
     if (url.pathname === '/api/google/events' && request.method === 'GET') {
+      await requireSessionUser(request);
       const timeMin = url.searchParams.get('timeMin');
       const timeMax = url.searchParams.get('timeMax');
       if (!timeMin || !timeMax) {
@@ -2195,6 +2308,7 @@ export async function handleApiRequest(request, response) {
     }
 
     if (url.pathname.startsWith('/api/google/events/') && request.method === 'PATCH') {
+      await requireSessionUser(request);
       const googleEventId = decodeURIComponent(url.pathname.replace('/api/google/events/', ''));
       const body = JSON.parse(await readBody(request) || '{}');
       if (!googleEventId || !body.title || !body.date) {
@@ -2210,6 +2324,7 @@ export async function handleApiRequest(request, response) {
     }
 
     if (url.pathname.startsWith('/api/google/events/') && request.method === 'DELETE') {
+      await requireSessionUser(request);
       const googleEventId = decodeURIComponent(url.pathname.replace('/api/google/events/', ''));
       if (googleEventId) {
         await googleCalendarRequest(`/events/${encodeURIComponent(googleEventId)}`, { method: 'DELETE' });
@@ -2219,12 +2334,14 @@ export async function handleApiRequest(request, response) {
     }
 
     if (url.pathname === '/api/state' && request.method === 'GET') {
+      await requireSessionUser(request);
       const payload = await getState();
       send(response, 200, payload ? { ...payload, state: sanitizeStateForClient(payload.state) } : { state: null, updatedAt: null });
       return;
     }
 
     if (url.pathname === '/api/state-slice' && request.method === 'GET') {
+      await requireSessionUser(request);
       const slice = url.searchParams.get('slice') || '';
       const month = url.searchParams.get('month') || undefined;
       const payload = await getStateSlice(slice, { month });
@@ -2233,6 +2350,7 @@ export async function handleApiRequest(request, response) {
     }
 
     if (url.pathname === '/api/state' && request.method === 'PUT') {
+      await requireSessionUser(request);
       const body = await readBody(request);
       const parsed = JSON.parse(body || '{}');
       if (!parsed.state || typeof parsed.state !== 'object') {
@@ -2244,6 +2362,7 @@ export async function handleApiRequest(request, response) {
     }
 
     if (url.pathname === '/api/reset' && request.method === 'POST') {
+      await requireSessionUser(request);
       await resetState();
       send(response, 200, { ok: true });
       return;

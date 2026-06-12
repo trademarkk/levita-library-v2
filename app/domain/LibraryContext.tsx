@@ -38,7 +38,6 @@ import type {
 } from './types';
 
 const SETTINGS_KEY = 'levtia-library-settings-v2';
-const SESSION_USER_KEY = 'levtia-library-session-user-v2';
 const REPORT_ALIASES: Record<ChecklistReportSlot, string[]> = {
   '14:00': ['Отчет по звонкам и кассе в 14:00', 'Отчёт по звонкам и кассе в 14:00'],
   '18:00': ['Отчет по звонкам и кассе в 18:00', 'Отчёт по звонкам и кассе в 18:00'],
@@ -125,6 +124,7 @@ type MutationOptions = {
 type LibraryContextValue = {
   state: LibraryState;
   currentUser: User | null;
+  isAuthLoading: boolean;
   isDataLoading: boolean;
   isSaving: boolean;
   dataError: string | null;
@@ -684,7 +684,7 @@ function loadState() {
 }
 
 async function loadDatabaseState() {
-  const response = await fetch('/api/state', { cache: 'no-store' });
+  const response = await fetch('/api/state', { cache: 'no-store', credentials: 'same-origin' });
   if (!response.ok) throw new Error('Не удалось загрузить данные из базы.');
   const payload = await response.json() as { state: Partial<LibraryState> | null };
   return payload.state ? applyLocalSettings(normalizeState(payload.state)) : null;
@@ -693,7 +693,7 @@ async function loadDatabaseState() {
 async function loadDatabaseSlice(slice: StateSlice, params: StateSliceMeta = {}) {
   const query = new URLSearchParams({ slice });
   if (params.month) query.set('month', params.month);
-  const response = await fetch(`/api/state-slice?${query.toString()}`, { cache: 'no-store' });
+  const response = await fetch(`/api/state-slice?${query.toString()}`, { cache: 'no-store', credentials: 'same-origin' });
   if (!response.ok) throw new Error(await readApiError(response));
   return response.json() as Promise<{ state: Partial<LibraryState> | null; sliceMeta?: StateSliceMeta }>;
 }
@@ -744,6 +744,7 @@ async function saveDatabaseState(state: LibraryState) {
   const response = await fetch('/api/state', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
     body: JSON.stringify({ state: stateForDatabase(state) }),
   });
   if (!response.ok) throw new Error('Не удалось сохранить данные в базе.');
@@ -758,16 +759,35 @@ async function loginOnServer(email: string, password: string) {
   const response = await fetch('/api/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
     body: JSON.stringify({ email, password }),
   });
   if (!response.ok) return { ok: false as const, error: await readApiError(response) };
   return await response.json() as { ok: true; user: User; route: string };
 }
 
+async function currentSessionOnServer() {
+  const response = await fetch('/api/auth/me', {
+    method: 'GET',
+    cache: 'no-store',
+    credentials: 'same-origin',
+  });
+  if (!response.ok) return { ok: false as const };
+  return await response.json() as { ok: true; user: User; route: string };
+}
+
+async function logoutOnServer() {
+  await fetch('/api/auth/logout', {
+    method: 'POST',
+    credentials: 'same-origin',
+  }).catch(() => undefined);
+}
+
 async function resetPasswordOnServer(email: string, password: string) {
   const response = await fetch('/api/auth/reset-password', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
     body: JSON.stringify({ email, password }),
   });
   if (!response.ok) return { ok: false as const, error: await readApiError(response) };
@@ -785,6 +805,7 @@ async function sendMaxChecklistReport(input: {
   const response = await fetch('/api/max/reports', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
     body: JSON.stringify(input),
   });
   if (!response.ok) throw new Error(await readApiError(response));
@@ -797,6 +818,7 @@ async function scheduleMaxShiftReminders(input: { shiftId: string; adminName: st
   const response = await fetch('/api/max/shift-reminders', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
     body: JSON.stringify(input),
   });
   if (!response.ok) throw new Error(await readApiError(response));
@@ -832,16 +854,6 @@ function isReportItemLabel(label: string, slot: ChecklistReportSlot) {
   const normalized = normalizeText(label);
   if ((slot === '14:00' || slot === '18:00') && normalized.includes(slot)) return true;
   return REPORT_ALIASES[slot].some((alias) => normalizeText(alias) === normalized);
-}
-
-function roleFromPathname(pathname: string): Role | null {
-  if (pathname.startsWith('/assistant')) return 'ASSISTANT';
-  if (pathname.startsWith('/senior-admin')) return 'SENIOR_ADMIN';
-  if (pathname.startsWith('/admin')) return 'ADMIN';
-  if (pathname.startsWith('/owner')) return 'OWNER';
-  if (pathname.startsWith('/senior-trainer')) return 'SENIOR_TRAINER';
-  if (pathname.startsWith('/trainer')) return 'TRAINER';
-  return null;
 }
 
 function findReportItem(checklist: DailyChecklist, slot: ChecklistReportSlot) {
@@ -895,16 +907,14 @@ function getReportStatus(checklist: DailyChecklist, slot: ChecklistReportSlot): 
 
 export function LibraryProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<LibraryState>(() => loadState());
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [databaseReady, setDatabaseReady] = useState(false);
   const [isDataLoading, setIsDataLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [dataError, setDataError] = useState<string | null>(null);
   const checklistToggleQueueRef = useRef<Promise<void>>(Promise.resolve());
   const checklistToggleVersionRef = useRef(0);
-  const [currentUserId, setCurrentUserId] = useState<string | null>(() => {
-    if (typeof window === 'undefined') return null;
-    return window.sessionStorage.getItem(SESSION_USER_KEY);
-  });
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   const refreshState = async () => {
     setIsDataLoading(true);
@@ -943,14 +953,52 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    void refreshState();
-  }, []);
+    let cancelled = false;
+    const restoreSession = async () => {
+      setIsAuthLoading(true);
+      setIsDataLoading(true);
+      try {
+        const session = await currentSessionOnServer();
+        if (!session.ok) {
+          if (!cancelled) {
+            setCurrentUserId(null);
+            setState(loadState());
+            setDatabaseReady(false);
+            setDataError(null);
+          }
+          return;
+        }
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (currentUserId) window.sessionStorage.setItem(SESSION_USER_KEY, currentUserId);
-    else window.sessionStorage.removeItem(SESSION_USER_KEY);
-  }, [currentUserId]);
+        const databaseState = await loadDatabaseState();
+        if (!cancelled) {
+          setCurrentUserId(session.user.id);
+          if (databaseState) {
+            setState(databaseState);
+            setDatabaseReady(true);
+          }
+          setDataError(null);
+        }
+      } catch (error) {
+        console.error(error);
+        if (!cancelled) {
+          setCurrentUserId(null);
+          setState(loadState());
+          setDatabaseReady(false);
+          setDataError(error instanceof Error ? error.message : 'Не удалось проверить вход.');
+        }
+      } finally {
+        if (!cancelled) {
+          setIsAuthLoading(false);
+          setIsDataLoading(false);
+        }
+      }
+    };
+
+    void restoreSession();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const currentUser = useMemo(
     () => state.users.find((user) => user.id === currentUserId) ?? null,
@@ -963,13 +1011,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       const sessionUser = state.users.find((user) => user.id === currentUserId);
       if (sessionUser) return sessionUser;
     }
-    if (typeof window === 'undefined') return null;
-
-    const routeRole = roleFromPathname(window.location.pathname);
-    if (!routeRole) return null;
-    return state.users.find((user) => user.role === routeRole && user.status !== 'blocked')
-      ?? state.users.find((user) => user.role === routeRole)
-      ?? null;
+    return null;
   };
 
   const runMutation = async (
@@ -992,6 +1034,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       const response = await fetch('/api/mutations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify({ action, payload, actorId: currentUserId, returnState: !optimistic }),
       });
       if (!response.ok) throw new Error(await readApiError(response));
@@ -1040,6 +1083,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         const response = await fetch('/api/mutations', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
           body: JSON.stringify({ action: 'checklist.item.toggle', payload, actorId: currentUserId, returnState: false }),
         });
         if (!response.ok) throw new Error(await readApiError(response));
@@ -1117,18 +1161,14 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
   const value = useMemo<LibraryContextValue>(() => ({
     state,
     currentUser,
+    isAuthLoading,
     isDataLoading,
     isSaving,
     dataError,
     async login(email, password) {
       const normalized = normalizeEmail(email);
       if (!normalized || !password.trim()) return { ok: false, error: 'Введите email и пароль.' };
-      let result = await loginOnServer(normalized, password);
-      if (!result.ok) {
-        const databaseState = await loadDatabaseState();
-        if (!databaseState) return result;
-        result = await loginOnServer(normalized, password);
-      }
+      const result = await loginOnServer(normalized, password);
       if (!result.ok) return result;
       const databaseState = await loadDatabaseState();
       if (databaseState) {
@@ -1151,7 +1191,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       if (nextPassword.length < 6) return { ok: false, error: 'Пароль должен быть не короче 6 символов.' };
       const result = await resetPasswordOnServer(normalized, nextPassword);
       if (!result.ok) return result;
-      const databaseState = await loadDatabaseState();
+      const databaseState = currentUserId ? await loadDatabaseState() : null;
       if (databaseState) {
         const user = databaseState.users.find((item) => normalizeEmail(item.email) === normalized);
         pushAudit(databaseState, 'auth.password_reset', 'user', user?.name ?? normalized, {
@@ -1165,10 +1205,13 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       return { ok: true };
     },
     logout() {
+      void logoutOnServer();
       setCurrentUserId(null);
+      setState(loadState());
+      setDatabaseReady(false);
     },
     resetDemoData() {
-      void fetch('/api/reset', { method: 'POST' }).then(() => refreshState());
+      void fetch('/api/reset', { method: 'POST', credentials: 'same-origin' }).then(() => refreshState());
       setCurrentUserId(null);
     },
     refreshState,
@@ -1218,14 +1261,23 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     },
     addCallChecklistItem(label) {
       if (!label.trim()) return;
-      mutateOnServer('callChecklist.add', { label: label.trim() });
+      const normalizedLabel = label.trim();
+      mutateOnServer('callChecklist.add', { label: normalizedLabel }, (draft) => {
+        draft.callChecklist.push(normalizedLabel);
+      });
     },
     updateCallChecklistItem(index, label) {
       if (!label.trim()) return;
-      mutateOnServer('callChecklist.update', { index, label: label.trim() });
+      const normalizedLabel = label.trim();
+      mutateOnServer('callChecklist.update', { index, label: normalizedLabel }, (draft) => {
+        if (draft.callChecklist[index] !== undefined) draft.callChecklist[index] = normalizedLabel;
+      });
     },
     deleteCallChecklistItem(index) {
-      mutateOnServer('callChecklist.delete', { index });
+      const label = state.callChecklist[index] ?? '';
+      mutateOnServer('callChecklist.delete', { index, label }, (draft) => {
+        draft.callChecklist.splice(index, 1);
+      });
     },
     createTask(input) {
       const task: TaskTemplate = { id: newId('task'), role: 'ASSISTANT', status: 'pending', createdAt: new Date().toISOString(), ...input };
@@ -1665,10 +1717,9 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     },
     toggleFavorite(entityType, entityId) {
       const activeUser = resolveActiveUser();
-      const routeRole = typeof window === 'undefined' ? null : roleFromPathname(window.location.pathname);
       const userId = activeUser?.id ?? null;
       const favoriteId = newId('favorite');
-      const payload = { entityType, entityId, userId, actorRole: activeUser?.role ?? routeRole, id: favoriteId };
+      const payload = { entityType, entityId, userId, id: favoriteId };
       setDataError(null);
       if (userId) {
         setState((current) => {
@@ -1691,6 +1742,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       void fetch('/api/mutations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify({ action: 'favorite.toggle', payload, actorId: userId, returnState: Boolean(!userId) }),
       })
         .then(async (response) => {
@@ -1743,7 +1795,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     knowledgeReadCount(entityId) {
       return state.readReceipts.filter((receipt) => receipt.entityType === 'knowledge' && receipt.entityId === entityId).length;
     },
-  }), [currentUser, currentUserId, dataError, isDataLoading, isSaving, state]);
+  }), [currentUser, currentUserId, dataError, isAuthLoading, isDataLoading, isSaving, state]);
 
   return <LibraryContext.Provider value={value}>{children}</LibraryContext.Provider>;
 }

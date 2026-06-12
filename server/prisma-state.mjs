@@ -27,6 +27,19 @@ const TRAINER_CHECKLIST_ITEMS = [
   'Заполнить заметки по тренировке',
 ];
 
+const SERVER_ROLE_LABELS = {
+  OWNER: 'Руководитель',
+  ASSISTANT: 'Ассистент',
+  SENIOR_ADMIN: 'Старший администратор',
+  ADMIN: 'Администратор',
+  SENIOR_TRAINER: 'Старший тренер',
+  TRAINER: 'Тренер',
+};
+
+function serverRoleLabel(role) {
+  return SERVER_ROLE_LABELS[role] || role || '';
+}
+
 export function createPrisma() {
   return new PrismaClient({
     log: process.env.PRISMA_QUERY_LOG === 'true' ? ['query', 'warn', 'error'] : ['warn', 'error'],
@@ -610,10 +623,14 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
       await audit(prisma, 'employee.update', 'user', payload.id, payload.input?.name || payload.id, actor, 'Обновлен сотрудник.');
       return;
     }
-    case 'employee.delete':
-      await audit(prisma, 'employee.delete', 'user', payload.id, payload.id, actor, 'Удален сотрудник.');
+    case 'employee.delete': {
+      const rows = await prisma.$queryRaw`select name, role from public.users where id = ${payload.id} limit 1`;
+      const deletedUser = rows[0] || null;
+      const label = deletedUser ? `${deletedUser.name} · ${serverRoleLabel(deletedUser.role)}` : payload.id;
+      await audit(prisma, 'employee.delete', 'user', payload.id, label, actor, 'Удален сотрудник.');
       await prisma.$executeRaw`delete from public.users where id = ${payload.id}`;
       return;
+    }
     case 'task.create': {
       const id = payload.id || newId('task');
       let calendarEventId = null;
@@ -1019,7 +1036,7 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
       await prisma.$executeRaw`insert into public.app_settings (id, payload, updated_at) values ('main', ${jsonValue(payload.input || {})}, now()) on conflict (id) do update set payload = public.app_settings.payload || excluded.payload, updated_at = now()`;
       return;
     case 'favorite.toggle': {
-      let userId = payload.userId || actor?.id || null;
+      let userId = actor?.id || null;
       if (!userId && payload.actorRole) {
         const users = await prisma.$queryRaw`
           select id
@@ -1042,7 +1059,7 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
       return;
     }
     case 'knowledge.read':
-      await prisma.$executeRaw`insert into public.content_read_receipts (id, user_id, entity_type, entity_id, read_at) values (${newId('read-receipt')}, ${payload.userId || actor?.id}, 'knowledge', ${payload.entityId}, now()) on conflict (user_id, entity_type, entity_id) do update set read_at = now()`;
+      await prisma.$executeRaw`insert into public.content_read_receipts (id, user_id, entity_type, entity_id, read_at) values (${newId('read-receipt')}, ${actor?.id}, 'knowledge', ${payload.entityId}, now()) on conflict (user_id, entity_type, entity_id) do update set read_at = now()`;
       return;
     case 'callChecklist.add': {
       const [{ count }] = await prisma.$queryRaw`select count(*)::int as count from public.call_checklist_items`;
@@ -1050,10 +1067,44 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
       return;
     }
     case 'callChecklist.update':
-      await prisma.$executeRaw`update public.call_checklist_items set label = ${payload.label}, updated_at = now() where position = ${payload.index}`;
+      await prisma.$executeRaw`
+        update public.call_checklist_items
+        set label = ${payload.label}, updated_at = now()
+        where id = (
+          select id from public.call_checklist_items
+          order by position asc, id asc
+          offset ${payload.index || 0}
+          limit 1
+        )
+      `;
       return;
     case 'callChecklist.delete':
-      await prisma.$executeRaw`delete from public.call_checklist_items where position = ${payload.index}`;
+      await prisma.$executeRaw`
+        delete from public.call_checklist_items
+        where id = coalesce(
+          (
+            select id from public.call_checklist_items
+            order by position asc, id asc
+            offset ${payload.index || 0}
+            limit 1
+          ),
+          (
+            select id from public.call_checklist_items
+            where label = ${payload.label || null}
+            order by position asc, id asc
+            limit 1
+          )
+        )
+      `;
+      await prisma.$executeRaw`
+        update public.call_checklist_items item
+        set position = ordered.new_position, updated_at = now()
+        from (
+          select id, row_number() over (order by position asc, id asc) - 1 as new_position
+          from public.call_checklist_items
+        ) ordered
+        where item.id = ordered.id
+      `;
       return;
     case 'shift.start': {
       const users = await prisma.$queryRaw`select id, name, role from public.users where id = ${payload.userId} limit 1`;

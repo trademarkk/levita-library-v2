@@ -280,7 +280,10 @@ export function RoleContentViewer({ role, category }: { role: Role; category: Kn
             {entries.map((entry) => (
               <li key={entry.id} data-search-target={searchTarget('knowledge', entry.id)} className="flex items-start gap-3 rounded-lg bg-[#2a2630]/55 p-3">
                 <span className="mt-2 h-2 w-2 rounded-full bg-[#c9a98d]" />
-                <span className="text-[#f5f3f0]">{entry.title}</span>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-[#f5f3f0]">{entry.title}</h3>
+                  {entry.content && <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-[#a89b8f]">{entry.content}</p>}
+                </div>
                 <FavoriteButton entityType="knowledge" entityId={entry.id} label={entry.title} />
               </li>
             ))}

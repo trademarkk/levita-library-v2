@@ -1,7 +1,9 @@
 import { lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Navigate, Routes, Route, useLocation } from 'react-router-dom';
 import { LoginPage } from './components/LoginPage';
-import { LibraryProvider } from './domain/LibraryContext';
+import { LibraryProvider, useLibrary } from './domain/LibraryContext';
+import { roleRoutes } from './domain/labels';
+import type { Role } from './domain/types';
 
 const AssistantDashboard = lazy(() => import('./components/AssistantDashboard').then((module) => ({ default: module.AssistantDashboard })));
 const SeniorAdminDashboard = lazy(() => import('./components/SeniorAdminDashboard').then((module) => ({ default: module.SeniorAdminDashboard })));
@@ -18,6 +20,17 @@ function RouteLoader() {
   );
 }
 
+function ProtectedRoute({ children, role }: { children: JSX.Element; role?: Role }) {
+  const location = useLocation();
+  const { currentUser, isAuthLoading } = useLibrary();
+
+  if (isAuthLoading) return <RouteLoader />;
+  if (!currentUser) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  if (role && currentUser.role !== role) return <Navigate to={roleRoutes[currentUser.role]} replace />;
+
+  return children;
+}
+
 export default function App() {
   return (
     <LibraryProvider>
@@ -27,13 +40,13 @@ export default function App() {
             <Routes>
               <Route path="/" element={<LoginPage />} />
               <Route path="/login" element={<LoginPage />} />
-              <Route path="/assistant" element={<AssistantDashboard />} />
-              <Route path="/senior-admin" element={<SeniorAdminDashboard />} />
-              <Route path="/owner" element={<OwnerDashboard />} />
-              <Route path="/admin" element={<AdminDashboard />} />
-              <Route path="/senior-trainer" element={<RoleDashboard role="SENIOR_TRAINER" />} />
-              <Route path="/trainer" element={<RoleDashboard role="TRAINER" />} />
-              <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/assistant" element={<ProtectedRoute role="ASSISTANT"><AssistantDashboard /></ProtectedRoute>} />
+              <Route path="/senior-admin" element={<ProtectedRoute role="SENIOR_ADMIN"><SeniorAdminDashboard /></ProtectedRoute>} />
+              <Route path="/owner" element={<ProtectedRoute role="OWNER"><OwnerDashboard /></ProtectedRoute>} />
+              <Route path="/admin" element={<ProtectedRoute role="ADMIN"><AdminDashboard /></ProtectedRoute>} />
+              <Route path="/senior-trainer" element={<ProtectedRoute role="SENIOR_TRAINER"><RoleDashboard role="SENIOR_TRAINER" /></ProtectedRoute>} />
+              <Route path="/trainer" element={<ProtectedRoute role="TRAINER"><RoleDashboard role="TRAINER" /></ProtectedRoute>} />
+              <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
             </Routes>
           </Suspense>
         </div>
