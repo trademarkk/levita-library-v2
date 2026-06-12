@@ -54,6 +54,7 @@ const CONTROL_REPORT_SLOTS: ChecklistReportSlot[] = ['14:00', '18:00', '22:00'];
 const DEFAULT_STUDIO: Studio = 'STAVROPOLSKAYA';
 const FINANCIAL_PLAN_FORWARD_MONTHS = 36;
 const SLICE_REQUEST_DEBOUNCE_MS = 120;
+const SLICE_CACHE_TTL_MS = 30_000;
 const CANONICAL_ADMIN_CHECKLIST_ITEMS = [
   'Проверить чистоту студии: зеркала, углы и поверхности',
   'Отправить кружок об открытии студии до 09:30',
@@ -113,7 +114,7 @@ type CreateExpenseInput = {
 
 type TrainerEvaluationInput = Omit<TrainerEvaluationSheet, 'id' | 'createdAt' | 'createdById'>;
 type TrainerHiringCandidateInput = Omit<TrainerHiringCandidate, 'id' | 'createdAt' | 'updatedAt' | 'rejectedAt' | 'createdById'>;
-type StateSlice = 'bootstrap' | 'tasks' | 'content' | 'checklists' | 'control' | 'financial-plan' | 'expenses' | 'ratings' | 'trainer-evaluations' | 'trainer-rating' | 'call-rating' | 'trainer-hiring' | 'team' | 'audit' | 'refunds';
+type StateSlice = 'bootstrap' | 'tasks' | 'content' | 'checklists' | 'control' | 'shift-journal' | 'financial-plan' | 'expenses' | 'ratings' | 'trainer-evaluations' | 'trainer-rating' | 'call-rating' | 'trainer-hiring' | 'team' | 'audit' | 'refunds';
 
 type StateSliceMeta = {
   month?: string;
@@ -697,9 +698,20 @@ async function loadDatabaseState() {
 }
 
 function isAbortError(error: unknown) {
+  if (!error) return false;
+  const maybeError = error as { name?: string; message?: string; constructor?: { name?: string } };
+  const name = maybeError.name || maybeError.constructor?.name || '';
+  const message = maybeError.message || String(error);
   return (
     (error instanceof DOMException && error.name === 'AbortError')
     || (error instanceof Error && (error.name === 'CanceledError' || error.name === 'CancelledError'))
+    || name === 'AbortError'
+    || name === 'CanceledError'
+    || name === 'CancelledError'
+    || message === 'CanceledError'
+    || message === 'CancelledError'
+    || message.includes('CanceledError')
+    || message.includes('CancelledError')
   );
 }
 
@@ -955,7 +967,6 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     }
     sliceRequestDelayResolveRef.current?.();
     sliceRequestDelayResolveRef.current = null;
-    void queryClient.cancelQueries({ queryKey: ['state-slice'], exact: false });
     activeSliceRequestsRef.current.forEach(({ controller }) => controller.abort());
     activeSliceRequestsRef.current.clear();
     latestSliceRequestIdRef.current += 1;
@@ -969,13 +980,9 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     cancelSliceRequests();
     const finishDataLoad = beginDataLoad();
     try {
-      await queryClient.cancelQueries({ queryKey: ['state-slice'], exact: false });
       queryClient.removeQueries({ queryKey: ['state-slice'], exact: false });
-      const bootstrapPayload = await queryClient.fetchQuery({
-        queryKey: ['state-slice', 'bootstrap', null],
-        queryFn: ({ signal }) => loadDatabaseSlice('bootstrap', {}, signal),
-        staleTime: 0,
-      });
+      const bootstrapPayload = await loadDatabaseSlice('bootstrap');
+      queryClient.setQueryData(['state-slice', 'bootstrap', null], bootstrapPayload);
       const databaseState = mergeStateSlice(loadState(), bootstrapPayload.state, bootstrapPayload.sliceMeta);
       if (databaseState) {
         setDatabaseReady(true);
@@ -984,6 +991,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         return;
       }
     } catch (error) {
+      if (isAbortError(error)) return;
       console.error(error);
       setDataError(error instanceof Error ? error.message : 'Не удалось загрузить данные.');
     } finally {
@@ -1012,15 +1020,21 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     const finishDataLoad = beginDataLoad();
     try {
       const queryKey = ['state-slice', slice, params.month ?? null] as const;
-      await queryClient.cancelQueries({ queryKey: ['state-slice'], exact: false });
       if (requestId !== latestSliceRequestIdRef.current) return;
+      const cached = queryClient.getQueryData<{ state: Partial<LibraryState> | null; sliceMeta?: StateSliceMeta }>(queryKey);
+      const cachedAt = queryClient.getQueryState(queryKey)?.dataUpdatedAt ?? 0;
+      if (!options.force && cached && Date.now() - cachedAt < SLICE_CACHE_TTL_MS) {
+        setDatabaseReady(true);
+        setState((current) => mergeStateSlice(current, cached.state, cached.sliceMeta ?? params));
+        setDataError(null);
+        return;
+      }
       if (options.force) queryClient.removeQueries({ queryKey, exact: true });
-      const payload = await queryClient.fetchQuery({
-        queryKey,
-        queryFn: ({ signal }) => loadDatabaseSlice(slice, params, signal),
-        staleTime: options.force ? 0 : 30_000,
-      });
+      const controller = new AbortController();
+      activeSliceRequestsRef.current.set(requestKey, { controller, requestId });
+      const payload = await loadDatabaseSlice(slice, params, controller.signal);
       if (requestId !== latestSliceRequestIdRef.current) return;
+      queryClient.setQueryData(queryKey, payload);
       setDatabaseReady(true);
       setState((current) => mergeStateSlice(current, payload.state, payload.sliceMeta ?? params));
       setDataError(null);

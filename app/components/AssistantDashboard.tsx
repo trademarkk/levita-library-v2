@@ -54,7 +54,7 @@ export function AssistantDashboard() {
   const refreshTabData = (tab: string) => {
     const sliceByTab: Record<string, Parameters<typeof refreshSlice>[0]> = {
       'control-center': 'control',
-      'shift-journal': 'control',
+      'shift-journal': 'shift-journal',
       audit: 'audit',
       tasks: 'tasks',
       team: 'team',

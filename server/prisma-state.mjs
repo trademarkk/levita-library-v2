@@ -438,10 +438,8 @@ export async function readStateSliceFromPrisma(prisma, slice, params = {}) {
 
   switch (slice) {
     case 'bootstrap': {
-      const [users, settingsRows] = await Promise.all([
-        selectTable(prisma, 'users', 'created_at asc'),
-        selectTable(prisma, 'app_settings'),
-      ]);
+      const users = await selectTable(prisma, 'users', 'created_at asc');
+      const settingsRows = await selectTable(prisma, 'app_settings');
       const settings = settingsRows.find((row) => row.id === 'main')?.payload || { colorMode: 'dark', density: 'comfortable', animations: true, telegramReports: true };
       return { updatedAt: nowIso(), state: { users: users.map(mapUser), settings } };
     }
@@ -450,15 +448,13 @@ export async function readStateSliceFromPrisma(prisma, slice, params = {}) {
       return { updatedAt: nowIso(), state: { tasks: tasks.map((task) => ({ id: task.id, title: task.title, description: task.description || '', period: task.period || '', role: task.role, priority: task.priority, status: task.status, deadline: dateOnly(task.deadline), addToCalendar: Boolean(task.add_to_calendar), calendarEventId: task.calendar_event_id, createdAt: iso(task.created_at) })) } };
     }
     case 'content': {
-      const [knowledge, templates, links, documentTemplates, usefulContacts, favorites, readReceipts] = await Promise.all([
-        selectTable(prisma, 'knowledge_entries', 'created_at asc'),
-        selectTable(prisma, 'response_templates', 'created_at asc'),
-        selectTable(prisma, 'helpful_links', 'created_at asc'),
-        selectTable(prisma, 'document_templates', 'created_at asc'),
-        selectTable(prisma, 'useful_contacts', 'created_at asc'),
-        selectTable(prisma, 'content_favorites', 'created_at asc'),
-        selectTable(prisma, 'content_read_receipts', 'read_at asc'),
-      ]);
+      const knowledge = await selectTable(prisma, 'knowledge_entries', 'created_at asc');
+      const templates = await selectTable(prisma, 'response_templates', 'created_at asc');
+      const links = await selectTable(prisma, 'helpful_links', 'created_at asc');
+      const documentTemplates = await selectTable(prisma, 'document_templates', 'created_at asc');
+      const usefulContacts = await selectTable(prisma, 'useful_contacts', 'created_at asc');
+      const favorites = await selectTable(prisma, 'content_favorites', 'created_at asc');
+      const readReceipts = await selectTable(prisma, 'content_read_receipts', 'read_at asc');
       return {
         updatedAt: nowIso(),
         state: {
@@ -472,17 +468,45 @@ export async function readStateSliceFromPrisma(prisma, slice, params = {}) {
         },
       };
     }
-    case 'checklists':
     case 'control': {
-      const [users, checklists, checklistItems, checklistReports, adminShifts, refunds, tasks] = await Promise.all([
-        selectTable(prisma, 'users', 'created_at asc'),
-        selectTable(prisma, 'daily_checklists', 'checklist_date asc'),
-        selectTable(prisma, 'checklist_items', 'position asc'),
-        selectTable(prisma, 'checklist_reports', 'slot asc'),
-        selectTable(prisma, 'admin_shifts', 'started_at desc'),
-        selectTable(prisma, 'refunds', 'requested_at desc'),
-        selectTable(prisma, 'tasks', 'created_at asc'),
-      ]);
+      const today = localDateOnly();
+      const users = await selectTable(prisma, 'users', 'created_at asc');
+      const checklists = await prisma.$queryRaw`select * from public.daily_checklists where checklist_date = ${today}::date order by checklist_date asc`;
+      const checklistItems = await prisma.$queryRaw`select ci.* from public.checklist_items ci join public.daily_checklists dc on dc.id = ci.checklist_id where dc.checklist_date = ${today}::date order by ci.position asc`;
+      const checklistReports = await prisma.$queryRaw`select cr.* from public.checklist_reports cr join public.daily_checklists dc on dc.id = cr.checklist_id where dc.checklist_date = ${today}::date order by cr.slot asc`;
+      const adminShifts = await prisma.$queryRaw`select * from public.admin_shifts where shift_date = ${today}::date order by started_at desc`;
+      const refunds = await selectTable(prisma, 'refunds', 'requested_at desc');
+      const tasks = await prisma.$queryRaw`select * from public.tasks where status <> 'completed'::public.task_status order by created_at asc`;
+      return {
+        updatedAt: nowIso(),
+        state: {
+          users: users.map(mapUser),
+          checklists: mapChecklistRows(checklists, checklistItems, checklistReports),
+          adminShifts: adminShifts.map((shift) => ({ id: shift.id, userId: shift.user_id, adminName: shift.admin_name, studio: shift.studio, date: dateOnly(shift.shift_date), startedAt: iso(shift.started_at), closedAt: iso(shift.closed_at), remindersScheduledAt: iso(shift.reminders_scheduled_at), reminderScheduleError: shift.reminder_schedule_error })),
+          refunds: refunds.map((refund) => ({ id: refund.id, clientName: refund.client_name, requestedAt: iso(refund.requested_at), amount: Number(refund.amount) || 0, reason: refund.reason, status: refund.status, comment: refund.comment, createdAt: iso(refund.created_at) })),
+          tasks: tasks.map((task) => ({ id: task.id, title: task.title, description: task.description || '', period: task.period || '', role: task.role, priority: task.priority, status: task.status, deadline: dateOnly(task.deadline), addToCalendar: Boolean(task.add_to_calendar), calendarEventId: task.calendar_event_id, createdAt: iso(task.created_at) })),
+        },
+      };
+    }
+    case 'shift-journal': {
+      const users = await selectTable(prisma, 'users', 'created_at asc');
+      const adminShifts = await prisma.$queryRaw`select * from public.admin_shifts order by started_at desc limit 500`;
+      return {
+        updatedAt: nowIso(),
+        state: {
+          users: users.map(mapUser),
+          adminShifts: adminShifts.map((shift) => ({ id: shift.id, userId: shift.user_id, adminName: shift.admin_name, studio: shift.studio, date: dateOnly(shift.shift_date), startedAt: iso(shift.started_at), closedAt: iso(shift.closed_at), remindersScheduledAt: iso(shift.reminders_scheduled_at), reminderScheduleError: shift.reminder_schedule_error })),
+        },
+      };
+    }
+    case 'checklists': {
+      const users = await selectTable(prisma, 'users', 'created_at asc');
+      const checklists = await selectTable(prisma, 'daily_checklists', 'checklist_date asc');
+      const checklistItems = await selectTable(prisma, 'checklist_items', 'position asc');
+      const checklistReports = await selectTable(prisma, 'checklist_reports', 'slot asc');
+      const adminShifts = await selectTable(prisma, 'admin_shifts', 'started_at desc');
+      const refunds = await selectTable(prisma, 'refunds', 'requested_at desc');
+      const tasks = await selectTable(prisma, 'tasks', 'created_at asc');
       return {
         updatedAt: nowIso(),
         state: {
@@ -495,18 +519,14 @@ export async function readStateSliceFromPrisma(prisma, slice, params = {}) {
       };
     }
     case 'financial-plan': {
-      const [financialMonths, financialRows, financialPayments] = await Promise.all([
-        prisma.$queryRaw`select * from public.financial_plan_months where month = ${bounds.month} order by month asc`,
-        prisma.$queryRaw`select * from public.financial_plan_rows where month = ${bounds.month} order by position asc`,
-        prisma.$queryRaw`select * from public.financial_plan_payments where payment_date >= ${bounds.start}::date and payment_date <= ${bounds.end}::date order by payment_date asc`,
-      ]);
+      const financialMonths = await prisma.$queryRaw`select * from public.financial_plan_months where month = ${bounds.month} order by month asc`;
+      const financialRows = await prisma.$queryRaw`select * from public.financial_plan_rows where month = ${bounds.month} order by position asc`;
+      const financialPayments = await prisma.$queryRaw`select * from public.financial_plan_payments where payment_date >= ${bounds.start}::date and payment_date <= ${bounds.end}::date order by payment_date asc`;
       return { updatedAt: nowIso(), state: { financialPlans: mapFinancialPlans(financialMonths, financialRows, financialPayments) }, sliceMeta: { month: bounds.month } };
     }
     case 'expenses': {
-      const [expenseCategories, expenses] = await Promise.all([
-        selectTable(prisma, 'expense_categories', 'created_at asc'),
-        prisma.$queryRaw`select * from public.expenses where expense_date >= ${bounds.start}::date and expense_date <= ${bounds.end}::date order by expense_date desc`,
-      ]);
+      const expenseCategories = await selectTable(prisma, 'expense_categories', 'created_at asc');
+      const expenses = await prisma.$queryRaw`select * from public.expenses where expense_date >= ${bounds.start}::date and expense_date <= ${bounds.end}::date order by expense_date desc`;
       return {
         updatedAt: nowIso(),
         state: {

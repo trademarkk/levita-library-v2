@@ -1637,6 +1637,10 @@ async function getStateSlice(slice, params = {}) {
     refunds: state.refunds || [],
     tasks: state.tasks || [],
   });
+  else if (slice === 'shift-journal') Object.assign(sliceState, {
+    users: state.users || [],
+    adminShifts: state.adminShifts || [],
+  });
   else if (slice === 'financial-plan') Object.assign(sliceState, { financialPlans: (state.financialPlans || []).filter((plan) => !month || plan.month === month) });
   else if (slice === 'expenses') Object.assign(sliceState, { expenseCategories: state.expenseCategories || [], expenses: (state.expenses || []).filter((expense) => pickMonth(expense.date)) });
   else if (slice === 'trainer-evaluations') Object.assign(sliceState, { trainerEvaluations: (state.trainerEvaluations || []).slice(0, 500) });
