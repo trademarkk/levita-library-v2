@@ -690,10 +690,14 @@ async function loadDatabaseState() {
   return payload.state ? applyLocalSettings(normalizeState(payload.state)) : null;
 }
 
-async function loadDatabaseSlice(slice: StateSlice, params: StateSliceMeta = {}) {
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === 'AbortError';
+}
+
+async function loadDatabaseSlice(slice: StateSlice, params: StateSliceMeta = {}, signal?: AbortSignal) {
   const query = new URLSearchParams({ slice });
   if (params.month) query.set('month', params.month);
-  const response = await fetch(`/api/state-slice?${query.toString()}`, { cache: 'no-store', credentials: 'same-origin' });
+  const response = await fetch(`/api/state-slice?${query.toString()}`, { cache: 'no-store', credentials: 'same-origin', signal });
   if (!response.ok) throw new Error(await readApiError(response));
   return response.json() as Promise<{ state: Partial<LibraryState> | null; sliceMeta?: StateSliceMeta }>;
 }
@@ -914,11 +918,29 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
   const [dataError, setDataError] = useState<string | null>(null);
   const checklistToggleQueueRef = useRef<Promise<void>>(Promise.resolve());
   const checklistToggleVersionRef = useRef(0);
+  const activeDataLoadsRef = useRef(0);
+  const activeSliceRequestsRef = useRef(new Map<string, { controller: AbortController; requestId: number }>());
+  const latestSliceRequestIdRef = useRef(0);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [sessionUser, setSessionUser] = useState<User | null>(null);
 
-  const refreshState = async () => {
+  const beginDataLoad = () => {
+    activeDataLoadsRef.current += 1;
     setIsDataLoading(true);
+    return () => {
+      activeDataLoadsRef.current = Math.max(0, activeDataLoadsRef.current - 1);
+      setIsDataLoading(activeDataLoadsRef.current > 0);
+    };
+  };
+
+  const cancelSliceRequests = () => {
+    activeSliceRequestsRef.current.forEach(({ controller }) => controller.abort());
+    activeSliceRequestsRef.current.clear();
+  };
+
+  const refreshState = async () => {
+    cancelSliceRequests();
+    const finishDataLoad = beginDataLoad();
     try {
       const databaseState = await loadDatabaseState();
       if (databaseState) {
@@ -931,7 +953,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       console.error(error);
       setDataError(error instanceof Error ? error.message : 'Не удалось загрузить данные.');
     } finally {
-      setIsDataLoading(false);
+      finishDataLoad();
     }
 
     setDatabaseReady(false);
@@ -939,17 +961,27 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
   };
 
   const refreshSlice = async (slice: StateSlice, params: StateSliceMeta = {}) => {
-    setIsDataLoading(true);
+    cancelSliceRequests();
+    const controller = new AbortController();
+    const requestId = latestSliceRequestIdRef.current + 1;
+    latestSliceRequestIdRef.current = requestId;
+    const requestKey = `${slice}:${JSON.stringify(params)}`;
+    activeSliceRequestsRef.current.set(requestKey, { controller, requestId });
+    const finishDataLoad = beginDataLoad();
     try {
-      const payload = await loadDatabaseSlice(slice, params);
+      const payload = await loadDatabaseSlice(slice, params, controller.signal);
+      if (controller.signal.aborted || requestId !== latestSliceRequestIdRef.current) return;
       setDatabaseReady(true);
       setState((current) => mergeStateSlice(current, payload.state, payload.sliceMeta ?? params));
       setDataError(null);
     } catch (error) {
+      if (isAbortError(error)) return;
       console.error(error);
       setDataError(error instanceof Error ? error.message : 'Не удалось загрузить данные вкладки.');
     } finally {
-      setIsDataLoading(false);
+      const activeRequest = activeSliceRequestsRef.current.get(requestKey);
+      if (activeRequest?.requestId === requestId) activeSliceRequestsRef.current.delete(requestKey);
+      finishDataLoad();
     }
   };
 
@@ -1001,6 +1033,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     void restoreSession();
     return () => {
       cancelled = true;
+      cancelSliceRequests();
     };
   }, []);
 
