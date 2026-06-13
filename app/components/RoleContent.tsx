@@ -83,6 +83,20 @@ function businessModelMatches(value: BusinessModelScope | undefined, filter: Bus
   return scope === filter || scope === 'ALL';
 }
 
+function normalizeHashtag(value: string) {
+  return value.trim().replace(/^#+/, '').toLowerCase();
+}
+
+function hashtagsMatch(hashtags: string | null | undefined, query: string) {
+  const normalizedQuery = normalizeHashtag(query);
+  if (!normalizedQuery) return true;
+  return (hashtags ?? '')
+    .split(/[\s,;]+/)
+    .map((tag) => normalizeHashtag(tag))
+    .filter(Boolean)
+    .some((tag) => tag.includes(normalizedQuery));
+}
+
 function searchTarget(entityType: FavoriteEntityType, entityId: string) {
   return `${entityType}:${entityId}`;
 }
@@ -214,15 +228,18 @@ export function RoleContentViewer({ role, category }: { role: Role; category: Kn
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [businessModelFilter, setBusinessModelFilter] = useState<BusinessModelScope>('ALL');
   const [favoriteFilter, setFavoriteFilter] = useState<FavoriteScopeFilterValue>('all');
+  const [hashtagFilter, setHashtagFilter] = useState('');
   const hasBusinessModelFilter = supportsBusinessModel(category);
+  const hasHashtagFilter = category === 'KNOWLEDGE';
   const visibleRoles = visibleContentRolesFor(role, knowledgeCategoryResource(category));
   const baseEntries = state.knowledge.filter((entry) => (
     visibleRoles.includes(entry.role)
     && entry.category === category
     && (!hasBusinessModelFilter || businessModelMatches(entry.businessModel, businessModelFilter))
   ));
-  const favoriteCount = baseEntries.filter((entry) => isFavorite('knowledge', entry.id)).length;
-  const entries = favoriteFilter === 'favorites' ? baseEntries.filter((entry) => isFavorite('knowledge', entry.id)) : baseEntries;
+  const hashtagEntries = hasHashtagFilter ? baseEntries.filter((entry) => hashtagsMatch(entry.hashtags, hashtagFilter)) : baseEntries;
+  const favoriteCount = hashtagEntries.filter((entry) => isFavorite('knowledge', entry.id)).length;
+  const entries = favoriteFilter === 'favorites' ? hashtagEntries.filter((entry) => isFavorite('knowledge', entry.id)) : hashtagEntries;
   const selected = entries.find((entry) => entry.id === selectedId) ?? null;
   const visibleRoleKey = visibleRoles.join('|');
 
@@ -252,6 +269,7 @@ export function RoleContentViewer({ role, category }: { role: Role; category: Kn
           <h2 className="text-2xl text-[#f5f3f0] mb-4">{selected.title}</h2>
           <div className="mb-4"><BusinessModelBadge value={selected.businessModel} /></div>
           <p className="text-[#a89b8f] leading-relaxed whitespace-pre-line">{selected.content}</p>
+          {selected.hashtags && <p className="mt-4 text-xs text-[#c9a98d]">{selected.hashtags}</p>}
           <div className="mt-5 flex flex-wrap gap-3">
             <FavoriteButton entityType="knowledge" entityId={selected.id} label={selected.title} />
             {category === 'IMPORTANT_INFO' && currentUser && (
@@ -297,8 +315,23 @@ export function RoleContentViewer({ role, category }: { role: Role; category: Kn
     <>
     <FavoriteScopeFilter value={favoriteFilter} onChange={(value) => { setFavoriteFilter(value); setSelectedId(null); }} favoriteCount={favoriteCount} />
     {hasBusinessModelFilter && <BusinessModelFilter value={businessModelFilter} onChange={(value) => { setBusinessModelFilter(value); setSelectedId(null); }} />}
+    {hasHashtagFilter && (
+      <div className="mb-5 grid gap-2 md:max-w-md">
+        <label htmlFor={`${category}-hashtag-filter`} className="text-sm text-[#a89b8f]">Поиск по хештегу</label>
+        <input
+          id={`${category}-hashtag-filter`}
+          value={hashtagFilter}
+          onChange={(event) => {
+            setHashtagFilter(event.target.value);
+            setSelectedId(null);
+          }}
+          className="field"
+          placeholder="#продажи или продажи"
+        />
+      </div>
+    )}
     <div className="grid md:grid-cols-2 gap-5">
-      {entries.length === 0 && <GlassCard><p className="text-[#a89b8f]">{favoriteFilter === 'favorites' ? 'В избранном пока нет материалов этой вкладки.' : categoryEmpty[category]}</p></GlassCard>}
+      {entries.length === 0 && <GlassCard><p className="text-[#a89b8f]">{hasHashtagFilter && hashtagFilter.trim() ? 'Материалов с таким хештегом нет.' : favoriteFilter === 'favorites' ? 'В избранном пока нет материалов этой вкладки.' : categoryEmpty[category]}</p></GlassCard>}
       {entries.map((entry, index) => (
         <GlassCard key={entry.id} delay={index * 0.05} data-search-target={searchTarget('knowledge', entry.id)}>
           <div className="flex items-start gap-3 mb-3">
@@ -329,6 +362,7 @@ export function RoleContentViewer({ role, category }: { role: Role; category: Kn
             </div>
           </div>
           <p className="text-sm text-[#a89b8f] leading-relaxed whitespace-pre-line">{entry.content}</p>
+          {entry.hashtags && <p className="mt-4 text-xs text-[#c9a98d]">{entry.hashtags}</p>}
           {category === 'IMPORTANT_INFO' && currentUser && (
             <button onClick={() => markKnowledgeAsRead(entry.id)} className="mt-4 px-4 py-2 rounded-lg border border-[#c9a98d]/20 text-[#f5f3f0] hover:bg-[#2a2630]">
               {knowledgeReadReceipt(entry.id) ? 'Обновить отметку ознакомления' : 'Я ознакомлен'}

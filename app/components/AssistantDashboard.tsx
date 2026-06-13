@@ -373,11 +373,20 @@ function TasksSection() {
 
 function AssistantKnowledgeSection() {
   const { createKnowledge } = useLibrary();
+  const [isCreating, setIsCreating] = useState(false);
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [hashtags, setHashtags] = useState('');
   const [businessModel, setBusinessModel] = useState<BusinessModelScope>('ALL');
   const [error, setError] = useState<string | null>(null);
+
+  const resetForm = () => {
+    setTitle('');
+    setContent('');
+    setHashtags('');
+    setBusinessModel('ALL');
+    setError(null);
+  };
 
   const save = () => {
     const nextTitle = title.trim();
@@ -394,30 +403,48 @@ function AssistantKnowledgeSection() {
       hashtags: hashtags.trim(),
       businessModel,
     });
-    setTitle('');
-    setContent('');
-    setHashtags('');
-    setBusinessModel('ALL');
-    setError(null);
+    resetForm();
+    setIsCreating(false);
   };
 
   return (
     <div className="space-y-5">
-      <GlassCard>
-        <h2 className="text-2xl text-[#f5f3f0]">Добавить материал в базу знаний</h2>
-        <p className="mt-1 text-sm text-[#a89b8f]">Ассистент может добавлять материалы только в свою базу знаний. Редактирование и удаление недоступны.</p>
-        <div className="mt-5 grid gap-3">
-          <input value={title} onChange={(event) => setTitle(event.target.value)} className="field" placeholder="Название материала" />
-          <textarea value={content} onChange={(event) => setContent(event.target.value)} className="field min-h-28" placeholder="Текст материала" />
-          <AssistantBusinessModelSelect value={businessModel} onChange={setBusinessModel} />
-          <input value={hashtags} onChange={(event) => setHashtags(event.target.value)} className="field" placeholder="#теги, если нужны" />
-          {error && <p className="text-sm text-[#f0c5cf]">{error}</p>}
-          <button type="button" onClick={save} className="primary-action inline-flex items-center gap-2 justify-self-start">
-            <Plus className="h-4 w-4" />
-            Добавить
-          </button>
-        </div>
-      </GlassCard>
+      <div className="flex justify-end">
+        <button type="button" onClick={() => { resetForm(); setIsCreating(true); }} className="primary-action inline-flex items-center gap-2">
+          <Plus className="h-4 w-4" />
+          Добавить материал
+        </button>
+      </div>
+      {isCreating && (
+        <GlassCard>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-2xl text-[#f5f3f0]">Добавить материал в базу знаний</h2>
+              <p className="mt-1 text-sm text-[#a89b8f]">Ассистент может добавлять материалы только в свою базу знаний. Редактирование и удаление недоступны.</p>
+            </div>
+            <button type="button" onClick={() => { resetForm(); setIsCreating(false); }} className="text-[#a89b8f] hover:text-[#f5f3f0]" aria-label="Закрыть форму">
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+          <div className="mt-5 grid gap-3">
+            <input value={title} onChange={(event) => setTitle(event.target.value)} className="field" placeholder="Название материала" />
+            <textarea value={content} onChange={(event) => setContent(event.target.value)} className="field min-h-28" placeholder="Текст материала" />
+            <AssistantBusinessModelSelect value={businessModel} onChange={setBusinessModel} />
+            <input value={hashtags} onChange={(event) => setHashtags(event.target.value)} className="field" placeholder="#теги, если нужны" />
+            {error && <p className="text-sm text-[#f0c5cf]">{error}</p>}
+            <button type="button" onClick={save} className="primary-action inline-flex items-center gap-2 justify-self-start">
+              <Plus className="h-4 w-4" />
+              Добавить
+            </button>
+          </div>
+        </GlassCard>
+      )}
+      {!isCreating && (
+        <GlassCard>
+          <h2 className="text-2xl text-[#f5f3f0]">База знаний ассистента</h2>
+          <p className="mt-1 text-sm text-[#a89b8f]">Новые материалы добавляются через кнопку выше. Карточки можно фильтровать по бизнес-модели, избранному и хештегам.</p>
+        </GlassCard>
+      )}
       <RoleContentViewer role="ASSISTANT" category="KNOWLEDGE" />
     </div>
   );
