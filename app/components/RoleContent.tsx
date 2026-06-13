@@ -205,6 +205,7 @@ function FavoriteButton({
 }
 
 type FavoriteScopeFilterValue = 'all' | 'favorites';
+type LinkPinFilterValue = 'all' | 'pinned';
 
 function FavoriteScopeFilter({
   value,
@@ -259,6 +260,88 @@ function WorkLinkGroupFilter({ value, onChange }: { value: WorkLinkGroup; onChan
   );
 }
 
+function LinkPinFilter({ value, onChange, pinnedCount }: { value: LinkPinFilterValue; onChange: (value: LinkPinFilterValue) => void; pinnedCount: number }) {
+  const options: { value: LinkPinFilterValue; label: string }[] = [
+    { value: 'all', label: 'Все' },
+    { value: 'pinned', label: pinnedCount > 0 ? `Закрепленные (${pinnedCount})` : 'Закрепленные' },
+  ];
+
+  return (
+    <div className="mb-5 flex flex-wrap gap-2">
+      {options.map((option) => {
+        const active = value === option.value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => onChange(option.value)}
+            className={`rounded-full border px-4 py-2 text-sm transition-colors ${active ? 'border-[#c9a98d] bg-[#c9a98d]/24 text-[#f5f3f0]' : 'border-[#c9a98d]/15 text-[#a89b8f] hover:bg-[#2a2630]'}`}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function LinkPinnedButton({ link, pinned }: { link: HelpfulLink; pinned: boolean }) {
+  const { setLinkPinned } = useLibrary();
+  const [optimisticPinned, setOptimisticPinned] = useState(pinned);
+  const pointerHandledRef = useRef(false);
+
+  useEffect(() => {
+    setOptimisticPinned(pinned);
+  }, [link.id, pinned]);
+
+  const activate = () => {
+    const nextPinned = !optimisticPinned;
+    setOptimisticPinned(nextPinned);
+    setLinkPinned(link.id, nextPinned);
+  };
+
+  return (
+    <button
+      type="button"
+      data-allow-while-saving="true"
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        pointerHandledRef.current = true;
+        activate();
+      }}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (pointerHandledRef.current) {
+          pointerHandledRef.current = false;
+          return;
+        }
+        activate();
+      }}
+      className={`inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full border transition-colors ${optimisticPinned ? 'border-[#c9a98d]/50 bg-[#c9a98d]/22 text-[#c9a98d]' : 'border-[#c9a98d]/15 text-[#a89b8f] hover:border-[#c9a98d]/35 hover:text-[#c9a98d]'}`}
+      aria-label={optimisticPinned ? `Открепить: ${link.title}` : `Закрепить: ${link.title}`}
+      title={optimisticPinned ? 'Открепить' : 'Закрепить'}
+    >
+      <Star className="h-4 w-4" fill={optimisticPinned ? 'currentColor' : 'none'} />
+    </button>
+  );
+}
+
+function LinkPinnedIndicator({ link, pinned }: { link: HelpfulLink; pinned: boolean }) {
+  if (!pinned) return null;
+  return (
+    <span
+      className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[#c9a98d]/50 bg-[#c9a98d]/22 text-[#c9a98d]"
+      aria-label={`Закреплено: ${link.title}`}
+      title="Закреплено"
+    >
+      <Star className="h-4 w-4" fill="currentColor" />
+    </span>
+  );
+}
+
 function scrollToEntity(entityType: FavoriteEntityType, entityId: string) {
   const target = searchTarget(entityType, entityId);
   requestAnimationFrame(() => {
@@ -266,9 +349,8 @@ function scrollToEntity(entityType: FavoriteEntityType, entityId: string) {
   });
 }
 
-function PinnedLinkTabs({ links }: { links: HelpfulLink[] }) {
-  const { isFavorite } = useLibrary();
-  const pinnedLinks = links.filter((link) => isFavorite('link', link.id));
+function PinnedLinkTabs({ links, pinnedLinkIds }: { links: HelpfulLink[]; pinnedLinkIds: Set<string> }) {
+  const pinnedLinks = links.filter((link) => pinnedLinkIds.has(link.id));
   if (!pinnedLinks.length) return null;
 
   return (
@@ -500,21 +582,22 @@ export function RoleTemplatesViewer({ role }: { role: Role }) {
 }
 
 export function RoleLinksViewer({ role }: { role: Role }) {
-  const { state, isFavorite } = useLibrary();
-  const [favoriteFilter, setFavoriteFilter] = useState<FavoriteScopeFilterValue>('all');
+  const { state } = useLibrary();
+  const [pinFilter, setPinFilter] = useState<LinkPinFilterValue>('all');
   const canChooseGroup = role === 'OWNER' || role === 'ASSISTANT';
   const [workLinkGroup, setWorkLinkGroup] = useState<WorkLinkGroup>(defaultWorkLinkGroupForRole(role));
   const visibleRoles = canChooseGroup ? workLinkRolesForGroup(workLinkGroup) : visibleContentRolesFor(role, 'workLinks');
+  const pinnedLinkIds = useMemo(() => new Set(state.favorites.filter((favorite) => favorite.entityType === 'link').map((favorite) => favorite.entityId)), [state.favorites]);
   const baseLinks = state.links.filter((link) => visibleRoles.includes(link.role));
-  const favoriteCount = baseLinks.filter((link) => isFavorite('link', link.id)).length;
-  const links = favoriteFilter === 'favorites' ? baseLinks.filter((link) => isFavorite('link', link.id)) : baseLinks;
+  const pinnedCount = baseLinks.filter((link) => pinnedLinkIds.has(link.id)).length;
+  const links = pinFilter === 'pinned' ? baseLinks.filter((link) => pinnedLinkIds.has(link.id)) : baseLinks;
   const visibleRoleKey = `${workLinkGroup}:${visibleRoles.join('|')}`;
 
   useEffect(() => {
     const applyTarget = (detail: SearchNavigationDetail | null) => {
       if (!detail || detail.entityType !== 'link') return;
       if (detail.role && !visibleRoles.includes(detail.role)) return;
-      setFavoriteFilter('all');
+      setPinFilter('all');
     };
 
     applyTarget(getPendingSearchTarget());
@@ -525,11 +608,11 @@ export function RoleLinksViewer({ role }: { role: Role }) {
 
   return (
     <div>
-      {canChooseGroup && <WorkLinkGroupFilter value={workLinkGroup} onChange={(group) => { setWorkLinkGroup(group); setFavoriteFilter('all'); }} />}
-      <FavoriteScopeFilter value={favoriteFilter} onChange={setFavoriteFilter} favoriteCount={favoriteCount} />
-      <PinnedLinkTabs links={baseLinks} />
+      {canChooseGroup && <WorkLinkGroupFilter value={workLinkGroup} onChange={(group) => { setWorkLinkGroup(group); setPinFilter('all'); }} />}
+      <LinkPinFilter value={pinFilter} onChange={setPinFilter} pinnedCount={pinnedCount} />
+      <PinnedLinkTabs links={baseLinks} pinnedLinkIds={pinnedLinkIds} />
       <div className="grid md:grid-cols-2 gap-4">
-        {links.length === 0 && <GlassCard><p className="text-[#a89b8f]">{favoriteFilter === 'favorites' ? 'В избранном пока нет ссылок этой вкладки.' : 'Для этой роли пока нет рабочих ссылок.'}</p></GlassCard>}
+        {links.length === 0 && <GlassCard><p className="text-[#a89b8f]">{pinFilter === 'pinned' ? 'В закрепленных пока нет ссылок этой вкладки.' : 'Для этой роли пока нет рабочих ссылок.'}</p></GlassCard>}
         {links.map((link, index) => (
           <GlassCard key={link.id} delay={index * 0.05} data-search-target={searchTarget('link', link.id)}>
             <div className="flex gap-3">
@@ -537,7 +620,7 @@ export function RoleLinksViewer({ role }: { role: Role }) {
               <div>
                 <div className="flex items-start justify-between gap-3">
                   <h3 className="text-[#f5f3f0]">{link.title}</h3>
-                  <FavoriteButton entityType="link" entityId={link.id} label={link.title} inactiveTitle="Закрепить" activeTitle="Открепить" />
+                  <LinkPinnedIndicator link={link} pinned={pinnedLinkIds.has(link.id)} />
                 </div>
                 {visibleRoles.length > 1 && <p className="mt-1 text-xs text-[#c9a98d]">{roleLabels[link.role]}</p>}
                 <a href={link.url} className="text-sm text-[#a89b8f] hover:text-[#c9a98d] break-all">{link.url}</a>
@@ -667,6 +750,7 @@ export function RoleLinksManager({ role }: { role: Role }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState({ title: '', url: '', description: '', category: 'WORK_TABLE' as LinkCategory });
   const [error, setError] = useState<string | null>(null);
+  const pinnedLinkIds = useMemo(() => new Set(state.favorites.filter((favorite) => favorite.entityType === 'link').map((favorite) => favorite.entityId)), [state.favorites]);
   const links = state.links.filter((link) => manageableRoles.includes(link.role));
   const manageableRoleKey = manageableRoles.join('|');
 
@@ -750,7 +834,7 @@ export function RoleLinksManager({ role }: { role: Role }) {
         </GlassCard>
       )}
 
-      <PinnedLinkTabs links={links} />
+      <PinnedLinkTabs links={links} pinnedLinkIds={pinnedLinkIds} />
       <div className="grid md:grid-cols-2 gap-4">
         {links.length === 0 && <GlassCard><p className="text-[#a89b8f]">Рабочие ссылки для этих ролей пока не добавлены.</p></GlassCard>}
         {links.map((link) => (
@@ -759,7 +843,7 @@ export function RoleLinksManager({ role }: { role: Role }) {
               <div>
                 <div className="flex items-start justify-between gap-3">
                   <h3 className="text-[#f5f3f0]">{link.title}</h3>
-                  <FavoriteButton entityType="link" entityId={link.id} label={link.title} inactiveTitle="Закрепить" activeTitle="Открепить" />
+                  <LinkPinnedButton link={link} pinned={pinnedLinkIds.has(link.id)} />
                 </div>
                 <p className="mt-1 text-xs text-[#c9a98d]">{roleLabels[link.role]}</p>
                 <a href={link.url} className="text-sm text-[#a89b8f] hover:text-[#c9a98d] break-all">{link.url}</a>

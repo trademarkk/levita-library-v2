@@ -831,6 +831,19 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
     case 'link.update':
       await prisma.$executeRaw`update public.helpful_links set title = coalesce(${payload.input?.title ?? null}, title), url = coalesce(${payload.input?.url ?? null}, url), description = coalesce(${payload.input?.description ?? null}, description), role = coalesce(${payload.input?.role ?? null}::public.levtia_role, role), category = coalesce(${payload.input?.category ?? null}::public.link_category, category), updated_at = now() where id = ${payload.id}`;
       return;
+    case 'link.pin': {
+      let userId = actor?.id || payload.userId || null;
+      if (!userId) {
+        const error = new Error('Pinned link user is required.');
+        error.statusCode = 400;
+        throw error;
+      }
+      await prisma.$executeRaw`delete from public.content_favorites where entity_type = 'link' and entity_id = ${payload.id}`;
+      if (payload.pinned) {
+        await prisma.$executeRaw`insert into public.content_favorites (id, user_id, entity_type, entity_id, created_at) values (${payload.favoriteId || newId('favorite')}, ${userId}, 'link', ${payload.id}, now()) on conflict (user_id, entity_type, entity_id) do nothing`;
+      }
+      return;
+    }
     case 'link.delete':
       await prisma.$executeRaw`delete from public.content_favorites where entity_type = 'link' and entity_id = ${payload.id}`;
       await prisma.$executeRaw`delete from public.helpful_links where id = ${payload.id}`;

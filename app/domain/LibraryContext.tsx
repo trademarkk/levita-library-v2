@@ -159,6 +159,7 @@ type LibraryContextValue = {
   createLink: (input: { title: string; url: string; description?: string; role: Role; category?: HelpfulLink['category'] }) => void;
   updateLink: (id: string, input: Partial<Pick<HelpfulLink, 'title' | 'url' | 'description' | 'role' | 'category'>>) => void;
   deleteLink: (id: string) => void;
+  setLinkPinned: (id: string, pinned: boolean) => void;
   createDocumentTemplate: (input: Pick<DocumentTemplate, 'title' | 'url'>) => void;
   updateDocumentTemplate: (id: string, input: Partial<Pick<DocumentTemplate, 'title' | 'url'>>) => void;
   deleteDocumentTemplate: (id: string) => void;
@@ -1461,6 +1462,43 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       mutateOnServer('link.delete', { id }, (draft) => {
         draft.links = draft.links.filter((item) => item.id !== id);
       });
+    },
+    setLinkPinned(id, pinned) {
+      const activeUser = resolveActiveUser();
+      const userId = activeUser?.id ?? null;
+      const favoriteId = newId('favorite');
+      const payload = { id, pinned, favoriteId, userId };
+      setDataError(null);
+      setState((current) => {
+        const draft = cloneState(current);
+        draft.favorites = draft.favorites.filter((favorite) => !(favorite.entityType === 'link' && favorite.entityId === id));
+        if (pinned && userId) {
+          draft.favorites.unshift({
+            id: favoriteId,
+            userId,
+            entityType: 'link',
+            entityId: id,
+            createdAt: new Date().toISOString(),
+          });
+        }
+        return normalizeState(draft);
+      });
+      void fetch('/api/mutations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ action: 'link.pin', payload, actorId: userId, returnState: false }),
+      })
+        .then(async (response) => {
+          if (!response.ok) throw new Error(await readApiError(response));
+          sliceCacheRef.current.clear();
+        })
+        .catch(async (error) => {
+          const message = error instanceof Error ? error.message : 'Could not update pinned link.';
+          console.error(error);
+          setDataError(message);
+          await refreshState();
+        });
     },
     createDocumentTemplate(input) {
       const template: DocumentTemplate = { id: newId('document-template'), ...input, createdById: currentUser?.id ?? null, createdAt: new Date().toISOString() };
