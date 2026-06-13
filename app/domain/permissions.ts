@@ -39,6 +39,15 @@ export const managedContentRoles: Role[] = ['ASSISTANT', 'ADMIN', 'SENIOR_ADMIN'
 export const assistantManagedTeamRoles: Role[] = ['SENIOR_ADMIN', 'ADMIN', 'SENIOR_TRAINER', 'TRAINER'];
 export const adminRoles: Role[] = ['ADMIN', 'SENIOR_ADMIN'];
 export const trainerRoles: Role[] = ['TRAINER', 'SENIOR_TRAINER'];
+export type WorkLinkGroup = 'admins' | 'trainers';
+
+export function workLinkRolesForGroup(group: WorkLinkGroup): Role[] {
+  return group === 'admins' ? adminRoles : trainerRoles;
+}
+
+export function defaultWorkLinkGroupForRole(role: Role | null | undefined): WorkLinkGroup {
+  return isTrainerRole(role) ? 'trainers' : 'admins';
+}
 
 const seniorAdminInheritedResources: PermissionResource[] = ['regulations', 'importantInfo', 'knowledge', 'messageTemplates', 'workLinks'];
 const seniorTrainerInheritedResources: PermissionResource[] = ['regulations', 'importantInfo', 'knowledge', 'workLinks'];
@@ -68,6 +77,8 @@ export function visibleContentRolesFor(subject: PermissionSubject, resource?: Pe
   const role = roleOf(subject);
   if (role === 'OWNER') return managedContentRoles;
   if (resource === 'messageTemplates' && isTrainerRole(role)) return [];
+  if (resource === 'workLinks' && isAdminRole(role)) return adminRoles;
+  if (resource === 'workLinks' && isTrainerRole(role)) return trainerRoles;
   if (role === 'SENIOR_ADMIN' && resource && seniorAdminInheritedResources.includes(resource)) return ['SENIOR_ADMIN', 'ADMIN'];
   if (role === 'SENIOR_TRAINER' && resource && seniorTrainerInheritedResources.includes(resource)) return ['SENIOR_TRAINER', 'TRAINER'];
   return role ? [role] : [];
@@ -79,7 +90,8 @@ export function manageableContentRolesFor(subject: PermissionSubject, resource: 
   if (role === 'OWNER') return managedContentRoles;
   if ((resource === 'messageTemplates' || resource === 'workLinks') && role === 'SENIOR_ADMIN') return ['SENIOR_ADMIN', 'ADMIN'];
   if (resource === 'workLinks' && role === 'SENIOR_TRAINER') return ['SENIOR_TRAINER', 'TRAINER'];
-  if ((resource === 'messageTemplates' || resource === 'workLinks') && role === 'ASSISTANT') return ['ASSISTANT'];
+  if (resource === 'workLinks' && role === 'ASSISTANT') return [...adminRoles, ...trainerRoles];
+  if (resource === 'messageTemplates' && role === 'ASSISTANT') return ['ASSISTANT'];
   if (resource === 'trainingMaterials' && role === 'ASSISTANT') return ['ASSISTANT'];
   return [];
 }

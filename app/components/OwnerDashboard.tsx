@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { DashboardLayout } from './DashboardLayout';
 import { TabNavigation } from './TabNavigation';
 import { GlassCard } from './GlassCard';
-import { OwnerLinksManager, OwnerRoleContentManager, OwnerTemplatesManager } from './RoleContent';
+import { OwnerRoleContentManager, OwnerTemplatesManager, RoleLinksManager } from './RoleContent';
 import { ExpensesSection, FinancialPlanSection } from './SharedPlanningSections';
 import { CallRatingSection } from './CallRatingSection';
 import { TrainerEvaluationSheetsSection, TrainerRatingSection } from './TrainerEvaluationSections';
@@ -126,7 +126,7 @@ export function OwnerDashboard() {
           {activeTab === 'templates' && <OwnerTemplatesManager />}
           {activeTab === 'document-templates' && <OwnerDocumentTemplatesSection />}
           {activeTab === 'owner-links' && <OwnerPersonalLinksSection />}
-          {activeTab === 'links' && <OwnerLinksManager />}
+          {activeTab === 'links' && <RoleLinksManager role="OWNER" />}
           {activeTab === 'contacts' && <OwnerUsefulContactsSection />}
           {activeTab === 'training' && <OwnerRoleContentManager category="TRAINING" />}
           {activeTab === 'checklists' && <MonitoringSection />}

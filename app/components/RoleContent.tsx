@@ -4,12 +4,16 @@ import { GlassCard } from './GlassCard';
 import { TabNavigation } from './TabNavigation';
 import { useLibrary } from '../domain/LibraryContext';
 import { formatDate, roleLabels } from '../domain/labels';
-import { knowledgeCategoryResource, manageableContentRolesFor, managedContentRoles, visibleContentRolesFor } from '../domain/permissions';
+import { defaultWorkLinkGroupForRole, knowledgeCategoryResource, manageableContentRolesFor, managedContentRoles, visibleContentRolesFor, workLinkRolesForGroup, type WorkLinkGroup } from '../domain/permissions';
 import type { BusinessModelScope, FavoriteEntityType, HelpfulLink, KnowledgeCategory, KnowledgeEntry, LinkCategory, Role } from '../domain/types';
 import { getPendingSearchTarget, SEARCH_NAVIGATION_EVENT, type SearchNavigationDetail } from './searchNavigation';
 
 export const managedRoles = managedContentRoles;
 const messageTemplateManagedRoles = managedContentRoles.filter((role) => role !== 'TRAINER' && role !== 'SENIOR_TRAINER');
+const workLinkGroupTabs: Array<{ id: WorkLinkGroup; label: string }> = [
+  { id: 'admins', label: 'Администраторы' },
+  { id: 'trainers', label: 'Тренеры' },
+];
 
 const roleContentLabels: Record<Role, string> = {
   OWNER: 'руководителя',
@@ -228,6 +232,26 @@ function FavoriteScopeFilter({
             className={`rounded-full border px-4 py-2 text-sm transition-colors ${active ? 'border-[#c9a98d] bg-[#c9a98d]/24 text-[#f5f3f0]' : 'border-[#c9a98d]/15 text-[#a89b8f] hover:bg-[#2a2630]'}`}
           >
             {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function WorkLinkGroupFilter({ value, onChange }: { value: WorkLinkGroup; onChange: (value: WorkLinkGroup) => void }) {
+  return (
+    <div className="mb-4 flex flex-wrap gap-2">
+      {workLinkGroupTabs.map((tab) => {
+        const active = value === tab.id;
+        return (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => onChange(tab.id)}
+            className={`rounded-full border px-4 py-2 text-sm transition-colors ${active ? 'border-[#c9a98d] bg-[#c9a98d]/24 text-[#f5f3f0]' : 'border-[#c9a98d]/15 text-[#a89b8f] hover:bg-[#2a2630]'}`}
+          >
+            {tab.label}
           </button>
         );
       })}
@@ -478,11 +502,13 @@ export function RoleTemplatesViewer({ role }: { role: Role }) {
 export function RoleLinksViewer({ role }: { role: Role }) {
   const { state, isFavorite } = useLibrary();
   const [favoriteFilter, setFavoriteFilter] = useState<FavoriteScopeFilterValue>('all');
-  const visibleRoles = visibleContentRolesFor(role, 'workLinks');
+  const canChooseGroup = role === 'OWNER' || role === 'ASSISTANT';
+  const [workLinkGroup, setWorkLinkGroup] = useState<WorkLinkGroup>(defaultWorkLinkGroupForRole(role));
+  const visibleRoles = canChooseGroup ? workLinkRolesForGroup(workLinkGroup) : visibleContentRolesFor(role, 'workLinks');
   const baseLinks = state.links.filter((link) => visibleRoles.includes(link.role));
   const favoriteCount = baseLinks.filter((link) => isFavorite('link', link.id)).length;
   const links = favoriteFilter === 'favorites' ? baseLinks.filter((link) => isFavorite('link', link.id)) : baseLinks;
-  const visibleRoleKey = visibleRoles.join('|');
+  const visibleRoleKey = `${workLinkGroup}:${visibleRoles.join('|')}`;
 
   useEffect(() => {
     const applyTarget = (detail: SearchNavigationDetail | null) => {
@@ -499,6 +525,7 @@ export function RoleLinksViewer({ role }: { role: Role }) {
 
   return (
     <div>
+      {canChooseGroup && <WorkLinkGroupFilter value={workLinkGroup} onChange={(group) => { setWorkLinkGroup(group); setFavoriteFilter('all'); }} />}
       <FavoriteScopeFilter value={favoriteFilter} onChange={setFavoriteFilter} favoriteCount={favoriteCount} />
       <PinnedLinkTabs links={baseLinks} />
       <div className="grid md:grid-cols-2 gap-4">
@@ -632,7 +659,9 @@ export function RoleTemplatesManager({ role }: { role: Role }) {
 
 export function RoleLinksManager({ role }: { role: Role }) {
   const { state, createLink, updateLink, deleteLink } = useLibrary();
-  const manageableRoles = manageableContentRolesFor(role, 'workLinks');
+  const canChooseGroup = role === 'OWNER' || role === 'ASSISTANT';
+  const [workLinkGroup, setWorkLinkGroup] = useState<WorkLinkGroup>(defaultWorkLinkGroupForRole(role));
+  const manageableRoles = canChooseGroup ? workLinkRolesForGroup(workLinkGroup) : manageableContentRolesFor(role, 'workLinks');
   const [activeRole, setActiveRole] = useState<Role>(manageableRoles[0] ?? role);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -660,6 +689,15 @@ export function RoleLinksManager({ role }: { role: Role }) {
     setDraft({ title: '', url: '', description: '', category: 'WORK_TABLE' });
   };
 
+  useEffect(() => {
+    if (manageableRoles.includes(activeRole)) return;
+    setActiveRole(manageableRoles[0] ?? role);
+    setIsFormOpen(false);
+    setEditingId(null);
+    setError(null);
+    setDraft({ title: '', url: '', description: '', category: 'WORK_TABLE' });
+  }, [activeRole, manageableRoleKey, role]);
+
   const openCreate = () => {
     setEditingId(null);
     setError(null);
@@ -684,6 +722,7 @@ export function RoleLinksManager({ role }: { role: Role }) {
 
   return (
     <div className="space-y-5">
+      {canChooseGroup && <WorkLinkGroupFilter value={workLinkGroup} onChange={setWorkLinkGroup} />}
       <div className="flex justify-end">
         <button type="button" onClick={openCreate} className="primary-action flex items-center gap-2"><Plus className="w-4 h-4" />Добавить ссылку</button>
       </div>
