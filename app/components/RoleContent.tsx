@@ -145,7 +145,19 @@ function BusinessModelFilter({ value, onChange }: { value: BusinessModelScope; o
   );
 }
 
-function FavoriteButton({ entityType, entityId, label }: { entityType: FavoriteEntityType; entityId: string; label: string }) {
+function FavoriteButton({
+  entityType,
+  entityId,
+  label,
+  inactiveTitle = 'Добавить в избранное',
+  activeTitle = 'Убрать из избранного',
+}: {
+  entityType: FavoriteEntityType;
+  entityId: string;
+  label: string;
+  inactiveTitle?: string;
+  activeTitle?: string;
+}) {
   const { isFavorite, toggleFavorite } = useLibrary();
   const favorite = isFavorite(entityType, entityId);
   const [optimisticFavorite, setOptimisticFavorite] = useState(favorite);
@@ -180,8 +192,8 @@ function FavoriteButton({ entityType, entityId, label }: { entityType: FavoriteE
         activate();
       }}
       className={`inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full border transition-colors ${optimisticFavorite ? 'border-[#c9a98d]/50 bg-[#c9a98d]/22 text-[#c9a98d]' : 'border-[#c9a98d]/15 text-[#a89b8f] hover:border-[#c9a98d]/35 hover:text-[#c9a98d]'}`}
-      aria-label={optimisticFavorite ? `Убрать из избранного: ${label}` : `Добавить в избранное: ${label}`}
-      title={optimisticFavorite ? 'Убрать из избранного' : 'Добавить в избранное'}
+      aria-label={optimisticFavorite ? `${activeTitle}: ${label}` : `${inactiveTitle}: ${label}`}
+      title={optimisticFavorite ? activeTitle : inactiveTitle}
     >
       <Star className="h-4 w-4" fill={optimisticFavorite ? 'currentColor' : 'none'} />
     </button>
@@ -219,6 +231,37 @@ function FavoriteScopeFilter({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+function scrollToEntity(entityType: FavoriteEntityType, entityId: string) {
+  const target = searchTarget(entityType, entityId);
+  requestAnimationFrame(() => {
+    document.querySelector(`[data-search-target="${target}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+}
+
+function PinnedLinkTabs({ links }: { links: HelpfulLink[] }) {
+  const { isFavorite } = useLibrary();
+  const pinnedLinks = links.filter((link) => isFavorite('link', link.id));
+  if (!pinnedLinks.length) return null;
+
+  return (
+    <div className="mb-5 rounded-2xl border border-[#c9a98d]/18 bg-[#1a151d]/70 p-3">
+      <p className="mb-3 text-xs uppercase tracking-[0.24em] text-[#c9a98d]">Закрепленные</p>
+      <div className="flex flex-wrap gap-2">
+        {pinnedLinks.map((link) => (
+          <button
+            key={link.id}
+            type="button"
+            onClick={() => scrollToEntity('link', link.id)}
+            className="rounded-full border border-[#c9a98d]/28 bg-[#c9a98d]/12 px-4 py-2 text-sm text-[#f5f3f0] transition-colors hover:bg-[#c9a98d]/22"
+          >
+            {link.title}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -457,6 +500,7 @@ export function RoleLinksViewer({ role }: { role: Role }) {
   return (
     <div>
       <FavoriteScopeFilter value={favoriteFilter} onChange={setFavoriteFilter} favoriteCount={favoriteCount} />
+      <PinnedLinkTabs links={baseLinks} />
       <div className="grid md:grid-cols-2 gap-4">
         {links.length === 0 && <GlassCard><p className="text-[#a89b8f]">{favoriteFilter === 'favorites' ? 'В избранном пока нет ссылок этой вкладки.' : 'Для этой роли пока нет рабочих ссылок.'}</p></GlassCard>}
         {links.map((link, index) => (
@@ -466,7 +510,7 @@ export function RoleLinksViewer({ role }: { role: Role }) {
               <div>
                 <div className="flex items-start justify-between gap-3">
                   <h3 className="text-[#f5f3f0]">{link.title}</h3>
-                  <FavoriteButton entityType="link" entityId={link.id} label={link.title} />
+                  <FavoriteButton entityType="link" entityId={link.id} label={link.title} inactiveTitle="Закрепить" activeTitle="Открепить" />
                 </div>
                 {visibleRoles.length > 1 && <p className="mt-1 text-xs text-[#c9a98d]">{roleLabels[link.role]}</p>}
                 <a href={link.url} className="text-sm text-[#a89b8f] hover:text-[#c9a98d] break-all">{link.url}</a>
@@ -485,6 +529,7 @@ export function RoleTemplatesManager({ role }: { role: Role }) {
   const manageableRoles = manageableContentRolesFor(role, 'messageTemplates');
   const [activeRole, setActiveRole] = useState<Role>(manageableRoles[0] ?? role);
   const [businessModelFilter, setBusinessModelFilter] = useState<BusinessModelScope>('ALL');
+  const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState({ title: '', purpose: '', body: '', businessModel: 'ALL' as BusinessModelScope });
   const [error, setError] = useState<string | null>(null);
@@ -505,9 +550,17 @@ export function RoleTemplatesManager({ role }: { role: Role }) {
   }, [manageableRoleKey]);
 
   const reset = () => {
+    setIsFormOpen(false);
     setEditingId(null);
     setError(null);
     setDraft({ title: '', purpose: '', body: '', businessModel: 'ALL' });
+  };
+
+  const openCreate = () => {
+    setEditingId(null);
+    setError(null);
+    setDraft({ title: '', purpose: '', body: '', businessModel: 'ALL' });
+    setIsFormOpen(true);
   };
 
   const save = () => {
@@ -528,23 +581,28 @@ export function RoleTemplatesManager({ role }: { role: Role }) {
   return (
     <div className="space-y-5">
       <BusinessModelFilter value={businessModelFilter} onChange={setBusinessModelFilter} />
-      <GlassCard>
-        <h3 className="text-xl text-[#f5f3f0] mb-4">{editingId ? 'Редактировать шаблон' : 'Добавить шаблон сообщения'}</h3>
-        <div className="grid md:grid-cols-2 gap-3">
-          <select value={activeRole} onChange={(event) => setActiveRole(event.target.value as Role)} className="field">
-            {manageableRoles.map((item) => <option key={item} value={item}>{roleLabels[item]}</option>)}
-          </select>
-          <input value={draft.title} onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))} placeholder="Название шаблона" className="field" />
-          <input value={draft.purpose} onChange={(event) => setDraft((value) => ({ ...value, purpose: event.target.value }))} placeholder="Назначение" className="field" />
-          <BusinessModelSelect value={draft.businessModel} onChange={(businessModel) => setDraft((value) => ({ ...value, businessModel }))} />
-          <textarea value={draft.body} onChange={(event) => setDraft((value) => ({ ...value, body: event.target.value }))} placeholder="Текст шаблона" className="field md:col-span-2 min-h-28" />
-        </div>
-        {error && <p className="mt-3 text-sm text-[#f0c5cf]">{error}</p>}
-        <div className="mt-4 flex flex-wrap gap-3">
-          <button onClick={save} className="primary-action flex items-center gap-2"><Save className="w-4 h-4" />Сохранить</button>
-          {editingId && <button onClick={reset} className="px-4 py-2 rounded-lg border border-[#c9a98d]/20 text-[#f5f3f0] hover:bg-[#2a2630] flex items-center gap-2"><X className="w-4 h-4" />Отмена</button>}
-        </div>
-      </GlassCard>
+      <div className="flex justify-end">
+        <button type="button" onClick={openCreate} className="primary-action flex items-center gap-2"><Plus className="w-4 h-4" />Добавить шаблон</button>
+      </div>
+      {isFormOpen && (
+        <GlassCard>
+          <h3 className="text-xl text-[#f5f3f0] mb-4">{editingId ? 'Редактировать шаблон' : 'Добавить шаблон сообщения'}</h3>
+          <div className="grid md:grid-cols-2 gap-3">
+            <select value={activeRole} onChange={(event) => setActiveRole(event.target.value as Role)} className="field">
+              {manageableRoles.map((item) => <option key={item} value={item}>{roleLabels[item]}</option>)}
+            </select>
+            <input value={draft.title} onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))} placeholder="Название шаблона" className="field" />
+            <input value={draft.purpose} onChange={(event) => setDraft((value) => ({ ...value, purpose: event.target.value }))} placeholder="Назначение" className="field" />
+            <BusinessModelSelect value={draft.businessModel} onChange={(businessModel) => setDraft((value) => ({ ...value, businessModel }))} />
+            <textarea value={draft.body} onChange={(event) => setDraft((value) => ({ ...value, body: event.target.value }))} placeholder="Текст шаблона" className="field md:col-span-2 min-h-28" />
+          </div>
+          {error && <p className="mt-3 text-sm text-[#f0c5cf]">{error}</p>}
+          <div className="mt-4 flex flex-wrap gap-3">
+            <button onClick={save} className="primary-action flex items-center gap-2"><Save className="w-4 h-4" />Сохранить</button>
+            <button onClick={reset} className="px-4 py-2 rounded-lg border border-[#c9a98d]/20 text-[#f5f3f0] hover:bg-[#2a2630] flex items-center gap-2"><X className="w-4 h-4" />Отмена</button>
+          </div>
+        </GlassCard>
+      )}
 
       <div className="space-y-4">
         {templates.length === 0 && <GlassCard><p className="text-[#a89b8f]">Шаблоны для этих ролей пока не добавлены.</p></GlassCard>}
@@ -561,7 +619,7 @@ export function RoleTemplatesManager({ role }: { role: Role }) {
                 <p className="text-sm text-[#a89b8f] mt-3 whitespace-pre-line">{template.body}</p>
               </div>
               <div className="flex gap-2">
-                <button onClick={() => { setEditingId(template.id); setActiveRole(template.role); setDraft({ title: template.title, purpose: template.purpose ?? '', body: template.body, businessModel: template.businessModel ?? 'ALL' }); }} className="text-[#a89b8f] hover:text-[#c9a98d]" aria-label={`Редактировать ${template.title}`}><Edit2 className="w-4 h-4" /></button>
+                <button onClick={() => { setIsFormOpen(true); setEditingId(template.id); setActiveRole(template.role); setDraft({ title: template.title, purpose: template.purpose ?? '', body: template.body, businessModel: template.businessModel ?? 'ALL' }); }} className="text-[#a89b8f] hover:text-[#c9a98d]" aria-label={`Редактировать ${template.title}`}><Edit2 className="w-4 h-4" /></button>
                 <button onClick={() => deleteTemplate(template.id)} className="text-[#a89b8f] hover:text-[#8b3a52]" aria-label={`Удалить ${template.title}`}><Trash2 className="w-4 h-4" /></button>
               </div>
             </div>
@@ -576,6 +634,7 @@ export function RoleLinksManager({ role }: { role: Role }) {
   const { state, createLink, updateLink, deleteLink } = useLibrary();
   const manageableRoles = manageableContentRolesFor(role, 'workLinks');
   const [activeRole, setActiveRole] = useState<Role>(manageableRoles[0] ?? role);
+  const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState({ title: '', url: '', description: '', category: 'WORK_TABLE' as LinkCategory });
   const [error, setError] = useState<string | null>(null);
@@ -595,8 +654,17 @@ export function RoleLinksManager({ role }: { role: Role }) {
   }, [manageableRoleKey]);
 
   const reset = () => {
+    setIsFormOpen(false);
     setEditingId(null);
+    setError(null);
     setDraft({ title: '', url: '', description: '', category: 'WORK_TABLE' });
+  };
+
+  const openCreate = () => {
+    setEditingId(null);
+    setError(null);
+    setDraft({ title: '', url: '', description: '', category: 'WORK_TABLE' });
+    setIsFormOpen(true);
   };
 
   const save = () => {
@@ -616,40 +684,50 @@ export function RoleLinksManager({ role }: { role: Role }) {
 
   return (
     <div className="space-y-5">
-      <GlassCard>
-        <h3 className="text-xl text-[#f5f3f0] mb-4">{editingId ? 'Редактировать ссылку' : 'Добавить рабочую ссылку или таблицу'}</h3>
-        <div className="grid md:grid-cols-2 gap-3">
-          <select value={activeRole} onChange={(event) => setActiveRole(event.target.value as Role)} className="field">
-            {manageableRoles.map((item) => <option key={item} value={item}>{roleLabels[item]}</option>)}
-          </select>
-          <select value={draft.category} onChange={(event) => setDraft((value) => ({ ...value, category: event.target.value as LinkCategory }))} className="field">
-            <option value="WORK_TABLE">Рабочая таблица</option>
-            <option value="TRAINING">Обучение</option>
-            <option value="HELPFUL">Полезная ссылка</option>
-          </select>
-          <input value={draft.title} onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))} placeholder="Название" className="field" />
-          <input value={draft.url} onChange={(event) => setDraft((value) => ({ ...value, url: event.target.value }))} placeholder="https://..." className="field" />
-          <textarea value={draft.description} onChange={(event) => setDraft((value) => ({ ...value, description: event.target.value }))} placeholder="Описание" className="field md:col-span-2 min-h-24" />
-        </div>
-        <div className="mt-4 flex flex-wrap gap-3">
-          <button onClick={save} className="primary-action flex items-center gap-2"><Save className="w-4 h-4" />Сохранить</button>
-          {editingId && <button onClick={reset} className="px-4 py-2 rounded-lg border border-[#c9a98d]/20 text-[#f5f3f0] hover:bg-[#2a2630] flex items-center gap-2"><X className="w-4 h-4" />Отмена</button>}
-        </div>
-      </GlassCard>
+      <div className="flex justify-end">
+        <button type="button" onClick={openCreate} className="primary-action flex items-center gap-2"><Plus className="w-4 h-4" />Добавить ссылку</button>
+      </div>
+      {isFormOpen && (
+        <GlassCard>
+          <h3 className="text-xl text-[#f5f3f0] mb-4">{editingId ? 'Редактировать ссылку' : 'Добавить рабочую ссылку или таблицу'}</h3>
+          <div className="grid md:grid-cols-2 gap-3">
+            <select value={activeRole} onChange={(event) => setActiveRole(event.target.value as Role)} className="field">
+              {manageableRoles.map((item) => <option key={item} value={item}>{roleLabels[item]}</option>)}
+            </select>
+            <select value={draft.category} onChange={(event) => setDraft((value) => ({ ...value, category: event.target.value as LinkCategory }))} className="field">
+              <option value="WORK_TABLE">Рабочая таблица</option>
+              <option value="TRAINING">Обучение</option>
+              <option value="HELPFUL">Полезная ссылка</option>
+            </select>
+            <input value={draft.title} onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))} placeholder="Название" className="field" />
+            <input value={draft.url} onChange={(event) => setDraft((value) => ({ ...value, url: event.target.value }))} placeholder="https://..." className="field" />
+            <textarea value={draft.description} onChange={(event) => setDraft((value) => ({ ...value, description: event.target.value }))} placeholder="Описание" className="field md:col-span-2 min-h-24" />
+          </div>
+          {error && <p className="mt-3 text-sm text-[#f0c5cf]">{error}</p>}
+          <div className="mt-4 flex flex-wrap gap-3">
+            <button onClick={save} className="primary-action flex items-center gap-2"><Save className="w-4 h-4" />Сохранить</button>
+            <button onClick={reset} className="px-4 py-2 rounded-lg border border-[#c9a98d]/20 text-[#f5f3f0] hover:bg-[#2a2630] flex items-center gap-2"><X className="w-4 h-4" />Отмена</button>
+          </div>
+        </GlassCard>
+      )}
 
+      <PinnedLinkTabs links={links} />
       <div className="grid md:grid-cols-2 gap-4">
         {links.length === 0 && <GlassCard><p className="text-[#a89b8f]">Рабочие ссылки для этих ролей пока не добавлены.</p></GlassCard>}
         {links.map((link) => (
           <GlassCard key={link.id} data-search-target={searchTarget('link', link.id)}>
             <div className="flex justify-between gap-4">
               <div>
-                <h3 className="text-[#f5f3f0]">{link.title}</h3>
+                <div className="flex items-start justify-between gap-3">
+                  <h3 className="text-[#f5f3f0]">{link.title}</h3>
+                  <FavoriteButton entityType="link" entityId={link.id} label={link.title} inactiveTitle="Закрепить" activeTitle="Открепить" />
+                </div>
                 <p className="mt-1 text-xs text-[#c9a98d]">{roleLabels[link.role]}</p>
                 <a href={link.url} className="text-sm text-[#a89b8f] hover:text-[#c9a98d] break-all">{link.url}</a>
                 <p className="text-sm text-[#a89b8f] mt-2">{link.description}</p>
               </div>
               <div className="flex gap-2">
-                <button onClick={() => { setEditingId(link.id); setActiveRole(link.role); setDraft({ title: link.title, url: link.url, description: link.description ?? '', category: link.category }); }} className="text-[#a89b8f] hover:text-[#c9a98d]" aria-label={`Редактировать ${link.title}`}><Edit2 className="w-4 h-4" /></button>
+                <button onClick={() => { setIsFormOpen(true); setEditingId(link.id); setActiveRole(link.role); setDraft({ title: link.title, url: link.url, description: link.description ?? '', category: link.category }); }} className="text-[#a89b8f] hover:text-[#c9a98d]" aria-label={`Редактировать ${link.title}`}><Edit2 className="w-4 h-4" /></button>
                 <button onClick={() => deleteLink(link.id)} className="text-[#a89b8f] hover:text-[#8b3a52]" aria-label={`Удалить ${link.title}`}><Trash2 className="w-4 h-4" /></button>
               </div>
             </div>

@@ -138,17 +138,21 @@ function AdminWorkspace({ role, canManageTemplates = false, canManageLinks = fal
 }
 
 function ShiftStartGate({ role, selectedUserId, onSkipShift }: { role: 'ADMIN' | 'SENIOR_ADMIN'; selectedUserId: string; onSkipShift: () => void }) {
-  const { state, startAdminShift } = useLibrary();
+  const { currentUser, state, startAdminShift } = useLibrary();
   const users = state.users.filter((item) => item.role === role && item.status === 'active');
+  const currentUserCandidate = currentUser?.role === role && currentUser.status === 'active' ? currentUser : null;
+  const shiftUsers = currentUserCandidate && !users.some((item) => item.id === currentUserCandidate.id)
+    ? [currentUserCandidate, ...users]
+    : users;
   const [userId, setUserId] = useState(selectedUserId || users[0]?.id || '');
   const [studio, setStudio] = useState<Studio>('STAVROPOLSKAYA');
   const [isStarting, setIsStarting] = useState(false);
-  const selectedUser = users.find((item) => item.id === userId) ?? null;
+  const selectedUser = shiftUsers.find((item) => item.id === userId) ?? null;
 
   useEffect(() => {
-    const fallbackUserId = selectedUserId || users[0]?.id || '';
+    const fallbackUserId = selectedUserId || shiftUsers[0]?.id || '';
     if (!userId && fallbackUserId) setUserId(fallbackUserId);
-  }, [selectedUserId, userId, users]);
+  }, [selectedUserId, shiftUsers, userId]);
 
   const start = async () => {
     if (!selectedUser || isStarting) return;
@@ -173,7 +177,7 @@ function ShiftStartGate({ role, selectedUserId, onSkipShift }: { role: 'ADMIN' |
             <label className="text-sm text-[#a89b8f]">
               Администратор
               <select value={userId} onChange={(event) => setUserId(event.target.value)} className="field mt-2">
-                {users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                {shiftUsers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
               </select>
             </label>
             <label className="text-sm text-[#a89b8f]">

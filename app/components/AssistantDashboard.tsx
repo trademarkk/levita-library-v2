@@ -3,7 +3,7 @@ import { DashboardLayout } from './DashboardLayout';
 import { TabNavigation } from './TabNavigation';
 import { GlassCard } from './GlassCard';
 import { ConfirmChecklistDialog } from './ConfirmChecklistDialog';
-import { RoleContentViewer } from './RoleContent';
+import { RoleContentViewer, RoleLinksManager } from './RoleContent';
 import { ExpensesSection, FinancialPlanSection } from './SharedPlanningSections';
 import { AuditLogSection, ControlCenterSection, ShiftJournalSection } from './OwnerDashboard';
 import { CallRatingSection } from './CallRatingSection';
@@ -123,11 +123,11 @@ export function AssistantDashboard() {
           {activeTab === 'admin-checklists' && <AdminChecklistMonitor />}
           {activeTab === 'responsibilities' && <RoleContentViewer role="ASSISTANT" category="RESPONSIBILITY" />}
           {activeTab === 'regulations' && <RoleContentViewer role="ASSISTANT" category="REGULATION" />}
-          {activeTab === 'info' && <RoleContentViewer role="ASSISTANT" category="IMPORTANT_INFO" />}
+          {activeTab === 'info' && <AssistantImportantInfoSection />}
           {activeTab === 'knowledge' && <AssistantKnowledgeSection />}
           {activeTab === 'templates' && <TemplatesSection />}
           {activeTab === 'document-templates' && <DocumentTemplatesSection />}
-          {activeTab === 'links' && <LinksSection />}
+          {activeTab === 'links' && <RoleLinksManager role="ASSISTANT" />}
           {activeTab === 'contacts' && <ContactsSection />}
           {activeTab === 'training' && <TrainingSection />}
           {activeTab === 'checklist' && <ChecklistSection userId={assistant?.id ?? ''} />}
@@ -446,6 +446,86 @@ function AssistantKnowledgeSection() {
         </GlassCard>
       )}
       <RoleContentViewer role="ASSISTANT" category="KNOWLEDGE" />
+    </div>
+  );
+}
+
+function AssistantImportantInfoSection() {
+  const { createKnowledge } = useLibrary();
+  const [isCreating, setIsCreating] = useState(false);
+  const [title, setTitle] = useState('');
+  const [content, setContent] = useState('');
+  const [hashtags, setHashtags] = useState('');
+  const [businessModel, setBusinessModel] = useState<BusinessModelScope>('ALL');
+  const [error, setError] = useState<string | null>(null);
+
+  const resetForm = () => {
+    setTitle('');
+    setContent('');
+    setHashtags('');
+    setBusinessModel('ALL');
+    setError(null);
+  };
+
+  const save = () => {
+    const nextTitle = title.trim();
+    const nextContent = content.trim();
+    if (!nextTitle || !nextContent) {
+      setError('Заполните название и текст информации.');
+      return;
+    }
+    createKnowledge({
+      title: nextTitle,
+      content: nextContent,
+      role: 'ASSISTANT',
+      category: 'IMPORTANT_INFO',
+      hashtags: hashtags.trim(),
+      businessModel,
+      isActual: true,
+    });
+    resetForm();
+    setIsCreating(false);
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex justify-end">
+        <button type="button" onClick={() => { resetForm(); setIsCreating(true); }} className="primary-action inline-flex items-center gap-2">
+          <Plus className="h-4 w-4" />
+          Добавить информацию
+        </button>
+      </div>
+      {isCreating && (
+        <GlassCard>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-2xl text-[#f5f3f0]">Добавить важную информацию</h2>
+              <p className="mt-1 text-sm text-[#a89b8f]">Ассистент может добавлять оперативную информацию для своей роли. Редактирование и удаление недоступны.</p>
+            </div>
+            <button type="button" onClick={() => { resetForm(); setIsCreating(false); }} className="text-[#a89b8f] hover:text-[#f5f3f0]" aria-label="Закрыть форму">
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+          <div className="mt-5 grid gap-3">
+            <input value={title} onChange={(event) => setTitle(event.target.value)} className="field" placeholder="Название информации" />
+            <textarea value={content} onChange={(event) => setContent(event.target.value)} className="field min-h-28" placeholder="Текст информации" />
+            <AssistantBusinessModelSelect value={businessModel} onChange={setBusinessModel} />
+            <input value={hashtags} onChange={(event) => setHashtags(event.target.value)} className="field" placeholder="#теги, если нужны" />
+            {error && <p className="text-sm text-[#f0c5cf]">{error}</p>}
+            <button type="button" onClick={save} className="primary-action inline-flex items-center gap-2 justify-self-start">
+              <Plus className="h-4 w-4" />
+              Добавить
+            </button>
+          </div>
+        </GlassCard>
+      )}
+      {!isCreating && (
+        <GlassCard>
+          <h2 className="text-2xl text-[#f5f3f0]">Важная информация ассистента</h2>
+          <p className="mt-1 text-sm text-[#a89b8f]">Добавление открывается по кнопке выше. Карточки ниже фильтруются по бизнес-модели и избранному.</p>
+        </GlassCard>
+      )}
+      <RoleContentViewer role="ASSISTANT" category="IMPORTANT_INFO" />
     </div>
   );
 }

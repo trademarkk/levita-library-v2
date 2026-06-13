@@ -131,6 +131,7 @@ export function can(subject: PermissionSubject, action: PermissionAction, resour
   if (resource === 'usefulContacts') return role === 'ASSISTANT';
   if (resource === 'trainingMaterials') return role === 'ASSISTANT' && (!context.targetRole || context.targetRole === 'ASSISTANT');
   if (resource === 'knowledge') return role === 'ASSISTANT' && action === 'create' && (!context.targetRole || context.targetRole === 'ASSISTANT');
+  if (resource === 'importantInfo') return role === 'ASSISTANT' && action === 'create' && (!context.targetRole || context.targetRole === 'ASSISTANT');
   if (resource === 'messageTemplates' || resource === 'workLinks') {
     return !!context.targetRole && manageableContentRolesFor(role, resource).includes(context.targetRole);
   }
