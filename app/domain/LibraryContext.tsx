@@ -1,5 +1,4 @@
 import { createContext, ReactNode, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
 import { initialState } from './seed';
 import { normalizeHashtags, roleRoutes } from './labels';
 import type {
@@ -53,7 +52,7 @@ const ACTIVE_REPORT_SLOTS: ChecklistReportSlot[] = ['14:00', '18:00'];
 const CONTROL_REPORT_SLOTS: ChecklistReportSlot[] = ['14:00', '18:00', '22:00'];
 const DEFAULT_STUDIO: Studio = 'STAVROPOLSKAYA';
 const FINANCIAL_PLAN_FORWARD_MONTHS = 36;
-const SLICE_REQUEST_DEBOUNCE_MS = 120;
+const SLICE_REQUEST_DEBOUNCE_MS = 180;
 const SLICE_CACHE_TTL_MS = 30_000;
 const CANONICAL_ADMIN_CHECKLIST_ITEMS = [
   'Проверить чистоту студии: зеркала, углы и поверхности',
@@ -723,6 +722,13 @@ async function loadDatabaseSlice(slice: StateSlice, params: StateSliceMeta = {},
   return response.json() as Promise<{ state: Partial<LibraryState> | null; sliceMeta?: StateSliceMeta }>;
 }
 
+type SlicePayload = { state: Partial<LibraryState> | null; sliceMeta?: StateSliceMeta };
+type SliceCacheEntry = { payload: SlicePayload; loadedAt: number };
+
+function sliceCacheKey(slice: StateSlice, params: StateSliceMeta = {}) {
+  return `${slice}:${params.month ?? 'default'}`;
+}
+
 function mergeStateSlice(current: LibraryState, patch: Partial<LibraryState> | null, sliceMeta: StateSliceMeta = {}) {
   if (!patch) return current;
   const next = cloneState(current);
@@ -931,7 +937,6 @@ function getReportStatus(checklist: DailyChecklist, slot: ChecklistReportSlot): 
 }
 
 export function LibraryProvider({ children }: { children: ReactNode }) {
-  const queryClient = useQueryClient();
   const [state, setState] = useState<LibraryState>(() => loadState());
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [databaseReady, setDatabaseReady] = useState(false);
@@ -943,6 +948,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
   const activeDataLoadIdsRef = useRef(new Set<number>());
   const nextDataLoadIdRef = useRef(0);
   const activeSliceRequestsRef = useRef(new Map<string, { controller: AbortController; requestId: number }>());
+  const sliceCacheRef = useRef(new Map<string, SliceCacheEntry>());
   const sliceRequestDelayRef = useRef<number | null>(null);
   const sliceRequestDelayResolveRef = useRef<(() => void) | null>(null);
   const latestSliceRequestIdRef = useRef(0);
@@ -980,9 +986,9 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     cancelSliceRequests();
     const finishDataLoad = beginDataLoad();
     try {
-      queryClient.removeQueries({ queryKey: ['state-slice'], exact: false });
+      sliceCacheRef.current.clear();
       const bootstrapPayload = await loadDatabaseSlice('bootstrap');
-      queryClient.setQueryData(['state-slice', 'bootstrap', null], bootstrapPayload);
+      sliceCacheRef.current.set(sliceCacheKey('bootstrap'), { payload: bootstrapPayload, loadedAt: Date.now() });
       const databaseState = mergeStateSlice(loadState(), bootstrapPayload.state, bootstrapPayload.sliceMeta);
       if (databaseState) {
         setDatabaseReady(true);
@@ -1004,6 +1010,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
 
   const refreshSlice = async (slice: StateSlice, params: StateSliceMeta = {}, options: RefreshSliceOptions = {}) => {
     cancelSliceRequests(true);
+    setDataError(null);
     const requestId = latestSliceRequestIdRef.current + 1;
     latestSliceRequestIdRef.current = requestId;
     const requestKey = `${slice}:${JSON.stringify(params)}`;
@@ -1019,22 +1026,21 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
 
     const finishDataLoad = beginDataLoad();
     try {
-      const queryKey = ['state-slice', slice, params.month ?? null] as const;
       if (requestId !== latestSliceRequestIdRef.current) return;
-      const cached = queryClient.getQueryData<{ state: Partial<LibraryState> | null; sliceMeta?: StateSliceMeta }>(queryKey);
-      const cachedAt = queryClient.getQueryState(queryKey)?.dataUpdatedAt ?? 0;
-      if (!options.force && cached && Date.now() - cachedAt < SLICE_CACHE_TTL_MS) {
+      const cacheKey = sliceCacheKey(slice, params);
+      const cached = sliceCacheRef.current.get(cacheKey);
+      if (!options.force && cached && Date.now() - cached.loadedAt < SLICE_CACHE_TTL_MS) {
         setDatabaseReady(true);
-        setState((current) => mergeStateSlice(current, cached.state, cached.sliceMeta ?? params));
+        setState((current) => mergeStateSlice(current, cached.payload.state, cached.payload.sliceMeta ?? params));
         setDataError(null);
         return;
       }
-      if (options.force) queryClient.removeQueries({ queryKey, exact: true });
+      if (options.force) sliceCacheRef.current.delete(cacheKey);
       const controller = new AbortController();
       activeSliceRequestsRef.current.set(requestKey, { controller, requestId });
       const payload = await loadDatabaseSlice(slice, params, controller.signal);
       if (requestId !== latestSliceRequestIdRef.current) return;
-      queryClient.setQueryData(queryKey, payload);
+      sliceCacheRef.current.set(cacheKey, { payload, loadedAt: Date.now() });
       setDatabaseReady(true);
       setState((current) => mergeStateSlice(current, payload.state, payload.sliceMeta ?? params));
       setDataError(null);
@@ -1067,11 +1073,8 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        const payload = await queryClient.fetchQuery({
-          queryKey: ['state-slice', 'bootstrap', null],
-          queryFn: ({ signal }) => loadDatabaseSlice('bootstrap', {}, signal),
-          staleTime: 30_000,
-        });
+        const payload = await loadDatabaseSlice('bootstrap');
+        sliceCacheRef.current.set(sliceCacheKey('bootstrap'), { payload, loadedAt: Date.now() });
         const databaseState = mergeStateSlice(loadState(), payload.state, payload.sliceMeta);
         if (!cancelled) {
           setCurrentUserId(session.user.id);
@@ -1143,7 +1146,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({ action, payload, actorId: currentUserId, returnState: !optimistic }),
       });
       if (!response.ok) throw new Error(await readApiError(response));
-      void queryClient.invalidateQueries({ queryKey: ['state-slice'], exact: false });
+      sliceCacheRef.current.clear();
       const result = await response.json() as { state: Partial<LibraryState> | null; skipRefresh?: boolean };
       if (result.state) {
         setDatabaseReady(true);
@@ -1193,7 +1196,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           body: JSON.stringify({ action: 'checklist.item.toggle', payload, actorId: currentUserId, returnState: false }),
         });
         if (!response.ok) throw new Error(await readApiError(response));
-        void queryClient.invalidateQueries({ queryKey: ['state-slice'], exact: false });
+        sliceCacheRef.current.clear();
         const result = await response.json() as { state: Partial<LibraryState> | null };
         if (version === checklistToggleVersionRef.current && result.state) {
           setDatabaseReady(true);
@@ -1277,12 +1280,9 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       if (!normalized || !password.trim()) return { ok: false, error: 'Введите email и пароль.' };
       const result = await loginOnServer(normalized, password);
       if (!result.ok) return result;
-      queryClient.removeQueries({ queryKey: ['state-slice'], exact: false });
-      const bootstrapPayload = await queryClient.fetchQuery({
-        queryKey: ['state-slice', 'bootstrap', null],
-        queryFn: ({ signal }) => loadDatabaseSlice('bootstrap', {}, signal),
-        staleTime: 0,
-      });
+      sliceCacheRef.current.clear();
+      const bootstrapPayload = await loadDatabaseSlice('bootstrap');
+      sliceCacheRef.current.set(sliceCacheKey('bootstrap'), { payload: bootstrapPayload, loadedAt: Date.now() });
       const databaseState = mergeStateSlice(loadState(), bootstrapPayload.state, bootstrapPayload.sliceMeta);
       if (databaseState) {
         const nextState = normalizeState(databaseState);
@@ -1305,11 +1305,8 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       if (nextPassword.length < 6) return { ok: false, error: 'Пароль должен быть не короче 6 символов.' };
       const result = await resetPasswordOnServer(normalized, nextPassword);
       if (!result.ok) return result;
-      const bootstrapPayload = currentUserId ? await queryClient.fetchQuery({
-        queryKey: ['state-slice', 'bootstrap', null],
-        queryFn: ({ signal }) => loadDatabaseSlice('bootstrap', {}, signal),
-        staleTime: 0,
-      }) : null;
+      const bootstrapPayload = currentUserId ? await loadDatabaseSlice('bootstrap') : null;
+      if (bootstrapPayload) sliceCacheRef.current.set(sliceCacheKey('bootstrap'), { payload: bootstrapPayload, loadedAt: Date.now() });
       const databaseState = bootstrapPayload ? mergeStateSlice(loadState(), bootstrapPayload.state, bootstrapPayload.sliceMeta) : null;
       if (databaseState) {
         const user = databaseState.users.find((item) => normalizeEmail(item.email) === normalized);
@@ -1868,7 +1865,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       })
         .then(async (response) => {
           if (!response.ok) throw new Error(await readApiError(response));
-          void queryClient.invalidateQueries({ queryKey: ['state-slice'], exact: false });
+          sliceCacheRef.current.clear();
           if (!userId) {
             const result = await response.json() as { state: Partial<LibraryState> | null };
             if (result.state) {
@@ -1917,7 +1914,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     knowledgeReadCount(entityId) {
       return state.readReceipts.filter((receipt) => receipt.entityType === 'knowledge' && receipt.entityId === entityId).length;
     },
-  }), [currentUser, currentUserId, dataError, isAuthLoading, isDataLoading, isSaving, queryClient, state]);
+  }), [currentUser, currentUserId, dataError, isAuthLoading, isDataLoading, isSaving, state]);
 
   return <LibraryContext.Provider value={value}>{children}</LibraryContext.Provider>;
 }

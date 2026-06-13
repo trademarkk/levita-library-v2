@@ -60,6 +60,7 @@ const APP_STATE_BACKUP_RETENTION_DAYS = Number(process.env.APP_STATE_BACKUP_RETE
 const APP_STATE_BACKUP_MAX_ROWS = Number(process.env.APP_STATE_BACKUP_MAX_ROWS || 20);
 const SESSION_COOKIE_NAME = 'levtia_session';
 const SESSION_TTL_MS = Number(process.env.LEVTIA_SESSION_TTL_DAYS || 7) * 24 * 60 * 60 * 1000;
+const STATE_SLICE_CACHE_TTL_MS = Number(process.env.LEVTIA_STATE_SLICE_CACHE_TTL_MS || 5000);
 const AUTH_SECRET = process.env.LEVTIA_AUTH_SECRET
   || process.env.CRON_SECRET
   || process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -72,6 +73,17 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const useSupabase = STORAGE_DRIVER === 'supabase';
 const useSupabaseTables = useSupabase && DATA_MODE === 'tables';
 const usePrismaState = useSupabase && DATA_MODE === 'prisma';
+
+const stateSliceCache = new Map();
+const stateSliceInFlight = new Map();
+
+function stateSliceCacheKey(slice, params = {}) {
+  return `${slice}:${params.month || 'default'}`;
+}
+
+function clearStateSliceCache() {
+  stateSliceCache.clear();
+}
 
 if (useSupabase && (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY)) {
   throw new Error('Supabase storage requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.');
@@ -859,7 +871,11 @@ function moscowCloseDateParts(value = new Date()) {
 }
 
 async function closeDueAdminShifts() {
-  if (usePrismaState) return closeDuePrismaAdminShifts(prisma);
+  if (usePrismaState) {
+    const result = await closeDuePrismaAdminShifts(prisma);
+    if (result?.closed) clearStateSliceCache();
+    return result;
+  }
   const current = moscowCloseDateParts();
   if (current.hour < 23) {
     return { ok: true, skipped: true, reason: 'before-23-msk', closed: 0, date: current.date };
@@ -1612,7 +1628,23 @@ export async function getState() {
 }
 
 async function getStateSlice(slice, params = {}) {
-  if (usePrismaState) return readStateSliceFromPrisma(prisma, slice, params);
+  if (usePrismaState) {
+    const key = stateSliceCacheKey(slice, params);
+    const cached = stateSliceCache.get(key);
+    if (cached && Date.now() - cached.loadedAt < STATE_SLICE_CACHE_TTL_MS) return cached.payload;
+    const active = stateSliceInFlight.get(key);
+    if (active) return active;
+    const load = readStateSliceFromPrisma(prisma, slice, params)
+      .then((payload) => {
+        stateSliceCache.set(key, { payload, loadedAt: Date.now() });
+        return payload;
+      })
+      .finally(() => {
+        stateSliceInFlight.delete(key);
+      });
+    stateSliceInFlight.set(key, load);
+    return load;
+  }
   const payload = await getState();
   const state = payload?.state || {};
   const month = String(params.month || '').slice(0, 7);
@@ -1689,6 +1721,7 @@ export async function saveState(state) {
       supabase.from('app_state').upsert({ id: 'main', payload: stateToSave, updated_at: updatedAt }, { onConflict: 'id' }),
       'upsert app state',
     );
+    clearStateSliceCache();
     return { state: sanitizeStateForClient(stateToSave), updatedAt };
   }
   const upsertState = db.prepare(`
@@ -1704,6 +1737,7 @@ export async function saveState(state) {
     await cleanupAppStateBackups(updatedAt);
   }
   upsertState.run('main', JSON.stringify(stateToSave), updatedAt);
+  clearStateSliceCache();
   return { state: sanitizeStateForClient(stateToSave), updatedAt };
 }
 
@@ -1815,6 +1849,7 @@ async function syncLevitaCallReview(body) {
   if (event === 'deleted' || event === 'delete') {
     if (usePrismaState) {
       await applyPrismaMutation(prisma, 'callReview.delete', { externalId });
+      clearStateSliceCache();
       const next = await getState();
       return { ok: true, event, externalId, deleted: true, callReviewsCount: next?.state?.callReviews?.length || 0, updatedAt: next?.updatedAt || new Date().toISOString() };
     }
@@ -1835,6 +1870,7 @@ async function syncLevitaCallReview(body) {
 
   if (usePrismaState) {
     await applyPrismaMutation(prisma, 'callReview.upsert', review);
+    clearStateSliceCache();
     const next = await getState();
     return { ok: true, event, externalId, deleted: false, callReviewsCount: next?.state?.callReviews?.length || 0, updatedAt: next?.updatedAt || new Date().toISOString() };
   }
@@ -1886,6 +1922,7 @@ async function resetState() {
     for (const [table, column] of tables) {
       await prisma.$executeRawUnsafe(`delete from public.${table} where ${column} is not null`);
     }
+    clearStateSliceCache();
     return;
   }
   if (useSupabaseTables) {
@@ -1920,13 +1957,16 @@ async function resetState() {
     for (const [table, column] of tables) {
       await supabaseRun(supabase.from(table).delete().not(column, 'is', null), `reset ${table}`);
     }
+    clearStateSliceCache();
     return;
   }
   if (useSupabase) {
     await supabaseRun(supabase.from('app_state').delete().eq('id', 'main'), 'delete app state');
+    clearStateSliceCache();
     return;
   }
   db.prepare('DELETE FROM app_state WHERE id = ?').run('main');
+  clearStateSliceCache();
 }
 
 async function readMutationActor(actorId) {
@@ -2043,6 +2083,7 @@ export async function handleApiRequest(request, response) {
       if (legacyOk) {
         if (usePrismaState) {
           await applyPrismaMutation(prisma, 'employee.update', { id: user.id, input: { password } }, user);
+          clearStateSliceCache();
           const nextUser = { ...user, password: '', passwordHash: hashPassword(password) };
           send(response, 200, { ok: true, user: publicUser(nextUser), route: roleRoute(user.role) }, { 'Set-Cookie': sessionCookie(createSessionToken(nextUser), request) });
           return;
@@ -2092,8 +2133,10 @@ export async function handleApiRequest(request, response) {
           ? { ...item, password: '', passwordHash: hashPassword(password) }
           : item),
       };
-      if (usePrismaState) await applyPrismaMutation(prisma, 'employee.update', { id: user.id, input: { password } }, user);
-      else await saveState(nextState);
+      if (usePrismaState) {
+        await applyPrismaMutation(prisma, 'employee.update', { id: user.id, input: { password } }, user);
+        clearStateSliceCache();
+      } else await saveState(nextState);
       send(response, 200, { ok: true });
       return;
     }
@@ -2201,6 +2244,7 @@ export async function handleApiRequest(request, response) {
       }
       const actor = await requireSessionUser(request);
       await applyPrismaMutation(prisma, body.action, body.payload || {}, actor);
+      clearStateSliceCache();
       if (body.returnState === false) {
         send(response, 200, { ok: true, state: null, updatedAt: new Date().toISOString(), skipRefresh: true });
         return;

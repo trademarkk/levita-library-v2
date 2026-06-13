@@ -9,12 +9,14 @@ Use:
 ```env
 LEVTIA_STORAGE_DRIVER=supabase
 LEVTIA_DATA_MODE=prisma
+LEVTIA_DATABASE_URL_MODE=auto
 DATABASE_URL="postgresql://postgres.<project-ref>:<password>@aws-1-eu-west-2.pooler.supabase.com:6543/postgres?pgbouncer=true"
 DIRECT_URL="postgresql://postgres.<project-ref>:<password>@aws-1-eu-west-2.pooler.supabase.com:5432/postgres"
 ```
 
-`DATABASE_URL` is used by the app runtime through the Supabase transaction pooler.
-`DIRECT_URL` is reserved for migrations and direct schema work.
+In `auto` mode the app runtime prefers `DIRECT_URL` because it uses Supabase session pooling and gives Prisma stable long-lived connections.
+Set `LEVTIA_DATABASE_URL_MODE=transaction` only if the transaction pooler is known to be healthy for the deployment.
+`DIRECT_URL` is still used by Prisma migrations and direct schema work.
 
 ## Read model
 
