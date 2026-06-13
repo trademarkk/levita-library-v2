@@ -12,7 +12,7 @@ import { TrainerHiringSection } from './TrainerHiringSection';
 import { useLibrary } from '../domain/LibraryContext';
 import { employeeStatusLabels, formatDate, formatTime, roleLabels, studioLabels } from '../domain/labels';
 import { assistantManagedTeamRoles, can } from '../domain/permissions';
-import type { ChecklistControlStatus, EmployeeStatus, Role } from '../domain/types';
+import type { BusinessModelScope, ChecklistControlStatus, EmployeeStatus, Role } from '../domain/types';
 import { BookOpen, CheckSquare, Edit2, FileText, Info, Link as LinkIcon, ListChecks, Plus, Save, Trash2, UserRound, X } from 'lucide-react';
 import { SEARCH_NAVIGATION_EVENT, type SearchNavigationDetail } from './searchNavigation';
 
@@ -138,6 +138,35 @@ export function AssistantDashboard() {
 }
 
 const assistantTeamRoles: Role[] = assistantManagedTeamRoles;
+
+const assistantBusinessModelLabels: Record<BusinessModelScope, string> = {
+  SUBSCRIPTION: 'Подписки',
+  MEMBERSHIP: 'Абонементы',
+  ALL: 'Для всех',
+};
+
+const assistantBusinessModelHelp: Record<BusinessModelScope, string> = {
+  SUBSCRIPTION: 'Подписная модель',
+  MEMBERSHIP: 'Абонементная модель',
+  ALL: 'Подходит обеим моделям',
+};
+
+const assistantBusinessModelOptions: BusinessModelScope[] = ['SUBSCRIPTION', 'MEMBERSHIP', 'ALL'];
+
+function AssistantBusinessModelSelect({ value, onChange }: { value: BusinessModelScope; onChange: (value: BusinessModelScope) => void }) {
+  return (
+    <label className="grid gap-2 text-sm text-[#a89b8f]">
+      Бизнес-модель
+      <select value={value} onChange={(event) => onChange(event.target.value as BusinessModelScope)} className="field">
+        {assistantBusinessModelOptions.map((option) => (
+          <option key={option} value={option}>
+            {assistantBusinessModelLabels[option]} - {assistantBusinessModelHelp[option]}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
 
 function AssistantTeamSection() {
   const { state, createEmployee, updateEmployee, deleteEmployee } = useLibrary();
@@ -347,6 +376,7 @@ function AssistantKnowledgeSection() {
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [hashtags, setHashtags] = useState('');
+  const [businessModel, setBusinessModel] = useState<BusinessModelScope>('ALL');
   const [error, setError] = useState<string | null>(null);
 
   const save = () => {
@@ -362,11 +392,12 @@ function AssistantKnowledgeSection() {
       role: 'ASSISTANT',
       category: 'KNOWLEDGE',
       hashtags: hashtags.trim(),
-      businessModel: 'ALL',
+      businessModel,
     });
     setTitle('');
     setContent('');
     setHashtags('');
+    setBusinessModel('ALL');
     setError(null);
   };
 
@@ -378,6 +409,7 @@ function AssistantKnowledgeSection() {
         <div className="mt-5 grid gap-3">
           <input value={title} onChange={(event) => setTitle(event.target.value)} className="field" placeholder="Название материала" />
           <textarea value={content} onChange={(event) => setContent(event.target.value)} className="field min-h-28" placeholder="Текст материала" />
+          <AssistantBusinessModelSelect value={businessModel} onChange={setBusinessModel} />
           <input value={hashtags} onChange={(event) => setHashtags(event.target.value)} className="field" placeholder="#теги, если нужны" />
           {error && <p className="text-sm text-[#f0c5cf]">{error}</p>}
           <button type="button" onClick={save} className="primary-action inline-flex items-center gap-2 justify-self-start">
@@ -558,11 +590,14 @@ function TemplatesSection() {
   const { state, createTemplate, updateTemplate, deleteTemplate } = useLibrary();
   const templates = state.templates.filter((template) => template.role === 'ASSISTANT');
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState({ title: '', body: '', purpose: '' });
+  const [draft, setDraft] = useState({ title: '', body: '', purpose: '', businessModel: 'ALL' as BusinessModelScope });
+  const [isCreating, setIsCreating] = useState(false);
+  const [createDraft, setCreateDraft] = useState({ title: '', body: '', purpose: '', businessModel: 'ALL' as BusinessModelScope });
+  const [createError, setCreateError] = useState<string | null>(null);
 
-  const startEdit = (template: { id: string; title: string; body: string; purpose?: string | null }) => {
+  const startEdit = (template: { id: string; title: string; body: string; purpose?: string | null; businessModel?: BusinessModelScope }) => {
     setEditingId(template.id);
-    setDraft({ title: template.title, body: template.body, purpose: template.purpose ?? '' });
+    setDraft({ title: template.title, body: template.body, purpose: template.purpose ?? '', businessModel: template.businessModel ?? 'ALL' });
   };
 
   const saveEdit = () => {
@@ -571,12 +606,57 @@ function TemplatesSection() {
     setEditingId(null);
   };
 
+  const openCreateForm = () => {
+    setEditingId(null);
+    setCreateDraft({ title: '', body: '', purpose: '', businessModel: 'ALL' });
+    setCreateError(null);
+    setIsCreating(true);
+  };
+
+  const saveCreate = () => {
+    const title = createDraft.title.trim();
+    const body = createDraft.body.trim();
+    if (!title || !body) {
+      setCreateError('Заполните название и текст шаблона.');
+      return;
+    }
+    createTemplate({
+      title,
+      body,
+      role: 'ASSISTANT',
+      purpose: createDraft.purpose.trim(),
+      businessModel: createDraft.businessModel,
+    });
+    setCreateDraft({ title: '', body: '', purpose: '', businessModel: 'ALL' });
+    setCreateError(null);
+    setIsCreating(false);
+  };
+
   return (
-    <EditableTemplateList templates={templates} draft={draft} setDraft={setDraft} editingId={editingId} startEdit={startEdit} saveEdit={saveEdit} onAdd={() => createTemplate({ title: 'Новый шаблон ассистента', body: 'Введите текст шаблона...', role: 'ASSISTANT', purpose: 'кандидаты' })} onDelete={deleteTemplate} />
+    <EditableTemplateList
+      templates={templates}
+      draft={draft}
+      setDraft={setDraft}
+      editingId={editingId}
+      startEdit={startEdit}
+      saveEdit={saveEdit}
+      cancelEdit={() => setEditingId(null)}
+      isCreating={isCreating}
+      createDraft={createDraft}
+      setCreateDraft={setCreateDraft}
+      createError={createError}
+      saveCreate={saveCreate}
+      cancelCreate={() => {
+        setIsCreating(false);
+        setCreateError(null);
+      }}
+      onAdd={openCreateForm}
+      onDelete={deleteTemplate}
+    />
   );
 }
 
-function EditableTemplateList({ templates, draft, setDraft, editingId, startEdit, saveEdit, onAdd, onDelete }: any) {
+function EditableTemplateList({ templates, draft, setDraft, editingId, startEdit, saveEdit, cancelEdit, isCreating, createDraft, setCreateDraft, createError, saveCreate, cancelCreate, onAdd, onDelete }: any) {
   return (
     <div>
       <div className="flex justify-end mb-4">
@@ -585,6 +665,27 @@ function EditableTemplateList({ templates, draft, setDraft, editingId, startEdit
           Добавить шаблон
         </button>
       </div>
+      {isCreating && (
+        <GlassCard className="mb-4">
+          <h3 className="text-xl text-[#f5f3f0] mb-4">Новый шаблон ответа</h3>
+          <div className="grid gap-3">
+            <input value={createDraft.title} onChange={(event) => setCreateDraft((value: any) => ({ ...value, title: event.target.value }))} className="field" placeholder="Название шаблона" />
+            <input value={createDraft.purpose} onChange={(event) => setCreateDraft((value: any) => ({ ...value, purpose: event.target.value }))} className="field" placeholder="Назначение, если нужно" />
+            <AssistantBusinessModelSelect value={createDraft.businessModel} onChange={(businessModel) => setCreateDraft((value: any) => ({ ...value, businessModel }))} />
+            <textarea value={createDraft.body} onChange={(event) => setCreateDraft((value: any) => ({ ...value, body: event.target.value }))} className="field min-h-28" placeholder="Текст шаблона" />
+            {createError && <p className="text-sm text-[#f0c5cf]">{createError}</p>}
+            <div className="flex flex-wrap gap-3">
+              <button type="button" onClick={saveCreate} className="primary-action inline-flex items-center gap-2">
+                <Save className="h-4 w-4" />
+                Сохранить шаблон
+              </button>
+              <button type="button" onClick={cancelCreate} className="rounded-lg border border-[#c9a98d]/20 px-4 py-2 text-[#f5f3f0] hover:bg-[#2a2630]">
+                Отменить
+              </button>
+            </div>
+          </div>
+        </GlassCard>
+      )}
       <div className="space-y-4">
         {templates.map((template: any, idx: number) => (
           <GlassCard key={template.id} delay={idx * 0.08} data-search-target={`template:${template.id}`}>
@@ -597,7 +698,7 @@ function EditableTemplateList({ templates, draft, setDraft, editingId, startEdit
                 {editingId === template.id ? (
                   <>
                     <button onClick={saveEdit} className="text-[#c9a98d]" aria-label="Сохранить шаблон"><Save className="w-4 h-4" /></button>
-                    <button onClick={() => startEdit({ id: '', title: '', body: '' })} className="text-[#a89b8f]" aria-label="Отменить"><X className="w-4 h-4" /></button>
+                    <button onClick={cancelEdit} className="text-[#a89b8f]" aria-label="Отменить"><X className="w-4 h-4" /></button>
                   </>
                 ) : (
                   <>
@@ -607,7 +708,12 @@ function EditableTemplateList({ templates, draft, setDraft, editingId, startEdit
                 )}
               </div>
             </div>
-            {editingId === template.id ? <textarea value={draft.body} onChange={(event) => setDraft((value: any) => ({ ...value, body: event.target.value }))} className="field min-h-24" /> : <p className="text-sm text-[#a89b8f] leading-relaxed">{template.body}</p>}
+            {editingId === template.id ? (
+              <div className="grid gap-3">
+                <AssistantBusinessModelSelect value={draft.businessModel} onChange={(businessModel) => setDraft((value: any) => ({ ...value, businessModel }))} />
+                <textarea value={draft.body} onChange={(event) => setDraft((value: any) => ({ ...value, body: event.target.value }))} className="field min-h-24" />
+              </div>
+            ) : <p className="text-sm text-[#a89b8f] leading-relaxed">{template.body}</p>}
           </GlassCard>
         ))}
       </div>
