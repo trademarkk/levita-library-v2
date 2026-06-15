@@ -3,6 +3,8 @@ import path from 'path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 
+const apiPort = process.env.LEVTIA_API_PORT || '4174'
+
 export default defineConfig({
   plugins: [
     // The React and Tailwind plugins are both required for Make, even if
@@ -21,7 +23,7 @@ export default defineConfig({
   assetsInclude: ['**/*.svg', '**/*.csv'],
   server: {
     proxy: {
-      '/api': 'http://127.0.0.1:4174',
+      '/api': `http://127.0.0.1:${apiPort}`,
     },
   },
   build: {

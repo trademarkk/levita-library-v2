@@ -15,7 +15,11 @@
     "build": "vite build",
     "prisma:generate": "prisma generate",
     "supabase:push-state": "node scripts/push-state-to-supabase.mjs",
-    "supabase:migrate-tables": "node scripts/migrate-app-state-to-tables.mjs"
+    "supabase:migrate-tables": "node scripts/migrate-app-state-to-tables.mjs",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:serve": "node tests/e2e/setup-e2e-db.mjs && node server/dev.mjs"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",
@@ -81,6 +85,7 @@
     "vaul": "1.1.2"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "@tailwindcss/vite": "4.1.12",
     "@types/react": "18.3.24",
     "@types/react-dom": "18.3.7",

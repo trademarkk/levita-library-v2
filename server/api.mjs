@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { createHmac, pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
 import { readStateFromTables, writeStateToTables } from './table-state.mjs';
@@ -9,7 +9,7 @@ import { applyPrismaMutation, closeDuePrismaAdminShifts, createPrisma, readState
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const dataDir = join(rootDir, 'data');
-const dbPath = join(dataDir, 'levtia-library.sqlite');
+const defaultDbPath = join(dataDir, 'levtia-library.sqlite');
 
 function loadDotEnv() {
   const envPath = join(rootDir, '.env');
@@ -27,6 +27,10 @@ function loadDotEnv() {
 }
 
 loadDotEnv();
+
+const dbPath = process.env.LEVTIA_SQLITE_PATH
+  ? (isAbsolute(process.env.LEVTIA_SQLITE_PATH) ? process.env.LEVTIA_SQLITE_PATH : resolve(rootDir, process.env.LEVTIA_SQLITE_PATH))
+  : defaultDbPath;
 
 function tunePrismaDatabaseUrlForServerless() {
   if (!process.env.DATABASE_URL || process.env.LEVTIA_TUNE_PRISMA_POOL === 'false') return;
@@ -90,7 +94,7 @@ if (useSupabase && (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY)) {
 }
 
 if (!useSupabase) {
-  mkdirSync(dataDir, { recursive: true });
+  mkdirSync(dirname(dbPath), { recursive: true });
 }
 
 const DatabaseSync = useSupabase ? null : (await import('node:sqlite')).DatabaseSync;

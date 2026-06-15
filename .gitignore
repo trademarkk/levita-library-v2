@@ -12,3 +12,5 @@ data/*.sqlite-*
 # Local QA artifacts
 qa-screenshots/
 qa-screenshots-stage2/
+playwright-report/
+test-results/

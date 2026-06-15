@@ -13,6 +13,7 @@ type SearchResult = {
   title: string;
   description: string;
   body?: string;
+  hashtags?: string;
   role?: Role;
   category?: KnowledgeCategory;
   businessModel?: BusinessModelScope;
@@ -34,7 +35,7 @@ function normalized(value: string) {
 }
 
 function matches(result: SearchResult, query: string) {
-  const haystack = normalized(`${result.title} ${result.description} ${result.body ?? ''} ${result.url ?? ''}`);
+  const haystack = normalized(`${result.title} ${result.description} ${result.body ?? ''} ${result.hashtags ?? ''} ${result.url ?? ''}`);
   return normalized(query).split(/\s+/).filter(Boolean).every((part) => haystack.includes(part));
 }
 
@@ -59,6 +60,7 @@ export function GlobalSearch() {
           title: entry.title,
           description: `${roleLabels[entry.role]}${entry.isActual === false ? ' · не актуально' : ''}`,
           body: entry.content,
+          hashtags: entry.hashtags,
           role: entry.role,
           category: entry.category,
           businessModel: entry.businessModel ?? 'ALL',

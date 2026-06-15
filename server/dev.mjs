@@ -5,10 +5,15 @@ import { fileURLToPath } from 'node:url';
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const isWindows = process.platform === 'win32';
 const viteBin = join(rootDir, 'node_modules', '.bin', isWindows ? 'vite.cmd' : 'vite');
+const viteArgs = ['--host', '127.0.0.1'];
+
+if (process.env.LEVTIA_VITE_PORT) {
+  viteArgs.push('--port', process.env.LEVTIA_VITE_PORT, '--strictPort');
+}
 
 const children = [
   spawn(process.execPath, ['server/api.mjs'], { cwd: rootDir, stdio: 'inherit' }),
-  spawn(viteBin, ['--host', '127.0.0.1'], { cwd: rootDir, stdio: 'inherit', shell: isWindows }),
+  spawn(viteBin, viteArgs, { cwd: rootDir, stdio: 'inherit', shell: isWindows }),
 ];
 
 let shuttingDown = false;
