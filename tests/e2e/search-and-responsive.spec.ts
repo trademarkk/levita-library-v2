@@ -27,6 +27,20 @@ test.describe('Поиск и адаптивность', () => {
     await expect(page.getByText('Материал для проверки поиска по хештегу.')).toBeVisible();
   });
 
+  test('глобальный поиск переключает группу рабочих ссылок', async ({ page }) => {
+    await loginAs(page, 'assistant');
+    await openTab(page, 'Рабочие ссылки и таблицы');
+    await expect(page.getByRole('heading', { name: 'Таблица ассистента' })).toBeVisible();
+    await openTab(page, 'Важные задачи');
+
+    await page.getByPlaceholder('Поиск по базе, регламентам, ссылкам').fill('Таблица тренеров');
+    await page.getByRole('button', { name: /Таблица тренеров/ }).click();
+
+    await expect(page.getByRole('button', { name: 'Рабочие ссылки и таблицы', exact: true })).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('heading', { name: 'Таблица тренеров' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Таблица ассистента' })).toHaveCount(0);
+  });
+
   test('кабинет ассистента открывается на мобильном viewport', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await loginAs(page, 'assistant');
@@ -35,6 +49,6 @@ test.describe('Поиск и адаптивность', () => {
     await expect(page.getByText('Роль', { exact: true })).toBeVisible();
 
     await openTab(page, 'Рабочие ссылки и таблицы');
-    await expect(page.getByRole('heading', { name: 'Рабочая таблица админов' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Таблица ассистента' })).toBeVisible();
   });
 });

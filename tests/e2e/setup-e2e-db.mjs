@@ -79,7 +79,7 @@ const state = {
     { id: 'template-admin-1', title: 'Подтверждение записи', body: 'Подтверждаем вашу запись на пробное занятие.', role: 'ADMIN', businessModel: 'ALL', purpose: 'клиенты', createdById: 'user-senior-admin', createdAt: now },
   ],
   links: [
-    { id: 'link-assistant-1', title: 'Таблица кандидатов', url: 'https://example.com/candidates', category: 'WORK_TABLE', role: 'ASSISTANT', description: 'Рабочая таблица ассистента.', createdAt: now },
+    { id: 'link-assistant-1', title: 'Таблица ассистента', url: 'https://example.com/candidates', category: 'WORK_TABLE', role: 'ASSISTANT', description: 'Рабочая таблица ассистента.', createdAt: now },
     { id: 'link-admin-1', title: 'Рабочая таблица админов', url: 'https://example.com/admins', category: 'WORK_TABLE', role: 'ADMIN', description: 'Общая таблица администраторов.', createdAt: now },
     { id: 'link-trainer-1', title: 'Таблица тренеров', url: 'https://example.com/trainers', category: 'WORK_TABLE', role: 'TRAINER', description: 'Общая таблица тренеров.', createdAt: now },
   ],

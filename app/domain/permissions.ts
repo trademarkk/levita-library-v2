@@ -39,14 +39,22 @@ export const managedContentRoles: Role[] = ['ASSISTANT', 'ADMIN', 'SENIOR_ADMIN'
 export const assistantManagedTeamRoles: Role[] = ['SENIOR_ADMIN', 'ADMIN', 'SENIOR_TRAINER', 'TRAINER'];
 export const adminRoles: Role[] = ['ADMIN', 'SENIOR_ADMIN'];
 export const trainerRoles: Role[] = ['TRAINER', 'SENIOR_TRAINER'];
-export type WorkLinkGroup = 'admins' | 'trainers';
+export const assistantRoles: Role[] = ['ASSISTANT'];
+export type WorkLinkGroup = 'admins' | 'trainers' | 'assistants';
 
 export function workLinkRolesForGroup(group: WorkLinkGroup): Role[] {
-  return group === 'admins' ? adminRoles : trainerRoles;
+  if (group === 'trainers') return trainerRoles;
+  if (group === 'assistants') return assistantRoles;
+  return adminRoles;
+}
+
+export function workLinkGroupForRole(role: Role | null | undefined): WorkLinkGroup {
+  if (role === 'ASSISTANT') return 'assistants';
+  return isTrainerRole(role) ? 'trainers' : 'admins';
 }
 
 export function defaultWorkLinkGroupForRole(role: Role | null | undefined): WorkLinkGroup {
-  return isTrainerRole(role) ? 'trainers' : 'admins';
+  return workLinkGroupForRole(role);
 }
 
 const seniorAdminInheritedResources: PermissionResource[] = ['regulations', 'importantInfo', 'knowledge', 'messageTemplates', 'workLinks'];
@@ -77,6 +85,7 @@ export function visibleContentRolesFor(subject: PermissionSubject, resource?: Pe
   const role = roleOf(subject);
   if (role === 'OWNER') return managedContentRoles;
   if (resource === 'messageTemplates' && isTrainerRole(role)) return [];
+  if (resource === 'workLinks' && role === 'ASSISTANT') return [...assistantRoles, ...adminRoles, ...trainerRoles];
   if (resource === 'workLinks' && isAdminRole(role)) return adminRoles;
   if (resource === 'workLinks' && isTrainerRole(role)) return trainerRoles;
   if (role === 'SENIOR_ADMIN' && resource && seniorAdminInheritedResources.includes(resource)) return ['SENIOR_ADMIN', 'ADMIN'];
@@ -90,7 +99,7 @@ export function manageableContentRolesFor(subject: PermissionSubject, resource: 
   if (role === 'OWNER') return managedContentRoles;
   if ((resource === 'messageTemplates' || resource === 'workLinks') && role === 'SENIOR_ADMIN') return ['SENIOR_ADMIN', 'ADMIN'];
   if (resource === 'workLinks' && role === 'SENIOR_TRAINER') return ['SENIOR_TRAINER', 'TRAINER'];
-  if (resource === 'workLinks' && role === 'ASSISTANT') return [...adminRoles, ...trainerRoles];
+  if (resource === 'workLinks' && role === 'ASSISTANT') return [...assistantRoles, ...adminRoles, ...trainerRoles];
   if (resource === 'messageTemplates' && role === 'ASSISTANT') return ['ASSISTANT'];
   if (resource === 'trainingMaterials' && role === 'ASSISTANT') return ['ASSISTANT'];
   return [];

@@ -38,6 +38,16 @@ test.describe('Права и навигация по ролям', () => {
     await expect(page.getByRole('heading', { name: 'Новый сотрудник' })).toBeVisible();
     await expect(page.getByPlaceholder('Имя')).toBeVisible();
     await expect(page.getByPlaceholder('Почта')).toBeVisible();
+    await page.getByRole('button', { name: 'Закрыть окно' }).click();
+
+    await openTab(page, 'Рабочие ссылки и таблицы');
+    await expect(page.getByRole('button', { name: 'Администраторы', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Тренеры', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Ассистент', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Ассистент', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Таблица ассистента' })).toBeVisible();
+    await page.getByRole('button', { name: 'Добавить ссылку' }).click();
+    await expect(page.getByRole('heading', { name: 'Добавить рабочую ссылку или таблицу' })).toBeVisible();
   });
 
   test('администратор может войти без смены только для изучения материалов', async ({ page }) => {
@@ -62,10 +72,41 @@ test.describe('Права и навигация по ролям', () => {
     await expect(page.getByText('Поле ссылки обязательно.')).toBeHidden();
 
     await openTab(page, 'Рабочие ссылки и таблицы');
+    await expect(page.getByRole('heading', { name: 'Рабочая таблица админов' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Таблица ассистента' })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Таблица тренеров' })).toHaveCount(0);
     await page.getByRole('button', { name: 'Добавить ссылку' }).click();
     await expect(page.getByRole('heading', { name: 'Добавить рабочую ссылку или таблицу' })).toBeVisible();
     await page.getByRole('button', { name: 'Сохранить' }).click();
     await expect(page.getByText('Укажите название.')).toBeVisible();
+  });
+
+  test('ассистент управляет ссылками ассистента, администраторов и тренеров', async ({ page }) => {
+    await loginAs(page, 'assistant');
+    await openTab(page, 'Рабочие ссылки и таблицы');
+
+    await expect(page.getByRole('button', { name: 'Администраторы', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Тренеры', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Ассистент', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Таблица ассистента' })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Добавить ссылку' }).click();
+    await expect(page.getByRole('heading', { name: 'Добавить рабочую ссылку или таблицу' })).toBeVisible();
+    await expect(page.locator('select').first()).toHaveValue('ASSISTANT');
+    await expect(page.locator('select').first().locator('option')).toHaveCount(1);
+    await page.getByRole('button', { name: 'Отмена' }).click();
+
+    await page.getByRole('button', { name: 'Администраторы', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Рабочая таблица админов' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Таблица ассистента' })).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Тренеры', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Таблица тренеров' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Рабочая таблица админов' })).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Добавить ссылку' }).click();
+    await expect(page.getByRole('heading', { name: 'Добавить рабочую ссылку или таблицу' })).toBeVisible();
+    await expect(page.locator('select').first().locator('option')).toHaveCount(2);
   });
 
   test('старший тренер управляет тренерскими ссылками и видит приём тренера', async ({ page }) => {
@@ -76,6 +117,8 @@ test.describe('Права и навигация по ролям', () => {
 
     await openTab(page, 'Рабочие ссылки и таблицы');
     await expect(page.getByRole('heading', { name: 'Таблица тренеров' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Таблица ассистента' })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Рабочая таблица админов' })).toHaveCount(0);
     await page.getByRole('button', { name: 'Добавить ссылку' }).click();
     await expect(page.getByRole('heading', { name: 'Добавить рабочую ссылку или таблицу' })).toBeVisible();
 
@@ -89,5 +132,9 @@ test.describe('Права и навигация по ролям', () => {
     await expect(page.getByRole('button', { name: 'Рабочие ссылки и таблицы', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Рейтинг тренеров', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Шаблоны сообщений', exact: true })).toHaveCount(0);
+
+    await openTab(page, 'Рабочие ссылки и таблицы');
+    await expect(page.getByRole('heading', { name: 'Таблица тренеров' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Таблица ассистента' })).toHaveCount(0);
   });
 });

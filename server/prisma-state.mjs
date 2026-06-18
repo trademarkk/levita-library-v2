@@ -712,6 +712,32 @@ async function ensureChecklistForUser(prisma, user) {
   return checklistId;
 }
 
+const WORK_LINK_ROLES_BY_ACTOR = {
+  OWNER: ['ASSISTANT', 'ADMIN', 'SENIOR_ADMIN', 'TRAINER', 'SENIOR_TRAINER'],
+  ASSISTANT: ['ASSISTANT', 'ADMIN', 'SENIOR_ADMIN', 'TRAINER', 'SENIOR_TRAINER'],
+  SENIOR_ADMIN: ['ADMIN', 'SENIOR_ADMIN'],
+  SENIOR_TRAINER: ['TRAINER', 'SENIOR_TRAINER'],
+};
+
+function workLinkPermissionError() {
+  const error = new Error('Недостаточно прав для управления рабочими ссылками этой роли.');
+  error.statusCode = 403;
+  return error;
+}
+
+async function assertWorkLinkMutationAllowed(prisma, actor, { linkId = null, targetRole = null } = {}) {
+  const allowedRoles = WORK_LINK_ROLES_BY_ACTOR[actor?.role] || [];
+  if (!allowedRoles.length) throw workLinkPermissionError();
+
+  if (linkId) {
+    const rows = await prisma.$queryRaw`select role from public.helpful_links where id = ${linkId} limit 1`;
+    const existingRole = rows[0]?.role || null;
+    if (!existingRole || !allowedRoles.includes(existingRole)) throw workLinkPermissionError();
+  }
+
+  if (targetRole && !allowedRoles.includes(targetRole)) throw workLinkPermissionError();
+}
+
 export async function applyPrismaMutation(prisma, action, payload = {}, actor = null) {
   const now = nowIso();
   switch (action) {
@@ -826,9 +852,11 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
       await prisma.$executeRaw`delete from public.response_templates where id = ${payload.id}`;
       return;
     case 'link.create':
+      await assertWorkLinkMutationAllowed(prisma, actor, { targetRole: payload.role });
       await prisma.$executeRaw`insert into public.helpful_links (id, title, url, description, role, category, created_at, updated_at) values (${payload.id || newId('link')}, ${payload.title}, ${payload.url}, ${payload.description || null}, ${payload.role}::public.levtia_role, ${payload.category || 'HELPFUL'}::public.link_category, now(), now())`;
       return;
     case 'link.update':
+      await assertWorkLinkMutationAllowed(prisma, actor, { linkId: payload.id, targetRole: payload.input?.role || null });
       await prisma.$executeRaw`update public.helpful_links set title = coalesce(${payload.input?.title ?? null}, title), url = coalesce(${payload.input?.url ?? null}, url), description = coalesce(${payload.input?.description ?? null}, description), role = coalesce(${payload.input?.role ?? null}::public.levtia_role, role), category = coalesce(${payload.input?.category ?? null}::public.link_category, category), updated_at = now() where id = ${payload.id}`;
       return;
     case 'link.pin': {
@@ -845,6 +873,7 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
       return;
     }
     case 'link.delete':
+      await assertWorkLinkMutationAllowed(prisma, actor, { linkId: payload.id });
       await prisma.$executeRaw`delete from public.content_favorites where entity_type = 'link' and entity_id = ${payload.id}`;
       await prisma.$executeRaw`delete from public.helpful_links where id = ${payload.id}`;
       return;

@@ -4,7 +4,7 @@ import { GlassCard } from './GlassCard';
 import { TabNavigation } from './TabNavigation';
 import { useLibrary } from '../domain/LibraryContext';
 import { formatDate, roleLabels } from '../domain/labels';
-import { defaultWorkLinkGroupForRole, knowledgeCategoryResource, manageableContentRolesFor, managedContentRoles, visibleContentRolesFor, workLinkRolesForGroup, type WorkLinkGroup } from '../domain/permissions';
+import { defaultWorkLinkGroupForRole, knowledgeCategoryResource, manageableContentRolesFor, managedContentRoles, visibleContentRolesFor, workLinkGroupForRole, workLinkRolesForGroup, type WorkLinkGroup } from '../domain/permissions';
 import type { BusinessModelScope, FavoriteEntityType, HelpfulLink, KnowledgeCategory, KnowledgeEntry, LinkCategory, Role } from '../domain/types';
 import { getPendingSearchTarget, SEARCH_NAVIGATION_EVENT, type SearchNavigationDetail } from './searchNavigation';
 
@@ -13,6 +13,7 @@ const messageTemplateManagedRoles = managedContentRoles.filter((role) => role !=
 const workLinkGroupTabs: Array<{ id: WorkLinkGroup; label: string }> = [
   { id: 'admins', label: 'Администраторы' },
   { id: 'trainers', label: 'Тренеры' },
+  { id: 'assistants', label: 'Ассистент' },
 ];
 
 const roleContentLabels: Record<Role, string> = {
@@ -596,7 +597,11 @@ export function RoleLinksViewer({ role }: { role: Role }) {
   useEffect(() => {
     const applyTarget = (detail: SearchNavigationDetail | null) => {
       if (!detail || detail.entityType !== 'link') return;
-      if (detail.role && !visibleRoles.includes(detail.role)) return;
+      if (detail.role && canChooseGroup) {
+        setWorkLinkGroup(workLinkGroupForRole(detail.role));
+      } else if (detail.role && !visibleRoles.includes(detail.role)) {
+        return;
+      }
       setPinFilter('all');
     };
 
@@ -604,7 +609,7 @@ export function RoleLinksViewer({ role }: { role: Role }) {
     const handler = (event: Event) => applyTarget((event as CustomEvent<SearchNavigationDetail>).detail);
     window.addEventListener(SEARCH_NAVIGATION_EVENT, handler);
     return () => window.removeEventListener(SEARCH_NAVIGATION_EVENT, handler);
-  }, [visibleRoleKey]);
+  }, [canChooseGroup, visibleRoleKey]);
 
   return (
     <div>
@@ -756,7 +761,12 @@ export function RoleLinksManager({ role }: { role: Role }) {
 
   useEffect(() => {
     const applyTarget = (detail: SearchNavigationDetail | null) => {
-      if (!detail || detail.entityType !== 'link' || !detail.role || !manageableRoles.includes(detail.role)) return;
+      if (!detail || detail.entityType !== 'link' || !detail.role) return;
+      if (canChooseGroup) {
+        setWorkLinkGroup(workLinkGroupForRole(detail.role));
+      } else if (!manageableRoles.includes(detail.role)) {
+        return;
+      }
       setActiveRole(detail.role);
     };
 
@@ -764,7 +774,7 @@ export function RoleLinksManager({ role }: { role: Role }) {
     const handler = (event: Event) => applyTarget((event as CustomEvent<SearchNavigationDetail>).detail);
     window.addEventListener(SEARCH_NAVIGATION_EVENT, handler);
     return () => window.removeEventListener(SEARCH_NAVIGATION_EVENT, handler);
-  }, [manageableRoleKey]);
+  }, [canChooseGroup, manageableRoleKey]);
 
   const reset = () => {
     setIsFormOpen(false);
