@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
 import { readStateFromTables, writeStateToTables } from './table-state.mjs';
-import { applyPrismaMutation, closeDuePrismaAdminShifts, createPrisma, readStateFromPrisma, readStateSliceFromPrisma } from './prisma-state.mjs';
+import { applyPrismaMutation, closeDuePrismaAdminShifts, createPrisma, ensureContentMediaSchema, readStateFromPrisma, readStateSliceFromPrisma } from './prisma-state.mjs';
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const dataDir = join(rootDir, 'data');
@@ -74,6 +74,10 @@ const STORAGE_DRIVER = process.env.LEVTIA_STORAGE_DRIVER || 'sqlite';
 const DATA_MODE = process.env.LEVTIA_DATA_MODE || 'app_state';
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const CONTENT_ATTACHMENTS_BUCKET = process.env.SUPABASE_CONTENT_BUCKET || 'content-attachments';
+const MAX_CONTENT_ATTACHMENTS = 10;
+const MAX_CONTENT_ATTACHMENT_BYTES = 2 * 1024 * 1024;
+const CONTENT_ATTACHMENT_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const useSupabase = STORAGE_DRIVER === 'supabase';
 const useSupabaseTables = useSupabase && DATA_MODE === 'tables';
 const usePrismaState = useSupabase && DATA_MODE === 'prisma';
@@ -367,6 +371,24 @@ async function sessionUserFromRequest(request) {
   const token = parseCookies(request)[SESSION_COOKIE_NAME];
   const session = verifySessionToken(token);
   if (!session?.userId) return null;
+  if (usePrismaState && prisma) {
+    const [user] = await prisma.$queryRaw`
+      select id, name, email, role, status, join_date, created_at
+      from public.users
+      where id = ${session.userId}
+      limit 1
+    `;
+    if (!user || user.status === 'blocked') return null;
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      status: user.status,
+      joinDate: user.join_date || '',
+      createdAt: user.created_at instanceof Date ? user.created_at.toISOString() : String(user.created_at || ''),
+    };
+  }
   const payload = await getState();
   const user = payload?.state?.users?.find((item) => item.id === session.userId) ?? null;
   if (!user || user.status === 'blocked') return null;
@@ -379,6 +401,52 @@ async function requireSessionUser(request) {
   const error = new Error('Требуется вход в приложение.');
   error.statusCode = 401;
   throw error;
+}
+
+function contentAttachmentExtension(mimeType) {
+  if (mimeType === 'image/jpeg') return '.jpg';
+  if (mimeType === 'image/webp') return '.webp';
+  return '.png';
+}
+
+function contentAttachmentPayload(body) {
+  const mimeType = String(body.mimeType || '').trim().toLowerCase();
+  const encoded = String(body.base64 || '').replace(/^data:[^;]+;base64,/, '');
+  if (!CONTENT_ATTACHMENT_TYPES.has(mimeType)) {
+    const error = new Error('Разрешены только изображения PNG, JPEG и WebP.');
+    error.statusCode = 400;
+    throw error;
+  }
+  let bytes;
+  try {
+    bytes = Buffer.from(encoded, 'base64');
+  } catch {
+    bytes = Buffer.alloc(0);
+  }
+  if (!bytes.length || bytes.length > MAX_CONTENT_ATTACHMENT_BYTES) {
+    const error = new Error('Размер одного скриншота должен быть от 1 байта до 2 МБ.');
+    error.statusCode = 400;
+    throw error;
+  }
+  return {
+    bytes,
+    mimeType,
+    fileName: String(body.fileName || `screenshot${contentAttachmentExtension(mimeType)}`).slice(0, 240),
+  };
+}
+
+function ensureContentAttachmentsAvailable() {
+  if (!usePrismaState || !prisma || !supabase) {
+    const error = new Error('Хранилище скриншотов доступно только в режиме Supabase + Prisma.');
+    error.statusCode = 409;
+    throw error;
+  }
+}
+
+async function removeContentStorageObjects(paths) {
+  if (!paths.length || !supabase) return;
+  const { error } = await supabase.storage.from(CONTENT_ATTACHMENTS_BUCKET).remove(paths);
+  if (error) throw new Error(`Не удалось удалить скриншот из Storage: ${error.message}`);
 }
 
 function maxStudioName(studio) {
@@ -2236,6 +2304,138 @@ export async function handleApiRequest(request, response) {
       return;
     }
 
+    if (url.pathname === '/api/content-attachments' && request.method === 'POST') {
+      ensureContentAttachmentsAvailable();
+      await requireSessionUser(request);
+      await ensureContentMediaSchema(prisma);
+      const body = JSON.parse(await readBody(request) || '{}');
+      const knowledgeEntryId = String(body.knowledgeEntryId || '').trim();
+      if (!knowledgeEntryId) {
+        send(response, 400, { error: 'knowledgeEntryId is required' });
+        return;
+      }
+      const [entry] = await prisma.$queryRaw`
+        select id
+        from public.knowledge_entries
+        where id = ${knowledgeEntryId}
+        limit 1
+      `;
+      if (!entry) {
+        send(response, 404, { error: 'Карточка не найдена.' });
+        return;
+      }
+      const [attachmentStats] = await prisma.$queryRaw`
+        select count(*)::integer as count, coalesce(max(position), -1)::integer + 1 as next_position
+        from public.content_attachments
+        where knowledge_entry_id = ${knowledgeEntryId}
+      `;
+      if (Number(attachmentStats?.count || 0) >= MAX_CONTENT_ATTACHMENTS) {
+        send(response, 400, { error: `К одной карточке можно прикрепить не больше ${MAX_CONTENT_ATTACHMENTS} скриншотов.` });
+        return;
+      }
+      const file = contentAttachmentPayload(body);
+      const id = `content-attachment-${randomUUID()}`;
+      const storagePath = `${knowledgeEntryId}/${randomUUID()}${contentAttachmentExtension(file.mimeType)}`;
+      const { error: uploadError } = await supabase.storage
+        .from(CONTENT_ATTACHMENTS_BUCKET)
+        .upload(storagePath, file.bytes, {
+          contentType: file.mimeType,
+          cacheControl: '3600',
+          upsert: false,
+        });
+      if (uploadError) {
+        send(response, 502, { error: `Не удалось загрузить скриншот в Supabase Storage: ${uploadError.message}` });
+        return;
+      }
+      try {
+        const position = Number(attachmentStats?.next_position || 0);
+        await prisma.$executeRaw`
+          insert into public.content_attachments (
+            id, knowledge_entry_id, storage_path, file_name, mime_type, size_bytes, position, created_at
+          )
+          values (
+            ${id}, ${knowledgeEntryId}, ${storagePath}, ${file.fileName},
+            ${file.mimeType}, ${file.bytes.length}, ${position}, now()
+          )
+        `;
+        clearStateSliceCache();
+        send(response, 201, {
+          attachment: {
+            id,
+            knowledgeEntryId,
+            storagePath,
+            fileName: file.fileName,
+            mimeType: file.mimeType,
+            sizeBytes: file.bytes.length,
+            position,
+            createdAt: new Date().toISOString(),
+            url: `/api/content-attachments/${encodeURIComponent(id)}`,
+          },
+        });
+      } catch (error) {
+        await removeContentStorageObjects([storagePath]).catch(() => undefined);
+        throw error;
+      }
+      return;
+    }
+
+    const contentAttachmentMatch = url.pathname.match(/^\/api\/content-attachments\/([^/]+)$/);
+    if (contentAttachmentMatch && request.method === 'GET') {
+      ensureContentAttachmentsAvailable();
+      await requireSessionUser(request);
+      await ensureContentMediaSchema(prisma);
+      const id = decodeURIComponent(contentAttachmentMatch[1]);
+      const [attachment] = await prisma.$queryRaw`
+        select id, storage_path, file_name, mime_type
+        from public.content_attachments
+        where id = ${id}
+        limit 1
+      `;
+      if (!attachment) {
+        send(response, 404, { error: 'Скриншот не найден.' });
+        return;
+      }
+      const { data, error } = await supabase.storage
+        .from(CONTENT_ATTACHMENTS_BUCKET)
+        .download(attachment.storage_path);
+      if (error || !data) {
+        send(response, 404, { error: 'Файл скриншота не найден в Storage.' });
+        return;
+      }
+      const bytes = Buffer.from(await data.arrayBuffer());
+      response.writeHead(200, {
+        'Content-Type': attachment.mime_type,
+        'Content-Length': String(bytes.length),
+        'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(attachment.file_name)}`,
+        'Cache-Control': 'private, max-age=300',
+        'X-Content-Type-Options': 'nosniff',
+      });
+      response.end(bytes);
+      return;
+    }
+
+    if (contentAttachmentMatch && request.method === 'DELETE') {
+      ensureContentAttachmentsAvailable();
+      await requireSessionUser(request);
+      await ensureContentMediaSchema(prisma);
+      const id = decodeURIComponent(contentAttachmentMatch[1]);
+      const [attachment] = await prisma.$queryRaw`
+        select id, storage_path
+        from public.content_attachments
+        where id = ${id}
+        limit 1
+      `;
+      if (!attachment) {
+        send(response, 200, { ok: true });
+        return;
+      }
+      await removeContentStorageObjects([attachment.storage_path]);
+      await prisma.$executeRaw`delete from public.content_attachments where id = ${id}`;
+      clearStateSliceCache();
+      send(response, 200, { ok: true });
+      return;
+    }
+
     if (url.pathname === '/api/mutations' && request.method === 'POST') {
       if (!usePrismaState) {
         send(response, 409, { error: 'Prisma mutations require LEVTIA_DATA_MODE=prisma.' });
@@ -2247,7 +2447,21 @@ export async function handleApiRequest(request, response) {
         return;
       }
       const actor = await requireSessionUser(request);
+      let deletedAttachmentPaths = [];
+      if (body.action === 'knowledge.delete') {
+        await ensureContentMediaSchema(prisma);
+        deletedAttachmentPaths = (await prisma.$queryRaw`
+          select storage_path
+          from public.content_attachments
+          where knowledge_entry_id = ${body.payload?.id || ''}
+        `).map((item) => item.storage_path);
+      }
       await applyPrismaMutation(prisma, body.action, body.payload || {}, actor);
+      if (deletedAttachmentPaths.length) {
+        await removeContentStorageObjects(deletedAttachmentPaths).catch((error) => {
+          console.error('Content attachment cleanup failed:', error);
+        });
+      }
       clearStateSliceCache();
       if (body.returnState === false) {
         send(response, 200, { ok: true, state: null, updatedAt: new Date().toISOString(), skipRefresh: true });

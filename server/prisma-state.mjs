@@ -6,6 +6,7 @@ const CHECKLIST_HISTORY_DAYS = Number(process.env.LEVTIA_CHECKLIST_HISTORY_DAYS 
 const AUDIT_LOG_LIMIT = Number(process.env.LEVTIA_AUDIT_LOG_LIMIT || 500);
 const REFUND_LIMIT = Number(process.env.LEVTIA_REFUND_LIMIT || 500);
 const SLICE_READ_CONCURRENCY = Math.max(1, Number(process.env.LEVTIA_SLICE_READ_CONCURRENCY || 2));
+let contentMediaSchemaPromise = null;
 const ADMIN_CHECKLIST_ITEMS = [
   'Проверить чистоту студии: зеркала, углы и поверхности',
   'Отправить кружок об открытии студии до 09:30',
@@ -74,6 +75,40 @@ export function createPrisma() {
     log: process.env.PRISMA_QUERY_LOG === 'true' ? ['query', 'warn', 'error'] : ['warn', 'error'],
   });
   return globalThis[globalKey];
+}
+
+export async function ensureContentMediaSchema(prisma) {
+  if (!contentMediaSchemaPromise) {
+    contentMediaSchemaPromise = (async () => {
+      await prisma.$executeRawUnsafe(`
+        alter table public.knowledge_entries
+          add column if not exists video_url text
+      `);
+      await prisma.$executeRawUnsafe(`
+        create table if not exists public.content_attachments (
+          id text primary key,
+          knowledge_entry_id text not null references public.knowledge_entries(id) on delete cascade,
+          storage_path text not null unique,
+          file_name text not null,
+          mime_type text not null,
+          size_bytes integer not null check (size_bytes > 0),
+          position integer not null default 0,
+          created_at timestamptz not null default now()
+        )
+      `);
+      await prisma.$executeRawUnsafe(`
+        create index if not exists content_attachments_entry_position_idx
+          on public.content_attachments (knowledge_entry_id, position, created_at)
+      `);
+      await prisma.$executeRawUnsafe(`
+        alter table public.content_attachments enable row level security
+      `);
+    })().catch((error) => {
+      contentMediaSchemaPromise = null;
+      throw error;
+    });
+  }
+  await contentMediaSchemaPromise;
 }
 
 function moscowDateParts(value = new Date()) {
@@ -355,7 +390,49 @@ function mapTrainerHiringCandidate(candidate) {
   };
 }
 
+function mapContentAttachment(attachment) {
+  return {
+    id: attachment.id,
+    knowledgeEntryId: attachment.knowledge_entry_id,
+    storagePath: attachment.storage_path,
+    fileName: attachment.file_name,
+    mimeType: attachment.mime_type,
+    sizeBytes: Number(attachment.size_bytes) || 0,
+    position: Number(attachment.position) || 0,
+    createdAt: iso(attachment.created_at),
+    url: `/api/content-attachments/${encodeURIComponent(attachment.id)}`,
+  };
+}
+
+function attachmentsByKnowledgeEntry(rows) {
+  const grouped = new Map();
+  for (const row of rows) {
+    const current = grouped.get(row.knowledge_entry_id) || [];
+    current.push(mapContentAttachment(row));
+    grouped.set(row.knowledge_entry_id, current);
+  }
+  return grouped;
+}
+
+function mapKnowledgeEntry(entry, groupedAttachments) {
+  return {
+    id: entry.id,
+    title: entry.title,
+    content: entry.content,
+    role: entry.role,
+    category: entry.category,
+    businessModel: entry.business_model,
+    hashtags: entry.hashtags,
+    isActual: entry.is_actual,
+    searchable: entry.searchable,
+    videoUrl: entry.video_url,
+    attachments: groupedAttachments.get(entry.id) || [],
+    createdAt: iso(entry.created_at),
+  };
+}
+
 export async function readStateFromPrisma(prisma) {
+  await ensureContentMediaSchema(prisma);
   const users = await selectTable(prisma, 'users', 'created_at asc');
   const tasks = await selectTable(prisma, 'tasks', 'created_at asc');
   const templates = await selectTable(prisma, 'response_templates', 'created_at asc');
@@ -363,6 +440,7 @@ export async function readStateFromPrisma(prisma) {
   const documentTemplates = await selectTable(prisma, 'document_templates', 'created_at asc');
   const usefulContacts = await selectTable(prisma, 'useful_contacts', 'created_at asc');
   const knowledge = await selectTable(prisma, 'knowledge_entries', 'created_at asc');
+  const contentAttachments = await selectTable(prisma, 'content_attachments', 'knowledge_entry_id asc, position asc, created_at asc');
   const favorites = await selectTable(prisma, 'content_favorites', 'created_at asc');
   const readReceipts = await selectTable(prisma, 'content_read_receipts', 'read_at asc');
   const checklists = await selectTable(prisma, 'daily_checklists', 'checklist_date asc');
@@ -431,6 +509,7 @@ export async function readStateFromPrisma(prisma) {
   }
 
   const settings = settingsRows.find((row) => row.id === 'main')?.payload || { colorMode: 'dark', density: 'comfortable', animations: true, telegramReports: true };
+  const groupedAttachments = attachmentsByKnowledgeEntry(contentAttachments);
   const updatedAt = [...users, ...tasks, ...knowledge, ...checklists, ...calendarEvents, ...callReviews]
     .map((row) => row.updated_at || row.created_at)
     .filter(Boolean)
@@ -447,7 +526,7 @@ export async function readStateFromPrisma(prisma) {
       links: links.map((link) => ({ id: link.id, title: link.title, url: link.url, category: link.category, role: link.role, description: link.description, createdAt: iso(link.created_at) })),
       documentTemplates: documentTemplates.map((template) => ({ id: template.id, title: template.title, url: template.url, createdById: template.created_by_id, createdAt: iso(template.created_at) })),
       usefulContacts: usefulContacts.map((contact) => ({ id: contact.id, name: contact.name, phone: contact.phone, company: contact.company, specialty: contact.specialty, createdAt: iso(contact.created_at) })),
-      knowledge: knowledge.map((entry) => ({ id: entry.id, title: entry.title, content: entry.content, role: entry.role, category: entry.category, businessModel: entry.business_model, hashtags: entry.hashtags, isActual: entry.is_actual, searchable: entry.searchable, createdAt: iso(entry.created_at) })),
+      knowledge: knowledge.map((entry) => mapKnowledgeEntry(entry, groupedAttachments)),
       checklists: checklists.map((checklist) => ({ id: checklist.id, title: checklist.title, role: checklist.role, assignedTo: checklist.assigned_to, date: dateOnly(checklist.checklist_date), createdAt: iso(checklist.created_at), items: itemsByChecklist.get(checklist.id) || [], reports: reportsByChecklist.get(checklist.id) || [] })),
       refunds: refunds.map((refund) => ({ id: refund.id, clientName: refund.client_name, requestedAt: iso(refund.requested_at), amount: Number(refund.amount) || 0, reason: refund.reason, status: refund.status, comment: refund.comment, createdAt: iso(refund.created_at) })),
       financialPlans: financialMonths.map((month) => ({ month: month.month, rows: rowsByMonth.get(month.month) || [] })),
@@ -490,8 +569,10 @@ export async function readStateSliceFromPrisma(prisma, slice, params = {}) {
       return { updatedAt: nowIso(), state: { tasks: tasks.map((task) => ({ id: task.id, title: task.title, description: task.description || '', period: task.period || '', role: task.role, priority: task.priority, status: task.status, deadline: dateOnly(task.deadline), addToCalendar: Boolean(task.add_to_calendar), calendarEventId: task.calendar_event_id, createdAt: iso(task.created_at) })) } };
     }
     case 'content': {
-      const [knowledge, templates, links, documentTemplates, usefulContacts, favorites, readReceipts] = await runLimited([
+      await ensureContentMediaSchema(prisma);
+      const [knowledge, contentAttachments, templates, links, documentTemplates, usefulContacts, favorites, readReceipts] = await runLimited([
         () => selectTable(prisma, 'knowledge_entries', 'created_at asc'),
+        () => selectTable(prisma, 'content_attachments', 'knowledge_entry_id asc, position asc, created_at asc'),
         () => selectTable(prisma, 'response_templates', 'created_at asc'),
         () => selectTable(prisma, 'helpful_links', 'created_at asc'),
         () => selectTable(prisma, 'document_templates', 'created_at asc'),
@@ -499,10 +580,11 @@ export async function readStateSliceFromPrisma(prisma, slice, params = {}) {
         () => selectTable(prisma, 'content_favorites', 'created_at asc'),
         () => selectTable(prisma, 'content_read_receipts', 'read_at asc'),
       ]);
+      const groupedAttachments = attachmentsByKnowledgeEntry(contentAttachments);
       return {
         updatedAt: nowIso(),
         state: {
-          knowledge: knowledge.map((entry) => ({ id: entry.id, title: entry.title, content: entry.content, role: entry.role, category: entry.category, businessModel: entry.business_model, hashtags: entry.hashtags, isActual: entry.is_actual, searchable: entry.searchable, createdAt: iso(entry.created_at) })),
+          knowledge: knowledge.map((entry) => mapKnowledgeEntry(entry, groupedAttachments)),
           templates: templates.map((template) => ({ id: template.id, title: template.title, body: template.body, role: template.role, businessModel: template.business_model, purpose: template.purpose, createdById: template.created_by_id, createdAt: iso(template.created_at) })),
           links: links.map((link) => ({ id: link.id, title: link.title, url: link.url, category: link.category, role: link.role, description: link.description, createdAt: iso(link.created_at) })),
           documentTemplates: documentTemplates.map((template) => ({ id: template.id, title: template.title, url: template.url, createdById: template.created_by_id, createdAt: iso(template.created_at) })),
@@ -898,10 +980,12 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
       await prisma.$executeRaw`delete from public.useful_contacts where id = ${payload.id}`;
       return;
     case 'knowledge.create':
-      await prisma.$executeRaw`insert into public.knowledge_entries (id, title, content, role, category, business_model, hashtags, is_actual, searchable, created_at, updated_at) values (${payload.id || newId('knowledge')}, ${payload.title}, ${payload.content}, ${payload.role}::public.levtia_role, ${payload.category}::public.knowledge_category, ${normalizeBusinessModel(payload.businessModel)}, ${payload.hashtags || null}, ${payload.isActual !== false}, true, now(), now())`;
+      await ensureContentMediaSchema(prisma);
+      await prisma.$executeRaw`insert into public.knowledge_entries (id, title, content, role, category, business_model, hashtags, is_actual, searchable, video_url, created_at, updated_at) values (${payload.id || newId('knowledge')}, ${payload.title}, ${payload.content}, ${payload.role}::public.levtia_role, ${payload.category}::public.knowledge_category, ${normalizeBusinessModel(payload.businessModel)}, ${payload.hashtags || null}, ${payload.isActual !== false}, true, ${payload.videoUrl || null}, now(), now())`;
       return;
     case 'knowledge.update':
-      await prisma.$executeRaw`update public.knowledge_entries set title = coalesce(${payload.input?.title ?? null}, title), content = coalesce(${payload.input?.content ?? null}, content), role = coalesce(${payload.input?.role ?? null}::public.levtia_role, role), category = coalesce(${payload.input?.category ?? null}::public.knowledge_category, category), business_model = coalesce(${payload.input?.businessModel ? normalizeBusinessModel(payload.input.businessModel) : null}, business_model), hashtags = coalesce(${payload.input?.hashtags ?? null}, hashtags), is_actual = coalesce(${payload.input?.isActual ?? null}, is_actual), updated_at = now() where id = ${payload.id}`;
+      await ensureContentMediaSchema(prisma);
+      await prisma.$executeRaw`update public.knowledge_entries set title = coalesce(${payload.input?.title ?? null}, title), content = coalesce(${payload.input?.content ?? null}, content), role = coalesce(${payload.input?.role ?? null}::public.levtia_role, role), category = coalesce(${payload.input?.category ?? null}::public.knowledge_category, category), business_model = coalesce(${payload.input?.businessModel ? normalizeBusinessModel(payload.input.businessModel) : null}, business_model), hashtags = coalesce(${payload.input?.hashtags ?? null}, hashtags), is_actual = coalesce(${payload.input?.isActual ?? null}, is_actual), video_url = case when ${Object.prototype.hasOwnProperty.call(payload.input || {}, 'videoUrl')} then ${payload.input?.videoUrl || null} else video_url end, updated_at = now() where id = ${payload.id}`;
       return;
     case 'knowledge.delete':
       await prisma.$executeRaw`delete from public.content_favorites where entity_type = 'knowledge' and entity_id = ${payload.id}`;

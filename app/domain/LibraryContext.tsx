@@ -10,6 +10,7 @@ import type {
   ChecklistControlStatus,
   ChecklistReport,
   ChecklistReportSlot,
+  ContentAttachment,
   ContentFavorite,
   ContentReadReceipt,
   DailyChecklist,
@@ -166,9 +167,11 @@ type LibraryContextValue = {
   createUsefulContact: (input: Omit<UsefulContact, 'id' | 'createdAt'>) => void;
   updateUsefulContact: (id: string, input: Partial<Omit<UsefulContact, 'id' | 'createdAt'>>) => void;
   deleteUsefulContact: (id: string) => void;
-  createKnowledge: (input: { title: string; content: string; role: Role; category: KnowledgeCategory; businessModel?: BusinessModelScope; hashtags?: string; isActual?: boolean }) => void;
-  updateKnowledge: (id: string, input: Partial<Pick<KnowledgeEntry, 'title' | 'content' | 'hashtags' | 'role' | 'category' | 'isActual' | 'businessModel'>>) => void;
+  createKnowledge: (input: { title: string; content: string; role: Role; category: KnowledgeCategory; businessModel?: BusinessModelScope; hashtags?: string; isActual?: boolean; videoUrl?: string | null }) => Promise<string | null>;
+  updateKnowledge: (id: string, input: Partial<Pick<KnowledgeEntry, 'title' | 'content' | 'hashtags' | 'role' | 'category' | 'isActual' | 'businessModel' | 'videoUrl'>>) => Promise<boolean>;
   deleteKnowledge: (id: string) => void;
+  uploadKnowledgeAttachments: (knowledgeEntryId: string, files: File[]) => Promise<boolean>;
+  deleteKnowledgeAttachment: (knowledgeEntryId: string, attachmentId: string) => Promise<boolean>;
   createImportantInfo: (title: string, content: string, hashtags?: string) => void;
   updateImportantInfo: (id: string, input: Partial<Pick<KnowledgeEntry, 'title' | 'content' | 'hashtags'>>) => void;
   deleteImportantInfo: (id: string) => void;
@@ -241,6 +244,18 @@ function createEmptyState(): LibraryState {
 
 function newId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function fileToBase64(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const value = String(reader.result || '');
+      resolve(value.includes(',') ? value.slice(value.indexOf(',') + 1) : value);
+    };
+    reader.onerror = () => reject(reader.error || new Error('Не удалось прочитать скриншот.'));
+    reader.readAsDataURL(file);
+  });
 }
 
 function normalizeBusinessModel(value?: string | null): BusinessModelScope {
@@ -595,7 +610,12 @@ function normalizeState(raw: Partial<LibraryState> | null): LibraryState {
     links: (raw.links ?? []).map((link) => ({ ...link, ownerUserId: undefined })),
     documentTemplates: raw.documentTemplates ?? [],
     usefulContacts: raw.usefulContacts ?? [],
-    knowledge: (raw.knowledge ?? []).map((entry) => ({ ...entry, businessModel: normalizeBusinessModel(entry.businessModel) })),
+    knowledge: (raw.knowledge ?? []).map((entry) => ({
+      ...entry,
+      businessModel: normalizeBusinessModel(entry.businessModel),
+      videoUrl: entry.videoUrl ?? null,
+      attachments: Array.isArray(entry.attachments) ? entry.attachments : [],
+    })),
     financialPlans: normalizeFinancialPlans(raw.financialPlans ?? []),
     expenseCategories: raw.expenseCategories ?? [],
     expenses: raw.expenses ?? [],
@@ -1155,11 +1175,13 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       } else if (!result.skipRefresh) {
         await refreshState();
       }
+      return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Не удалось сохранить данные.';
       console.error(error);
       setDataError(message);
       await refreshState();
+      return false;
     } finally {
       if (showSaving) setIsSaving(false);
     }
@@ -1534,7 +1556,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         draft.usefulContacts = draft.usefulContacts.filter((item) => item.id !== id);
       });
     },
-    createKnowledge(input) {
+    async createKnowledge(input) {
       const entry: KnowledgeEntry = {
         id: newId('knowledge'),
         title: input.title,
@@ -1544,16 +1566,24 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         businessModel: normalizeBusinessModel(input.businessModel),
         hashtags: normalizeHashtags(input.hashtags ?? '') || null,
         isActual: input.isActual !== false,
+        videoUrl: input.videoUrl?.trim() || null,
+        attachments: [],
         searchable: true,
         createdAt: new Date().toISOString(),
       };
-      mutateOnServer('knowledge.create', entry as unknown as Record<string, unknown>, (draft) => {
+      const saved = await runMutation('knowledge.create', entry as unknown as Record<string, unknown>, (draft) => {
         draft.knowledge.unshift(entry);
       });
+      return saved ? entry.id : null;
     },
-    updateKnowledge(id, input) {
-      const normalizedInput = { ...input, businessModel: input.businessModel ? normalizeBusinessModel(input.businessModel) : undefined, hashtags: input.hashtags !== undefined ? normalizeHashtags(input.hashtags) : undefined };
-      mutateOnServer('knowledge.update', { id, input: normalizedInput }, (draft) => {
+    async updateKnowledge(id, input) {
+      const normalizedInput = {
+        ...input,
+        businessModel: input.businessModel ? normalizeBusinessModel(input.businessModel) : undefined,
+        hashtags: input.hashtags !== undefined ? normalizeHashtags(input.hashtags) : undefined,
+        videoUrl: input.videoUrl !== undefined ? input.videoUrl?.trim() || null : undefined,
+      };
+      return runMutation('knowledge.update', { id, input: normalizedInput }, (draft) => {
         const entry = draft.knowledge.find((item) => item.id === id);
         if (entry) Object.assign(entry, normalizedInput);
       });
@@ -1562,6 +1592,84 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       mutateOnServer('knowledge.delete', { id }, (draft) => {
         draft.knowledge = draft.knowledge.filter((item) => item.id !== id);
       });
+    },
+    async uploadKnowledgeAttachments(knowledgeEntryId, files) {
+      const entry = state.knowledge.find((item) => item.id === knowledgeEntryId);
+      const existingCount = entry?.attachments?.length ?? 0;
+      if (!files.length) return true;
+      if (existingCount + files.length > 10) {
+        setDataError('К одной карточке можно прикрепить не больше 10 скриншотов.');
+        return false;
+      }
+      setIsSaving(true);
+      setDataError(null);
+      try {
+        for (const file of files) {
+          if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+            throw new Error('Разрешены только изображения PNG, JPEG и WebP.');
+          }
+          if (!file.size || file.size > 2 * 1024 * 1024) {
+            throw new Error('Размер одного скриншота не должен превышать 2 МБ.');
+          }
+          const response = await fetch('/api/content-attachments', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+              knowledgeEntryId,
+              fileName: file.name,
+              mimeType: file.type,
+              base64: await fileToBase64(file),
+            }),
+          });
+          if (!response.ok) throw new Error(await readApiError(response));
+          const result = await response.json() as { attachment: ContentAttachment };
+          setState((current) => {
+            const draft = cloneState(current);
+            const target = draft.knowledge.find((item) => item.id === knowledgeEntryId);
+            if (target) {
+              target.attachments = [...(target.attachments ?? []), result.attachment]
+                .sort((left, right) => left.position - right.position);
+            }
+            return normalizeState(draft);
+          });
+        }
+        sliceCacheRef.current.delete(sliceCacheKey('content'));
+        return true;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Не удалось загрузить скриншоты.';
+        console.error(error);
+        setDataError(message);
+        return false;
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    async deleteKnowledgeAttachment(knowledgeEntryId, attachmentId) {
+      setIsSaving(true);
+      setDataError(null);
+      try {
+        const response = await fetch(`/api/content-attachments/${encodeURIComponent(attachmentId)}`, {
+          method: 'DELETE',
+          credentials: 'same-origin',
+        });
+        if (!response.ok) throw new Error(await readApiError(response));
+        setState((current) => {
+          const draft = cloneState(current);
+          const entry = draft.knowledge.find((item) => item.id === knowledgeEntryId);
+          if (entry) entry.attachments = (entry.attachments ?? []).filter((item) => item.id !== attachmentId);
+          return normalizeState(draft);
+        });
+        sliceCacheRef.current.delete(sliceCacheKey('content'));
+        return true;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Не удалось удалить скриншот.';
+        console.error(error);
+        setDataError(message);
+        return false;
+      } finally {
+        setIsSaving(false);
+      }
     },
     createImportantInfo(title, content, hashtags) {
       const entry: KnowledgeEntry = {

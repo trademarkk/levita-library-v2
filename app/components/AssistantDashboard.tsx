@@ -15,6 +15,8 @@ import { assistantManagedTeamRoles, can } from '../domain/permissions';
 import type { BusinessModelScope, ChecklistControlStatus, EmployeeStatus, Role } from '../domain/types';
 import { BookOpen, CheckSquare, Edit2, FileText, Info, Link as LinkIcon, ListChecks, Plus, Save, Trash2, UserRound, X } from 'lucide-react';
 import { SEARCH_NAVIGATION_EVENT, type SearchNavigationDetail } from './searchNavigation';
+import { ContentMediaActions, MediaFields } from './ContentAttachments';
+import type { ContentAttachment } from '../domain/types';
 
 
 function SectionLoader() {
@@ -372,12 +374,14 @@ function TasksSection() {
 }
 
 function AssistantKnowledgeSection() {
-  const { createKnowledge } = useLibrary();
+  const { createKnowledge, uploadKnowledgeAttachments } = useLibrary();
   const [isCreating, setIsCreating] = useState(false);
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [hashtags, setHashtags] = useState('');
   const [businessModel, setBusinessModel] = useState<BusinessModelScope>('ALL');
+  const [videoUrl, setVideoUrl] = useState('');
+  const [files, setFiles] = useState<File[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const resetForm = () => {
@@ -385,24 +389,29 @@ function AssistantKnowledgeSection() {
     setContent('');
     setHashtags('');
     setBusinessModel('ALL');
+    setVideoUrl('');
+    setFiles([]);
     setError(null);
   };
 
-  const save = () => {
+  const save = async () => {
     const nextTitle = title.trim();
     const nextContent = content.trim();
     if (!nextTitle || !nextContent) {
       setError('Заполните название и текст материала.');
       return;
     }
-    createKnowledge({
+    const entryId = await createKnowledge({
       title: nextTitle,
       content: nextContent,
       role: 'ASSISTANT',
       category: 'KNOWLEDGE',
       hashtags: hashtags.trim(),
       businessModel,
+      videoUrl,
     });
+    if (!entryId) return;
+    if (files.length && !(await uploadKnowledgeAttachments(entryId, files))) return;
     resetForm();
     setIsCreating(false);
   };
@@ -431,8 +440,14 @@ function AssistantKnowledgeSection() {
             <textarea value={content} onChange={(event) => setContent(event.target.value)} className="field min-h-28" placeholder="Текст материала" />
             <AssistantBusinessModelSelect value={businessModel} onChange={setBusinessModel} />
             <input value={hashtags} onChange={(event) => setHashtags(event.target.value)} className="field" placeholder="#теги, если нужны" />
+            <MediaFields
+              videoUrl={videoUrl}
+              onVideoUrlChange={setVideoUrl}
+              files={files}
+              onFilesChange={setFiles}
+            />
             {error && <p className="text-sm text-[#f0c5cf]">{error}</p>}
-            <button type="button" onClick={save} className="primary-action inline-flex items-center gap-2 justify-self-start">
+            <button type="button" onClick={() => void save()} className="primary-action inline-flex items-center gap-2 justify-self-start">
               <Plus className="h-4 w-4" />
               Добавить
             </button>
@@ -451,12 +466,14 @@ function AssistantKnowledgeSection() {
 }
 
 function AssistantImportantInfoSection() {
-  const { createKnowledge } = useLibrary();
+  const { createKnowledge, uploadKnowledgeAttachments } = useLibrary();
   const [isCreating, setIsCreating] = useState(false);
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [hashtags, setHashtags] = useState('');
   const [businessModel, setBusinessModel] = useState<BusinessModelScope>('ALL');
+  const [videoUrl, setVideoUrl] = useState('');
+  const [files, setFiles] = useState<File[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const resetForm = () => {
@@ -464,17 +481,19 @@ function AssistantImportantInfoSection() {
     setContent('');
     setHashtags('');
     setBusinessModel('ALL');
+    setVideoUrl('');
+    setFiles([]);
     setError(null);
   };
 
-  const save = () => {
+  const save = async () => {
     const nextTitle = title.trim();
     const nextContent = content.trim();
     if (!nextTitle || !nextContent) {
       setError('Заполните название и текст информации.');
       return;
     }
-    createKnowledge({
+    const entryId = await createKnowledge({
       title: nextTitle,
       content: nextContent,
       role: 'ASSISTANT',
@@ -482,7 +501,10 @@ function AssistantImportantInfoSection() {
       hashtags: hashtags.trim(),
       businessModel,
       isActual: true,
+      videoUrl,
     });
+    if (!entryId) return;
+    if (files.length && !(await uploadKnowledgeAttachments(entryId, files))) return;
     resetForm();
     setIsCreating(false);
   };
@@ -511,8 +533,14 @@ function AssistantImportantInfoSection() {
             <textarea value={content} onChange={(event) => setContent(event.target.value)} className="field min-h-28" placeholder="Текст информации" />
             <AssistantBusinessModelSelect value={businessModel} onChange={setBusinessModel} />
             <input value={hashtags} onChange={(event) => setHashtags(event.target.value)} className="field" placeholder="#теги, если нужны" />
+            <MediaFields
+              videoUrl={videoUrl}
+              onVideoUrlChange={setVideoUrl}
+              files={files}
+              onFilesChange={setFiles}
+            />
             {error && <p className="text-sm text-[#f0c5cf]">{error}</p>}
-            <button type="button" onClick={save} className="primary-action inline-flex items-center gap-2 justify-self-start">
+            <button type="button" onClick={() => void save()} className="primary-action inline-flex items-center gap-2 justify-self-start">
               <Plus className="h-4 w-4" />
               Добавить
             </button>
@@ -675,17 +703,22 @@ function InfoSection() {
   return <Cards entries={infoCards} icon={<Info className="w-5 h-5 text-[#c9a98d] mt-1" />} empty="Важная информация пока не добавлена." />;
 }
 
-function Cards({ entries, icon, empty }: { entries: Array<{ id: string; title: string; content: string; hashtags?: string | null }>; icon: ReactNode; empty: string }) {
+function Cards({ entries, icon, empty }: { entries: Array<{ id: string; title: string; content: string; hashtags?: string | null; videoUrl?: string | null; attachments?: ContentAttachment[] }>; icon: ReactNode; empty: string }) {
   return (
     <div className="grid md:grid-cols-2 gap-6">
       {entries.map((card, idx) => (
-        <GlassCard key={card.id} delay={idx * 0.08} data-search-target={`knowledge:${card.id}`}>
+        <GlassCard key={card.id} delay={idx * 0.08} data-search-target={`knowledge:${card.id}`} className="content-card">
+          <div className="content-card-body">
           <div className="flex items-start gap-3 mb-3">
             {icon}
             <h3 className="text-xl text-[#f5f3f0]">{card.title}</h3>
           </div>
           <p className="text-[#a89b8f] leading-relaxed">{card.content}</p>
           {card.hashtags && <p className="text-xs text-[#c9a98d] mt-4">{card.hashtags}</p>}
+          <div className="content-card-footer">
+            <ContentMediaActions attachments={card.attachments} videoUrl={card.videoUrl} />
+          </div>
+          </div>
         </GlassCard>
       ))}
       {entries.length === 0 && <GlassCard><p className="text-[#a89b8f]">{empty}</p></GlassCard>}
@@ -970,14 +1003,18 @@ function ContactsSection() {
 }
 
 function TrainingSection() {
-  const { state, createKnowledge } = useLibrary();
-  const [draft, setDraft] = useState({ title: '', content: '' });
+  const { state, createKnowledge, uploadKnowledgeAttachments } = useLibrary();
+  const [draft, setDraft] = useState({ title: '', content: '', videoUrl: '' });
+  const [files, setFiles] = useState<File[]>([]);
   const materials = state.knowledge.filter((entry) => entry.category === 'TRAINING' && entry.role === 'ASSISTANT');
 
-  const add = () => {
+  const add = async () => {
     if (!draft.title.trim() || !draft.content.trim()) return;
-    createKnowledge({ ...draft, role: 'ASSISTANT', category: 'TRAINING', hashtags: '#обучение' });
-    setDraft({ title: '', content: '' });
+    const entryId = await createKnowledge({ ...draft, role: 'ASSISTANT', category: 'TRAINING', hashtags: '#обучение' });
+    if (!entryId) return;
+    if (files.length && !(await uploadKnowledgeAttachments(entryId, files))) return;
+    setDraft({ title: '', content: '', videoUrl: '' });
+    setFiles([]);
   };
 
   return (
@@ -987,17 +1024,28 @@ function TrainingSection() {
         <div className="grid md:grid-cols-[1fr_2fr_auto] gap-3">
           <input value={draft.title} onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))} placeholder="Название" className="field" />
           <input value={draft.content} onChange={(event) => setDraft((value) => ({ ...value, content: event.target.value }))} placeholder="Описание или ссылка на материал" className="field" />
-          <button onClick={add} className="primary-action">Добавить</button>
+          <button onClick={() => void add()} className="primary-action">Добавить</button>
+          <MediaFields
+            videoUrl={draft.videoUrl}
+            onVideoUrlChange={(videoUrl) => setDraft((value) => ({ ...value, videoUrl }))}
+            files={files}
+            onFilesChange={setFiles}
+          />
         </div>
       </GlassCard>
       {materials.map((material, idx) => (
-        <GlassCard key={material.id} delay={idx * 0.08} data-search-target={`knowledge:${material.id}`}>
+        <GlassCard key={material.id} delay={idx * 0.08} data-search-target={`knowledge:${material.id}`} className="content-card">
+          <div className="content-card-body">
           <div className="flex items-center gap-4">
             <BookOpen className="w-5 h-5 text-[#c9a98d]" />
             <div className="min-w-0">
               <h3 className="text-lg mb-1 text-[#f5f3f0]">{material.title}</h3>
               <p className="break-anywhere text-sm text-[#a89b8f]">{material.content}</p>
             </div>
+          </div>
+          <div className="content-card-footer">
+            <ContentMediaActions attachments={material.attachments} videoUrl={material.videoUrl} />
+          </div>
           </div>
         </GlassCard>
       ))}

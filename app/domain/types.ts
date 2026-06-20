@@ -109,8 +109,22 @@ export interface KnowledgeEntry {
   businessModel?: BusinessModelScope;
   hashtags?: string | null;
   isActual?: boolean;
+  videoUrl?: string | null;
+  attachments?: ContentAttachment[];
   searchable: boolean;
   createdAt: string;
+}
+
+export interface ContentAttachment {
+  id: string;
+  knowledgeEntryId: string;
+  storagePath?: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  position: number;
+  createdAt: string;
+  url: string;
 }
 
 export interface ContentFavorite {

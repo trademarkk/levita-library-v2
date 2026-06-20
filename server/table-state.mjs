@@ -179,9 +179,22 @@ function rowsFromState(state) {
       hashtags: nullable(entry.hashtags),
       is_actual: entry.isActual !== false,
       searchable: entry.searchable !== false,
+      video_url: nullable(entry.videoUrl),
       created_at: entry.createdAt || now,
       updated_at: now,
     })),
+    content_attachments: (state.knowledge || []).flatMap((entry) => (
+      (entry.attachments || []).map((attachment, position) => ({
+        id: attachment.id,
+        knowledge_entry_id: entry.id,
+        storage_path: attachment.storagePath || `${entry.id}/${attachment.id}`,
+        file_name: attachment.fileName,
+        mime_type: attachment.mimeType,
+        size_bytes: attachment.sizeBytes,
+        position: attachment.position ?? position,
+        created_at: attachment.createdAt || now,
+      }))
+    )),
     content_favorites: (state.favorites || []).map((favorite) => ({
       id: favorite.id,
       user_id: favorite.userId,
@@ -323,7 +336,7 @@ function mapUser(row) {
 
 export async function readStateFromTables(supabase) {
   const [
-    users, tasks, templates, links, documentTemplates, usefulContacts, knowledge, favorites, readReceipts,
+    users, tasks, templates, links, documentTemplates, usefulContacts, knowledge, contentAttachments, favorites, readReceipts,
     checklists, checklistItems, checklistReports, refunds, financialMonths, financialRows, financialPayments,
     calendarEvents, expenseCategories, expenses, trainerEvaluations, callReviews, callChecklistItems,
     adminShifts, auditLog, settingsRows,
@@ -335,6 +348,7 @@ export async function readStateFromTables(supabase) {
     selectTable(supabase, 'document_templates', 'created_at'),
     selectTable(supabase, 'useful_contacts', 'created_at'),
     selectTable(supabase, 'knowledge_entries', 'created_at'),
+    selectTable(supabase, 'content_attachments', 'position'),
     selectTable(supabase, 'content_favorites', 'created_at'),
     selectTable(supabase, 'content_read_receipts', 'read_at'),
     selectTable(supabase, 'daily_checklists', 'checklist_date'),
@@ -403,6 +417,22 @@ export async function readStateFromTables(supabase) {
   }
 
   const settings = settingsRows.find((row) => row.id === 'main')?.payload || { colorMode: 'dark', density: 'comfortable', animations: true, telegramReports: true };
+  const attachmentsByEntry = new Map();
+  for (const attachment of contentAttachments) {
+    const list = attachmentsByEntry.get(attachment.knowledge_entry_id) || [];
+    list.push({
+      id: attachment.id,
+      knowledgeEntryId: attachment.knowledge_entry_id,
+      storagePath: attachment.storage_path,
+      fileName: attachment.file_name,
+      mimeType: attachment.mime_type,
+      sizeBytes: Number(attachment.size_bytes) || 0,
+      position: Number(attachment.position) || 0,
+      createdAt: attachment.created_at,
+      url: `/api/content-attachments/${encodeURIComponent(attachment.id)}`,
+    });
+    attachmentsByEntry.set(attachment.knowledge_entry_id, list);
+  }
   const updatedAt = [...users, ...tasks, ...knowledge, ...checklists, ...calendarEvents, ...callReviews]
     .map((row) => row.updated_at || row.created_at)
     .filter(Boolean)
@@ -419,7 +449,7 @@ export async function readStateFromTables(supabase) {
       links: links.map((link) => ({ id: link.id, title: link.title, url: link.url, category: link.category, role: link.role, description: link.description, createdAt: link.created_at })),
       documentTemplates: documentTemplates.map((template) => ({ id: template.id, title: template.title, url: template.url, createdById: template.created_by_id, createdAt: template.created_at })),
       usefulContacts: usefulContacts.map((contact) => ({ id: contact.id, name: contact.name, phone: contact.phone, company: contact.company, specialty: contact.specialty, createdAt: contact.created_at })),
-      knowledge: knowledge.map((entry) => ({ id: entry.id, title: entry.title, content: entry.content, role: entry.role, category: entry.category, businessModel: entry.business_model, hashtags: entry.hashtags, isActual: entry.is_actual, searchable: entry.searchable, createdAt: entry.created_at })),
+      knowledge: knowledge.map((entry) => ({ id: entry.id, title: entry.title, content: entry.content, role: entry.role, category: entry.category, businessModel: entry.business_model, hashtags: entry.hashtags, isActual: entry.is_actual, searchable: entry.searchable, videoUrl: entry.video_url, attachments: attachmentsByEntry.get(entry.id) || [], createdAt: entry.created_at })),
       checklists: checklists.map((checklist) => ({ id: checklist.id, title: checklist.title, role: checklist.role, assignedTo: checklist.assigned_to, date: checklist.checklist_date, createdAt: checklist.created_at, items: itemsByChecklist.get(checklist.id) || [], reports: reportsByChecklist.get(checklist.id) || [] })),
       refunds: refunds.map((refund) => ({ id: refund.id, clientName: refund.client_name, requestedAt: refund.requested_at, amount: Number(refund.amount) || 0, reason: refund.reason, status: refund.status, comment: refund.comment, createdAt: refund.created_at })),
       financialPlans: financialMonths.map((month) => ({ month: month.month, rows: rowsByMonth.get(month.month) || [] })),
@@ -447,6 +477,7 @@ export async function writeStateToTables(supabase, state) {
   await syncRows(supabase, 'document_templates', rows.document_templates);
   await syncRows(supabase, 'useful_contacts', rows.useful_contacts);
   await syncRows(supabase, 'knowledge_entries', rows.knowledge_entries);
+  await syncRows(supabase, 'content_attachments', rows.content_attachments);
   await syncRows(supabase, 'content_favorites', rows.content_favorites);
   await syncRows(supabase, 'content_read_receipts', rows.content_read_receipts);
   await syncRows(supabase, 'daily_checklists', rows.daily_checklists);

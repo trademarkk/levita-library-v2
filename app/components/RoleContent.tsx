@@ -7,6 +7,7 @@ import { formatDate, roleLabels } from '../domain/labels';
 import { defaultWorkLinkGroupForRole, knowledgeCategoryResource, manageableContentRolesFor, managedContentRoles, visibleContentRolesFor, workLinkGroupForRole, workLinkRolesForGroup, type WorkLinkGroup } from '../domain/permissions';
 import type { BusinessModelScope, FavoriteEntityType, HelpfulLink, KnowledgeCategory, KnowledgeEntry, LinkCategory, Role } from '../domain/types';
 import { getPendingSearchTarget, SEARCH_NAVIGATION_EVENT, type SearchNavigationDetail } from './searchNavigation';
+import { ContentMediaActions, MediaFields } from './ContentAttachments';
 
 export const managedRoles = managedContentRoles;
 const messageTemplateManagedRoles = managedContentRoles.filter((role) => role !== 'TRAINER' && role !== 'SENIOR_TRAINER');
@@ -420,6 +421,9 @@ export function RoleContentViewer({ role, category }: { role: Role; category: Kn
           <div className="mb-4"><BusinessModelBadge value={selected.businessModel} /></div>
           <p className="text-[#a89b8f] leading-relaxed whitespace-pre-line">{selected.content}</p>
           {selected.hashtags && <p className="mt-4 text-xs text-[#c9a98d]">{selected.hashtags}</p>}
+          <div className="mt-5">
+            <ContentMediaActions attachments={selected.attachments} videoUrl={selected.videoUrl} />
+          </div>
           <div className="mt-5 flex flex-wrap gap-3">
             <FavoriteButton entityType="knowledge" entityId={selected.id} label={selected.title} />
             {category === 'IMPORTANT_INFO' && currentUser && (
@@ -451,6 +455,9 @@ export function RoleContentViewer({ role, category }: { role: Role; category: Kn
                 <div className="min-w-0 flex-1">
                   <h3 className="text-[#f5f3f0]">{entry.title}</h3>
                   {entry.content && <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-[#a89b8f]">{entry.content}</p>}
+                  <div className="mt-3">
+                    <ContentMediaActions attachments={entry.attachments} videoUrl={entry.videoUrl} />
+                  </div>
                 </div>
                 <FavoriteButton entityType="knowledge" entityId={entry.id} label={entry.title} />
               </li>
@@ -483,7 +490,8 @@ export function RoleContentViewer({ role, category }: { role: Role; category: Kn
     <div className="grid md:grid-cols-2 gap-5">
       {entries.length === 0 && <GlassCard><p className="text-[#a89b8f]">{hasHashtagFilter && hashtagFilter.trim() ? 'Материалов с таким хештегом нет.' : favoriteFilter === 'favorites' ? 'В избранном пока нет материалов этой вкладки.' : categoryEmpty[category]}</p></GlassCard>}
       {entries.map((entry, index) => (
-        <GlassCard key={entry.id} delay={index * 0.05} data-search-target={searchTarget('knowledge', entry.id)}>
+        <GlassCard key={entry.id} delay={index * 0.05} data-search-target={searchTarget('knowledge', entry.id)} className="content-card">
+          <div className="content-card-body">
           <div className="flex items-start gap-3 mb-3">
             {category === 'REGULATION' ? <Shield className="w-5 h-5 text-[#c9a98d] mt-1" /> : category === 'KNOWLEDGE' ? <BookOpen className="w-5 h-5 text-[#c9a98d] mt-1" /> : <Info className="w-5 h-5 text-[#c9a98d] mt-1" />}
             <div className="flex-1">
@@ -513,8 +521,10 @@ export function RoleContentViewer({ role, category }: { role: Role; category: Kn
           </div>
           <p className="text-sm text-[#a89b8f] leading-relaxed whitespace-pre-line">{entry.content}</p>
           {entry.hashtags && <p className="mt-4 text-xs text-[#c9a98d]">{entry.hashtags}</p>}
+          <div className="content-card-footer">
+          <ContentMediaActions attachments={entry.attachments} videoUrl={entry.videoUrl} />
           {category === 'IMPORTANT_INFO' && currentUser && (
-            <button onClick={() => markKnowledgeAsRead(entry.id)} className="mt-4 px-4 py-2 rounded-lg border border-[#c9a98d]/20 text-[#f5f3f0] hover:bg-[#2a2630]">
+            <button onClick={() => markKnowledgeAsRead(entry.id)} className="mt-3 px-4 py-2 rounded-lg border border-[#c9a98d]/20 text-[#f5f3f0] hover:bg-[#2a2630]">
               {knowledgeReadReceipt(entry.id) ? 'Обновить отметку ознакомления' : 'Я ознакомлен'}
             </button>
           )}
@@ -523,6 +533,8 @@ export function RoleContentViewer({ role, category }: { role: Role; category: Kn
               Открыть
             </button>
           )}
+          </div>
+          </div>
         </GlassCard>
       ))}
     </div>
@@ -872,10 +884,25 @@ export function RoleLinksManager({ role }: { role: Role }) {
 }
 
 export function OwnerRoleContentManager({ category }: { category: KnowledgeCategory }) {
-  const { state, createKnowledge, updateKnowledge, deleteKnowledge, knowledgeReadCount } = useLibrary();
+  const {
+    state,
+    createKnowledge,
+    updateKnowledge,
+    deleteKnowledge,
+    uploadKnowledgeAttachments,
+    deleteKnowledgeAttachment,
+    knowledgeReadCount,
+  } = useLibrary();
   const [activeRole, setActiveRole] = useState<Role>('ASSISTANT');
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState({ title: '', content: '', isActual: true, businessModel: 'ALL' as BusinessModelScope });
+  const [draft, setDraft] = useState({
+    title: '',
+    content: '',
+    isActual: true,
+    businessModel: 'ALL' as BusinessModelScope,
+    videoUrl: '',
+  });
+  const [files, setFiles] = useState<File[]>([]);
   const entries = state.knowledge.filter((entry) => entry.role === activeRole && entry.category === category);
   const hasBusinessModel = supportsBusinessModel(category);
   const selectedTabs = useMemo(() => tabsFor(category), [category]);
@@ -896,22 +923,38 @@ export function OwnerRoleContentManager({ category }: { category: KnowledgeCateg
 
   const resetDraft = () => {
     setEditingId(null);
-    setDraft({ title: '', content: '', isActual: true, businessModel: 'ALL' });
+    setDraft({ title: '', content: '', isActual: true, businessModel: 'ALL', videoUrl: '' });
+    setFiles([]);
   };
 
   const startEdit = (entry: KnowledgeEntry) => {
     setEditingId(entry.id);
-    setDraft({ title: entry.title, content: entry.content, isActual: entry.isActual !== false, businessModel: entry.businessModel ?? 'ALL' });
+    setDraft({
+      title: entry.title,
+      content: entry.content,
+      isActual: entry.isActual !== false,
+      businessModel: entry.businessModel ?? 'ALL',
+      videoUrl: entry.videoUrl ?? '',
+    });
+    setFiles([]);
   };
 
-  const save = () => {
+  const save = async () => {
     if (!draft.title.trim()) return;
     const content = category === 'RESPONSIBILITY' ? draft.content || draft.title : draft.content;
     const businessModel = hasBusinessModel ? draft.businessModel : 'ALL';
-    if (editingId) updateKnowledge(editingId, { ...draft, businessModel, content, role: activeRole, category });
-    else createKnowledge({ ...draft, businessModel, content, role: activeRole, category });
+    let targetId = editingId;
+    if (editingId) {
+      const saved = await updateKnowledge(editingId, { ...draft, businessModel, content, role: activeRole, category });
+      if (!saved) return;
+    } else {
+      targetId = await createKnowledge({ ...draft, businessModel, content, role: activeRole, category });
+      if (!targetId) return;
+    }
+    if (files.length && !(await uploadKnowledgeAttachments(targetId, files))) return;
     resetDraft();
   };
+  const editingEntry = editingId ? entries.find((entry) => entry.id === editingId) ?? null : null;
 
   return (
     <div className="space-y-5">
@@ -930,9 +973,17 @@ export function OwnerRoleContentManager({ category }: { category: KnowledgeCateg
             </select>
           )}
           <textarea value={draft.content} onChange={(event) => setDraft((value) => ({ ...value, content: event.target.value }))} placeholder={contentPlaceholder} className="field md:col-span-2 min-h-28" />
+          <MediaFields
+            videoUrl={draft.videoUrl}
+            onVideoUrlChange={(videoUrl) => setDraft((value) => ({ ...value, videoUrl }))}
+            files={files}
+            onFilesChange={setFiles}
+            existing={editingEntry?.attachments}
+            onDeleteExisting={editingEntry ? (attachmentId) => deleteKnowledgeAttachment(editingEntry.id, attachmentId) : undefined}
+          />
         </div>
         <div className="mt-4 flex flex-wrap gap-3">
-          <button onClick={save} className="primary-action flex items-center gap-2"><Save className="w-4 h-4" />Сохранить</button>
+          <button onClick={() => void save()} className="primary-action flex items-center gap-2"><Save className="w-4 h-4" />Сохранить</button>
           {editingId && <button onClick={resetDraft} className="px-4 py-2 rounded-lg border border-[#c9a98d]/20 text-[#f5f3f0] hover:bg-[#2a2630] flex items-center gap-2"><X className="w-4 h-4" />Отмена</button>}
         </div>
       </GlassCard>
@@ -940,7 +991,8 @@ export function OwnerRoleContentManager({ category }: { category: KnowledgeCateg
       <div className={category === 'RESPONSIBILITY' ? 'space-y-3' : 'grid md:grid-cols-2 gap-4'}>
         {entries.length === 0 && <GlassCard><p className="text-[#a89b8f]">{categoryEmpty[category]}</p></GlassCard>}
         {entries.map((entry, index) => (
-          <GlassCard key={entry.id} delay={index * 0.04} data-search-target={searchTarget('knowledge', entry.id)}>
+          <GlassCard key={entry.id} delay={index * 0.04} data-search-target={searchTarget('knowledge', entry.id)} className="content-card">
+            <div className="content-card-body">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="flex items-start gap-3">
@@ -957,6 +1009,10 @@ export function OwnerRoleContentManager({ category }: { category: KnowledgeCateg
                 <button onClick={() => startEdit(entry)} className="text-[#a89b8f] hover:text-[#c9a98d]" aria-label={`Редактировать ${entry.title}`}><Edit2 className="w-4 h-4" /></button>
                 <button onClick={() => deleteKnowledge(entry.id)} className="text-[#a89b8f] hover:text-[#8b3a52]" aria-label={`Удалить ${entry.title}`}><Trash2 className="w-4 h-4" /></button>
               </div>
+            </div>
+            <div className="content-card-footer">
+              <ContentMediaActions attachments={entry.attachments} videoUrl={entry.videoUrl} />
+            </div>
             </div>
           </GlassCard>
         ))}
