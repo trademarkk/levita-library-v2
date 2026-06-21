@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Download, Plus, Trash2 } from 'lucide-react';
+import { CalendarClock, Download, Plus, Trash2 } from 'lucide-react';
 import { GlassCard } from './GlassCard';
 import { TabNavigation } from './TabNavigation';
 import { useLibrary } from '../domain/LibraryContext';
@@ -23,7 +23,8 @@ function currentMonthKey() {
 }
 
 function todayKey() {
-  return new Date().toISOString().slice(0, 10);
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
 function daysInMonth(month: string) {
@@ -41,6 +42,23 @@ function formatPlanDay(dateKey: string) {
 
 function money(value: number) {
   return value.toLocaleString('ru-RU') + ' ₽';
+}
+
+function upcomingDayTitle(dateKey: string) {
+  const today = new Date(`${todayKey()}T00:00:00`);
+  const date = new Date(`${dateKey}T00:00:00`);
+  const difference = Math.round((date.getTime() - today.getTime()) / 86_400_000);
+  if (difference === 0) return 'Сегодня';
+  if (difference === 1) return 'Завтра';
+  if (difference === 2) return 'Послезавтра';
+  return formatPlanDay(dateKey);
+}
+
+function formatPaymentValue(value: string) {
+  const normalized = value.trim().replace(/\s/g, '').replace(',', '.');
+  const amount = Number(normalized);
+  if (normalized && Number.isFinite(amount)) return `${amount.toLocaleString('ru-RU')} ₽`;
+  return value;
 }
 
 function escapeHtml(value: string | number) {
@@ -106,6 +124,36 @@ export function FinancialPlanSection() {
           <input value={newTitle} onChange={(event) => setNewTitle(event.target.value)} placeholder="Название платежа" className="field" />
           <button onClick={addRow} className="primary-action flex items-center justify-center gap-2"><Plus className="w-4 h-4" />Добавить платеж</button>
         </div>
+      </GlassCard>
+
+      <GlassCard>
+        <div className="flex items-start gap-3">
+          <CalendarClock className="mt-0.5 h-5 w-5 shrink-0 text-[#c9a98d]" />
+          <div>
+            <h3 className="text-xl text-[#f5f3f0]">Ближайшие платежи</h3>
+            <p className="mt-1 text-sm text-[#a89b8f]">Платежи на сегодня и следующие два дня.</p>
+          </div>
+        </div>
+        {state.upcomingFinancialPayments.length > 0 ? (
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {state.upcomingFinancialPayments.map((payment) => (
+              <div key={`${payment.rowId}:${payment.date}`} className="rounded-lg border border-[#c9a98d]/20 bg-[#2a2630]/55 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-medium uppercase text-[#c9a98d]">{upcomingDayTitle(payment.date)}</p>
+                    <p className="mt-1 text-xs text-[#a89b8f]">{formatPlanDay(payment.date)}</p>
+                  </div>
+                  <strong className="text-sm text-[#f5f3f0]">{formatPaymentValue(payment.value)}</strong>
+                </div>
+                <p className="mt-3 text-sm leading-5 text-[#f5f3f0]">{payment.title}</p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-4 rounded-lg border border-dashed border-[#c9a98d]/20 px-4 py-5 text-sm text-[#a89b8f]">
+            На ближайшие три дня платежей нет.
+          </div>
+        )}
       </GlassCard>
 
       <div className="financial-table-card">

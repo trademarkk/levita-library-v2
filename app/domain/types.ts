@@ -222,6 +222,13 @@ export interface FinancialPlanMonth {
   rows: FinancialPlanRow[];
 }
 
+export interface UpcomingFinancialPayment {
+  rowId: string;
+  title: string;
+  date: string;
+  value: string;
+}
+
 export type ExpenseStudio = 'STAVROPOLSKAYA' | 'MACHUGI';
 export type ExpenseAccount = 'RS_SBER' | 'TOCHKA' | 'CREDIT';
 
@@ -320,6 +327,7 @@ export interface LibraryState {
   checklists: DailyChecklist[];
   refunds: RefundCase[];
   financialPlans: FinancialPlanMonth[];
+  upcomingFinancialPayments: UpcomingFinancialPayment[];
   expenseCategories: ExpenseCategory[];
   expenses: ExpenseRecord[];
   trainerEvaluations: TrainerEvaluationSheet[];

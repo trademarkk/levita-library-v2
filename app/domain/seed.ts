@@ -133,6 +133,7 @@ export const initialState: LibraryState = {
     { id: 'refund-2', clientName: 'Петрова Дарья', requestedAt: '2026-05-10T10:30:00.000+03:00', amount: 7500, reason: 'Смена графика', status: 'NEW', comment: 'Ожидает решения по переносу.', createdAt: now },
   ],
   financialPlans: [],
+  upcomingFinancialPayments: [],
   expenseCategories: [
     { id: 'expense-category-1', name: 'Аренда', createdAt: now },
     { id: 'expense-category-2', name: 'Маркетинг', createdAt: now },

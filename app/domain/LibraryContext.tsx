@@ -229,6 +229,7 @@ function createEmptyState(): LibraryState {
   state.checklists = [];
   state.refunds = [];
   state.financialPlans = [];
+  state.upcomingFinancialPayments = [];
   state.expenseCategories = [];
   state.expenses = [];
   state.trainerEvaluations = [];
@@ -314,6 +315,21 @@ function clampFinancialPlanDate(targetMonth: string, sourceDate: string) {
   const sourceDay = Number(sourceDate.slice(8, 10));
   const day = Math.min(Number.isFinite(sourceDay) ? sourceDay : 1, daysInFinancialPlanMonth(targetMonth));
   return `${targetMonth}-${String(day).padStart(2, '0')}`;
+}
+
+function financialPlanBaseId(rowId: string) {
+  return rowId.replace(/^\d{4}-\d{2}:/, '');
+}
+
+function addDateKeyDays(value: string, offset: number) {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + offset);
+  return date.toISOString().slice(0, 10);
+}
+
+function isUpcomingFinancialDate(value: string) {
+  const today = moscowDateKey();
+  return value >= today && value <= addDateKeyDays(today, 2);
 }
 
 function ensureFinancialPlan(draft: LibraryState, month: string): FinancialPlanMonth {
@@ -617,6 +633,7 @@ function normalizeState(raw: Partial<LibraryState> | null): LibraryState {
       attachments: Array.isArray(entry.attachments) ? entry.attachments : [],
     })),
     financialPlans: normalizeFinancialPlans(raw.financialPlans ?? []),
+    upcomingFinancialPayments: raw.upcomingFinancialPayments ?? [],
     expenseCategories: raw.expenseCategories ?? [],
     expenses: raw.expenses ?? [],
     trainerEvaluations: (raw.trainerEvaluations ?? []).map((evaluation) => ({
@@ -1833,27 +1850,34 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     },
     updateFinancialPlanRow(month, rowId, title) {
       mutateOnServer('financial.row.update', { month, rowId, title }, (draft) => {
-        const base = rowId.replace(/^\d{4}-\d{2}:/, '');
+        const base = financialPlanBaseId(rowId);
         draft.financialPlans.forEach((plan) => {
           if (plan.month < month) return;
           plan.rows.forEach((row) => {
             if (row.id === rowId || row.id.endsWith(`:${base}`) || row.id === base) row.title = title;
           });
         });
+        draft.upcomingFinancialPayments.forEach((payment) => {
+          const paymentBase = financialPlanBaseId(payment.rowId);
+          if (payment.date.slice(0, 7) >= month && paymentBase === base) payment.title = title;
+        });
       }, { showSaving: false });
     },
     deleteFinancialPlanRow(month, rowId) {
       mutateOnServer('financial.row.delete', { month, rowId }, (draft) => {
-        const base = rowId.replace(/^\d{4}-\d{2}:/, '');
+        const base = financialPlanBaseId(rowId);
         draft.financialPlans.forEach((plan) => {
           if (plan.month < month) return;
           plan.rows = plan.rows.filter((row) => row.id !== rowId && !row.id.endsWith(`:${base}`) && row.id !== base);
         });
+        draft.upcomingFinancialPayments = draft.upcomingFinancialPayments.filter((payment) => (
+          payment.date.slice(0, 7) < month || financialPlanBaseId(payment.rowId) !== base
+        ));
       }, { showSaving: false });
     },
     updateFinancialPlanCell(month, rowId, date, value) {
       mutateOnServer('financial.cell.update', { month, rowId, date, value }, (draft) => {
-        const base = rowId.replace(/^\d{4}-\d{2}:/, '');
+        const base = financialPlanBaseId(rowId);
         draft.financialPlans.forEach((plan) => {
           if (plan.month < month) return;
           const row = plan.rows.find((item) => item.id === rowId || item.id.endsWith(`:${base}`) || item.id === base);
@@ -1862,6 +1886,23 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           if (String(value).trim()) row.payments[targetDate] = value;
           else delete row.payments[targetDate];
         });
+        if (isUpcomingFinancialDate(date)) {
+          const planRow = draft.financialPlans
+            .find((plan) => plan.month === month)
+            ?.rows.find((row) => financialPlanBaseId(row.id) === base);
+          draft.upcomingFinancialPayments = draft.upcomingFinancialPayments.filter((payment) => (
+            payment.date !== date || financialPlanBaseId(payment.rowId) !== base
+          ));
+          if (String(value).trim()) {
+            draft.upcomingFinancialPayments.push({
+              rowId,
+              title: planRow?.title || '',
+              date,
+              value,
+            });
+            draft.upcomingFinancialPayments.sort((left, right) => left.date.localeCompare(right.date) || left.title.localeCompare(right.title));
+          }
+        }
       }, { showSaving: false });
     },
     createExpenseCategory(name) {

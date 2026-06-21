@@ -218,6 +218,23 @@ function dateDaysAgo(days) {
   return date.toISOString().slice(0, 10);
 }
 
+function dateInTimeZone(timeZone = 'Europe/Moscow', date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function addDateDays(date, offset) {
+  const value = new Date(`${date}T00:00:00.000Z`);
+  value.setUTCDate(value.getUTCDate() + offset);
+  return value.toISOString().slice(0, 10);
+}
+
 function financialBaseId(rowId) {
   return String(rowId || '').replace(/^\d{4}-\d{2}:/, '');
 }
@@ -664,12 +681,35 @@ export async function readStateSliceFromPrisma(prisma, slice, params = {}) {
       };
     }
     case 'financial-plan': {
-      const [financialMonths, financialRows, financialPayments] = await runLimited([
+      const upcomingStart = dateInTimeZone();
+      const upcomingEnd = addDateDays(upcomingStart, 2);
+      const [financialMonths, financialRows, financialPayments, upcomingPayments] = await runLimited([
         () => prisma.$queryRaw`select * from public.financial_plan_months where month = ${bounds.month} order by month asc`,
         () => prisma.$queryRaw`select * from public.financial_plan_rows where month = ${bounds.month} order by position asc`,
         () => prisma.$queryRaw`select * from public.financial_plan_payments where payment_date >= ${bounds.start}::date and payment_date <= ${bounds.end}::date order by payment_date asc`,
+        () => prisma.$queryRaw`
+          select payment.row_id, row.title, payment.payment_date, payment.value
+          from public.financial_plan_payments payment
+          join public.financial_plan_rows row on row.id = payment.row_id
+          where payment.payment_date >= ${upcomingStart}::date
+            and payment.payment_date <= ${upcomingEnd}::date
+            and nullif(btrim(coalesce(payment.value, '')), '') is not null
+          order by payment.payment_date asc, row.position asc, row.title asc
+        `,
       ]);
-      return { updatedAt: nowIso(), state: { financialPlans: mapFinancialPlans(financialMonths, financialRows, financialPayments) }, sliceMeta: { month: bounds.month } };
+      return {
+        updatedAt: nowIso(),
+        state: {
+          financialPlans: mapFinancialPlans(financialMonths, financialRows, financialPayments),
+          upcomingFinancialPayments: upcomingPayments.map((payment) => ({
+            rowId: payment.row_id,
+            title: payment.title,
+            date: dateOnly(payment.payment_date),
+            value: payment.value || '',
+          })),
+        },
+        sliceMeta: { month: bounds.month },
+      };
     }
     case 'expenses': {
       const [expenseCategories, expenses] = await runLimited([

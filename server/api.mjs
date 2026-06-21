@@ -1188,6 +1188,17 @@ function addDays(date, offset) {
   return value.toISOString().slice(0, 10);
 }
 
+function dateInTimeZone(timeZone = 'Europe/Moscow', date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
 function dateRange(start, end) {
   const days = [];
   for (let date = start; date < end; date = addDays(date, 1)) days.push(date);
@@ -1748,7 +1759,19 @@ async function getStateSlice(slice, params = {}) {
     users: state.users || [],
     adminShifts: state.adminShifts || [],
   });
-  else if (slice === 'financial-plan') Object.assign(sliceState, { financialPlans: (state.financialPlans || []).filter((plan) => !month || plan.month === month) });
+  else if (slice === 'financial-plan') {
+    const upcomingStart = dateInTimeZone();
+    const upcomingEnd = addDays(upcomingStart, 2);
+    const upcomingFinancialPayments = (state.financialPlans || []).flatMap((plan) => plan.rows || []).flatMap((row) =>
+      Object.entries(row.payments || {})
+        .filter(([date, value]) => date >= upcomingStart && date <= upcomingEnd && String(value || '').trim())
+        .map(([date, value]) => ({ rowId: row.id, title: row.title, date, value: String(value) })),
+    ).sort((left, right) => left.date.localeCompare(right.date) || left.title.localeCompare(right.title));
+    Object.assign(sliceState, {
+      financialPlans: (state.financialPlans || []).filter((plan) => !month || plan.month === month),
+      upcomingFinancialPayments,
+    });
+  }
   else if (slice === 'expenses') Object.assign(sliceState, { expenseCategories: state.expenseCategories || [], expenses: (state.expenses || []).filter((expense) => pickMonth(expense.date)) });
   else if (slice === 'trainer-evaluations') Object.assign(sliceState, { trainerEvaluations: (state.trainerEvaluations || []).slice(0, 500) });
   else if (slice === 'trainer-rating') Object.assign(sliceState, { trainerEvaluations: (state.trainerEvaluations || []).filter((item) => pickMonth(item.evaluatedAt)) });
