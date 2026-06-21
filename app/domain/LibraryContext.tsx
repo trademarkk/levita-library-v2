@@ -114,7 +114,7 @@ type CreateExpenseInput = {
 
 type TrainerEvaluationInput = Omit<TrainerEvaluationSheet, 'id' | 'createdAt' | 'createdById'>;
 type TrainerHiringCandidateInput = Omit<TrainerHiringCandidate, 'id' | 'createdAt' | 'updatedAt' | 'rejectedAt' | 'createdById'>;
-type StateSlice = 'bootstrap' | 'tasks' | 'content' | 'checklists' | 'control' | 'shift-journal' | 'financial-plan' | 'expenses' | 'ratings' | 'trainer-evaluations' | 'trainer-rating' | 'call-rating' | 'trainer-hiring' | 'team' | 'audit' | 'refunds';
+type StateSlice = 'bootstrap' | 'tasks' | 'content' | 'call-checklist' | 'checklists' | 'control' | 'shift-journal' | 'financial-plan' | 'expenses' | 'ratings' | 'trainer-evaluations' | 'trainer-rating' | 'call-rating' | 'trainer-hiring' | 'team' | 'audit' | 'refunds';
 
 type StateSliceMeta = {
   month?: string;

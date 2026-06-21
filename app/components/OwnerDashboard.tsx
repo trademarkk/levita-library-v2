@@ -68,7 +68,7 @@ export function OwnerDashboard() {
       contacts: 'content',
       training: 'content',
       checklists: 'checklists',
-      calls: 'content',
+      calls: 'call-checklist',
       refunds: 'refunds',
     };
     const slice = sliceByTab[tab];

@@ -594,6 +594,15 @@ export async function readStateSliceFromPrisma(prisma, slice, params = {}) {
         },
       };
     }
+    case 'call-checklist': {
+      const callChecklistItems = await selectTable(prisma, 'call_checklist_items', 'position asc, id asc');
+      return {
+        updatedAt: nowIso(),
+        state: {
+          callChecklist: callChecklistItems.map((item) => item.label),
+        },
+      };
+    }
     case 'control': {
       const today = localDateOnly();
       const [users, checklists, checklistItems, checklistReports, adminShifts, refunds, tasks] = await runLimited([

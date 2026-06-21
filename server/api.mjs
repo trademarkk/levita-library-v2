@@ -1734,6 +1734,9 @@ async function getStateSlice(slice, params = {}) {
     favorites: state.favorites || [],
     readReceipts: state.readReceipts || [],
   });
+  else if (slice === 'call-checklist') Object.assign(sliceState, {
+    callChecklist: state.callChecklist || [],
+  });
   else if (slice === 'checklists' || slice === 'control') Object.assign(sliceState, {
     users: state.users || [],
     checklists: state.checklists || [],

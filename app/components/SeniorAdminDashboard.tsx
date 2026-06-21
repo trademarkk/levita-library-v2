@@ -54,7 +54,7 @@ function AdminWorkspace({ role, canManageTemplates = false, canManageLinks = fal
       templates: 'content',
       links: 'content',
       checklist: 'checklists',
-      calls: 'content',
+      calls: 'call-checklist',
       refunds: 'refunds',
     };
     const slice = sliceByTab[tab];
