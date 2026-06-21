@@ -8,7 +8,7 @@ import { useLibrary } from '../domain/LibraryContext';
 import { formatDate, formatTime, refundStatusLabels, reportSlotLabels, roleLabels, studioLabels } from '../domain/labels';
 import { can } from '../domain/permissions';
 import type { ChecklistReport, KnowledgeCategory, RefundStatus, Role, Studio } from '../domain/types';
-import { BookOpen, DollarSign, Edit2, FileText, Info, Link as LinkIcon, ListChecks, Phone, Plus, Save, Shield, Trash2, X } from 'lucide-react';
+import { BookOpen, DollarSign, Edit2, FileText, Info, Link as LinkIcon, ListChecks, Phone, Plus, RotateCcw, Save, Shield, Trash2, X } from 'lucide-react';
 import { SEARCH_NAVIGATION_EVENT, type SearchNavigationDetail } from './searchNavigation';
 
 function SectionLoader() {
@@ -530,21 +530,47 @@ function RefundsSection() {
 
 function CallsSection() {
   const { state } = useLibrary();
-  const [completed, setCompleted] = useState<string[]>([]);
+  const [completed, setCompleted] = useState<number[]>([]);
+  const completedSet = new Set(completed);
 
   return (
     <GlassCard>
-      <div className="flex items-center gap-3 mb-6">
-        <Phone className="w-6 h-6 text-[#c9a98d]" />
-        <h2 className="text-2xl text-[#f5f3f0]">Чек-лист звонка</h2>
+      <div className="flex flex-col gap-3 mb-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3">
+          <Phone className="w-5 h-5 text-[#c9a98d]" />
+          <div>
+            <h2 className="text-xl text-[#f5f3f0]">Чек-лист звонка</h2>
+            <p className="mt-0.5 text-xs text-[#a89b8f]">
+              Отмечено {completed.length} из {state.callChecklist.length}
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setCompleted([])}
+          disabled={completed.length === 0}
+          className="secondary-action inline-flex min-h-9 items-center justify-center gap-2 self-start px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-45 sm:self-auto"
+        >
+          <RotateCcw className="h-4 w-4" />
+          Очистить отметки
+        </button>
       </div>
-      <div className="space-y-3">
-        {state.callChecklist.map((topic) => (
-          <label key={topic} className="flex items-center gap-3 p-3 rounded-lg hover:bg-[#2a2630] transition-colors">
-            <input type="checkbox" checked={completed.includes(topic)} onChange={() => setCompleted((items) => items.includes(topic) ? items.filter((item) => item !== topic) : [...items, topic])} className="w-5 h-5 rounded accent-[#c9a98d]" />
-            <span className={completed.includes(topic) ? 'text-[#a89b8f] line-through' : 'text-[#f5f3f0]'}>{topic}</span>
-          </label>
-        ))}
+      <div data-testid="call-checklist-grid" className="grid gap-x-4 gap-y-1 lg:grid-cols-2">
+        {state.callChecklist.map((topic, index) => {
+          const isCompleted = completedSet.has(index);
+          return (
+            <label key={`${index}-${topic}`} className="group flex min-h-10 cursor-pointer items-start gap-2 rounded-md px-2 py-2 transition-colors hover:bg-[#2a2630]">
+              <input
+                type="checkbox"
+                checked={isCompleted}
+                onChange={() => setCompleted((items) => items.includes(index) ? items.filter((item) => item !== index) : [...items, index])}
+                className="mt-0.5 h-4 w-4 shrink-0 rounded accent-[#c9a98d]"
+              />
+              <span className="w-6 shrink-0 text-right text-xs leading-5 text-[#c9a98d]">{index + 1}.</span>
+              <span className={`text-[13px] leading-5 sm:text-sm ${isCompleted ? 'text-[#a89b8f] line-through' : 'text-[#f5f3f0]'}`}>{topic}</span>
+            </label>
+          );
+        })}
       </div>
     </GlassCard>
   );
