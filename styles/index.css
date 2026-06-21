@@ -711,6 +711,13 @@ button:disabled,
   border-bottom: 1px solid rgb(201 169 141 / 0.16);
 }
 
+.content-gallery-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .content-gallery-header strong,
 .content-gallery-header span {
   display: block;
@@ -749,6 +756,7 @@ button:disabled,
   max-height: calc(100dvh - 7rem);
   place-items: center;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 1rem 4rem;
 }
 
@@ -759,6 +767,20 @@ button:disabled,
   height: auto;
   max-height: calc(100dvh - 9rem);
   object-fit: contain;
+  cursor: zoom-in;
+  transition: width 180ms ease;
+}
+
+.content-gallery-stage.is-zoomed {
+  display: block;
+  text-align: center;
+}
+
+.content-gallery-stage.is-zoomed img {
+  width: 160%;
+  max-width: none;
+  max-height: none;
+  cursor: zoom-out;
 }
 
 .content-gallery-nav {

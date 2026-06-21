@@ -1,5 +1,6 @@
-import { Clipboard, ExternalLink, Image, Paperclip, Trash2, Upload, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Clipboard, ExternalLink, Image, Paperclip, Trash2, Upload, X, ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { ContentAttachment } from '../domain/types';
 
 const MAX_FILES = 10;
@@ -130,10 +131,13 @@ export function ContentMediaActions({
   videoUrl?: string | null;
 }) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [isZoomed, setIsZoomed] = useState(false);
   const activeAttachment = activeIndex === null ? null : attachments[activeIndex];
 
   useEffect(() => {
     if (activeIndex === null) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setActiveIndex(null);
       if (event.key === 'ArrowLeft') {
@@ -144,10 +148,80 @@ export function ContentMediaActions({
       }
     };
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
   }, [activeIndex, attachments.length]);
 
+  useEffect(() => {
+    setIsZoomed(false);
+  }, [activeIndex]);
+
   if (!attachments.length && !videoUrl) return null;
+
+  const gallery = activeAttachment && typeof document !== 'undefined'
+    ? createPortal(
+      <div className="content-gallery-backdrop" role="presentation" onMouseDown={() => setActiveIndex(null)}>
+        <div
+          className="content-gallery"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Просмотр скриншотов"
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          <div className="content-gallery-header">
+            <div className="min-w-0">
+              <strong>{activeAttachment.fileName}</strong>
+              <span>{(activeIndex ?? 0) + 1} из {attachments.length} · нажмите на изображение, чтобы увеличить</span>
+            </div>
+            <div className="content-gallery-controls">
+              <button
+                type="button"
+                onClick={() => setIsZoomed((current) => !current)}
+                aria-label={isZoomed ? 'Уменьшить скриншот' : 'Увеличить скриншот'}
+                title={isZoomed ? 'Уменьшить' : 'Увеличить'}
+              >
+                {isZoomed ? <ZoomOut className="h-5 w-5" /> : <ZoomIn className="h-5 w-5" />}
+              </button>
+              <button type="button" onClick={() => setActiveIndex(null)} aria-label="Закрыть">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+          </div>
+          <div className={`content-gallery-stage ${isZoomed ? 'is-zoomed' : ''}`}>
+            {attachments.length > 1 && (
+              <button
+                type="button"
+                className="content-gallery-nav content-gallery-nav-left"
+                onClick={() => setActiveIndex((activeIndex - 1 + attachments.length) % attachments.length)}
+                aria-label="Предыдущий скриншот"
+              >
+                <ChevronLeft className="h-6 w-6" />
+              </button>
+            )}
+            <img
+              src={activeAttachment.url}
+              alt={activeAttachment.fileName}
+              onClick={() => setIsZoomed((current) => !current)}
+              title={isZoomed ? 'Нажмите, чтобы уменьшить' : 'Нажмите, чтобы увеличить'}
+            />
+            {attachments.length > 1 && (
+              <button
+                type="button"
+                className="content-gallery-nav content-gallery-nav-right"
+                onClick={() => setActiveIndex((activeIndex + 1) % attachments.length)}
+                aria-label="Следующий скриншот"
+              >
+                <ChevronRight className="h-6 w-6" />
+              </button>
+            )}
+          </div>
+        </div>
+      </div>,
+      document.body,
+    )
+    : null;
 
   return (
     <>
@@ -166,50 +240,7 @@ export function ContentMediaActions({
         )}
       </div>
 
-      {activeAttachment && (
-        <div className="content-gallery-backdrop" role="presentation" onMouseDown={() => setActiveIndex(null)}>
-          <div
-            className="content-gallery"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Просмотр скриншотов"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <div className="content-gallery-header">
-              <div className="min-w-0">
-                <strong>{activeAttachment.fileName}</strong>
-                <span>{(activeIndex ?? 0) + 1} из {attachments.length}</span>
-              </div>
-              <button type="button" onClick={() => setActiveIndex(null)} aria-label="Закрыть">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            <div className="content-gallery-stage">
-              {attachments.length > 1 && (
-                <button
-                  type="button"
-                  className="content-gallery-nav content-gallery-nav-left"
-                  onClick={() => setActiveIndex((activeIndex - 1 + attachments.length) % attachments.length)}
-                  aria-label="Предыдущий скриншот"
-                >
-                  <ChevronLeft className="h-6 w-6" />
-                </button>
-              )}
-              <img src={activeAttachment.url} alt={activeAttachment.fileName} />
-              {attachments.length > 1 && (
-                <button
-                  type="button"
-                  className="content-gallery-nav content-gallery-nav-right"
-                  onClick={() => setActiveIndex((activeIndex + 1) % attachments.length)}
-                  aria-label="Следующий скриншот"
-                >
-                  <ChevronRight className="h-6 w-6" />
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {gallery}
     </>
   );
 }
