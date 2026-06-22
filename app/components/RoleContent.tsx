@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, CheckCircle2, Edit2, FileText, Info, Link as LinkIcon, Plus, Save, Shield, Star, Trash2, X } from 'lucide-react';
+import { BookOpen, CheckCircle2, Edit2, ExternalLink, FileText, Info, Link as LinkIcon, Plus, Save, Shield, Star, Trash2, X } from 'lucide-react';
 import { GlassCard } from './GlassCard';
 import { TabNavigation } from './TabNavigation';
 import { useLibrary } from '../domain/LibraryContext';
@@ -101,6 +101,42 @@ function hashtagsMatch(hashtags: string | null | undefined, query: string) {
     .map((tag) => normalizeHashtag(tag))
     .filter(Boolean)
     .some((tag) => tag.includes(normalizedQuery));
+}
+
+const firstHttpUrlPattern = /https?:\/\/[^\s<>()]+/i;
+
+function firstHttpUrl(value: string | null | undefined) {
+  return value?.match(firstHttpUrlPattern)?.[0] ?? null;
+}
+
+function regulationUrl(entry: KnowledgeEntry) {
+  return entry.regulationUrl?.trim() || firstHttpUrl(entry.content);
+}
+
+function isValidExternalUrl(value: string) {
+  if (!value.trim()) return true;
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === 'https:' || url.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
+function RegulationLink({ entry, className = '' }: { entry: KnowledgeEntry; className?: string }) {
+  const url = regulationUrl(entry);
+  if (!url) return null;
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      className={`inline-flex items-center justify-center gap-2 rounded-lg bg-[#c9a98d]/20 px-4 py-2 text-sm text-[#c9a98d] transition-colors hover:bg-[#c9a98d]/30 ${className}`}
+    >
+      <ExternalLink className="h-4 w-4" />
+      Открыть регламент
+    </a>
+  );
 }
 
 function searchTarget(entityType: FavoriteEntityType, entityId: string) {
@@ -419,6 +455,7 @@ export function RoleContentViewer({ role, category }: { role: Role; category: Kn
           <p className="text-xs text-[#c9a98d] mb-2">{categoryLabels[category]}</p>
           <h2 className="text-2xl text-[#f5f3f0] mb-4">{selected.title}</h2>
           <div className="mb-4"><BusinessModelBadge value={selected.businessModel} /></div>
+          {category === 'REGULATION' && <RegulationLink entry={selected} className="mb-5" />}
           <p className="text-[#a89b8f] leading-relaxed whitespace-pre-line">{selected.content}</p>
           {selected.hashtags && <p className="mt-4 text-xs text-[#c9a98d]">{selected.hashtags}</p>}
           <div className="mt-5">
@@ -523,6 +560,7 @@ export function RoleContentViewer({ role, category }: { role: Role; category: Kn
           {entry.hashtags && <p className="mt-4 text-xs text-[#c9a98d]">{entry.hashtags}</p>}
           <div className="content-card-footer">
           <ContentMediaActions attachments={entry.attachments} videoUrl={entry.videoUrl} />
+          {category === 'REGULATION' && <RegulationLink entry={entry} className="mt-4" />}
           {category === 'IMPORTANT_INFO' && currentUser && (
             <button onClick={() => markKnowledgeAsRead(entry.id)} className="mt-3 px-4 py-2 rounded-lg border border-[#c9a98d]/20 text-[#f5f3f0] hover:bg-[#2a2630]">
               {knowledgeReadReceipt(entry.id) ? 'Обновить отметку ознакомления' : 'Я ознакомлен'}
@@ -898,11 +936,13 @@ export function OwnerRoleContentManager({ category }: { category: KnowledgeCateg
   const [draft, setDraft] = useState({
     title: '',
     content: '',
+    regulationUrl: '',
     isActual: true,
     businessModel: 'ALL' as BusinessModelScope,
     videoUrl: '',
   });
   const [files, setFiles] = useState<File[]>([]);
+  const [error, setError] = useState<string | null>(null);
   const entries = state.knowledge.filter((entry) => entry.role === activeRole && entry.category === category);
   const hasBusinessModel = supportsBusinessModel(category);
   const selectedTabs = useMemo(() => tabsFor(category), [category]);
@@ -923,8 +963,9 @@ export function OwnerRoleContentManager({ category }: { category: KnowledgeCateg
 
   const resetDraft = () => {
     setEditingId(null);
-    setDraft({ title: '', content: '', isActual: true, businessModel: 'ALL', videoUrl: '' });
+    setDraft({ title: '', content: '', regulationUrl: '', isActual: true, businessModel: 'ALL', videoUrl: '' });
     setFiles([]);
+    setError(null);
   };
 
   const startEdit = (entry: KnowledgeEntry) => {
@@ -932,6 +973,7 @@ export function OwnerRoleContentManager({ category }: { category: KnowledgeCateg
     setDraft({
       title: entry.title,
       content: entry.content,
+      regulationUrl: entry.regulationUrl ?? firstHttpUrl(entry.content) ?? '',
       isActual: entry.isActual !== false,
       businessModel: entry.businessModel ?? 'ALL',
       videoUrl: entry.videoUrl ?? '',
@@ -941,14 +983,20 @@ export function OwnerRoleContentManager({ category }: { category: KnowledgeCateg
 
   const save = async () => {
     if (!draft.title.trim()) return;
+    if (category === 'REGULATION' && !isValidExternalUrl(draft.regulationUrl)) {
+      setError('Укажите корректную ссылку, начинающуюся с http:// или https://.');
+      return;
+    }
+    setError(null);
     const content = category === 'RESPONSIBILITY' ? draft.content || draft.title : draft.content;
     const businessModel = hasBusinessModel ? draft.businessModel : 'ALL';
+    const regulationUrl = category === 'REGULATION' ? draft.regulationUrl : null;
     let targetId = editingId;
     if (editingId) {
-      const saved = await updateKnowledge(editingId, { ...draft, businessModel, content, role: activeRole, category });
+      const saved = await updateKnowledge(editingId, { ...draft, regulationUrl, businessModel, content, role: activeRole, category });
       if (!saved) return;
     } else {
-      targetId = await createKnowledge({ ...draft, businessModel, content, role: activeRole, category });
+      targetId = await createKnowledge({ ...draft, regulationUrl, businessModel, content, role: activeRole, category });
       if (!targetId) return;
     }
     if (files.length && !(await uploadKnowledgeAttachments(targetId, files))) return;
@@ -972,6 +1020,16 @@ export function OwnerRoleContentManager({ category }: { category: KnowledgeCateg
               <option value="archived">Не актуально</option>
             </select>
           )}
+          {category === 'REGULATION' && (
+            <input
+              type="url"
+              value={draft.regulationUrl}
+              onChange={(event) => setDraft((value) => ({ ...value, regulationUrl: event.target.value }))}
+              placeholder="Ссылка на регламент в Google Диске"
+              aria-label="Ссылка на регламент"
+              className="field md:col-span-2"
+            />
+          )}
           <textarea value={draft.content} onChange={(event) => setDraft((value) => ({ ...value, content: event.target.value }))} placeholder={contentPlaceholder} className="field md:col-span-2 min-h-28" />
           <MediaFields
             videoUrl={draft.videoUrl}
@@ -982,6 +1040,7 @@ export function OwnerRoleContentManager({ category }: { category: KnowledgeCateg
             onDeleteExisting={editingEntry ? (attachmentId) => deleteKnowledgeAttachment(editingEntry.id, attachmentId) : undefined}
           />
         </div>
+        {error && <p className="mt-3 text-sm text-[#f0c5cf]">{error}</p>}
         <div className="mt-4 flex flex-wrap gap-3">
           <button onClick={() => void save()} className="primary-action flex items-center gap-2"><Save className="w-4 h-4" />Сохранить</button>
           {editingId && <button onClick={resetDraft} className="px-4 py-2 rounded-lg border border-[#c9a98d]/20 text-[#f5f3f0] hover:bg-[#2a2630] flex items-center gap-2"><X className="w-4 h-4" />Отмена</button>}
@@ -1004,6 +1063,7 @@ export function OwnerRoleContentManager({ category }: { category: KnowledgeCateg
                   <p className="text-xs text-[#c9a98d] mt-1">{formatDate(entry.createdAt)} · {entry.isActual === false ? 'не актуально' : 'актуально'} · ознакомились: {knowledgeReadCount(entry.id)}</p>
                 )}
                 {entry.content && <p className="text-sm text-[#a89b8f] mt-3 whitespace-pre-line">{entry.content}</p>}
+                {category === 'REGULATION' && <RegulationLink entry={entry} className="mt-4" />}
               </div>
               <div className="flex gap-2">
                 <button onClick={() => startEdit(entry)} className="text-[#a89b8f] hover:text-[#c9a98d]" aria-label={`Редактировать ${entry.title}`}><Edit2 className="w-4 h-4" /></button>

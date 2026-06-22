@@ -104,6 +104,7 @@ export interface KnowledgeEntry {
   id: string;
   title: string;
   content: string;
+  regulationUrl?: string | null;
   role: Role;
   category: KnowledgeCategory;
   businessModel?: BusinessModelScope;

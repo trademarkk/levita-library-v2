@@ -167,6 +167,7 @@ create table if not exists public.knowledge_entries (
   id text primary key,
   title text not null,
   content text not null,
+  regulation_url text,
   role public.levtia_role not null,
   category public.knowledge_category not null,
   business_model text not null default 'ALL' check (business_model in ('SUBSCRIPTION', 'MEMBERSHIP', 'ALL')),

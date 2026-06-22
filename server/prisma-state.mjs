@@ -85,6 +85,17 @@ export async function ensureContentMediaSchema(prisma) {
           add column if not exists video_url text
       `);
       await prisma.$executeRawUnsafe(`
+        alter table public.knowledge_entries
+          add column if not exists regulation_url text
+      `);
+      await prisma.$executeRawUnsafe(`
+        update public.knowledge_entries
+        set regulation_url = substring(content from '(https?://[^[:space:]<>()]+)')
+        where category = 'REGULATION'
+          and nullif(btrim(regulation_url), '') is null
+          and content ~ 'https?://'
+      `);
+      await prisma.$executeRawUnsafe(`
         create table if not exists public.content_attachments (
           id text primary key,
           knowledge_entry_id text not null references public.knowledge_entries(id) on delete cascade,
@@ -436,6 +447,7 @@ function mapKnowledgeEntry(entry, groupedAttachments) {
     id: entry.id,
     title: entry.title,
     content: entry.content,
+    regulationUrl: entry.regulation_url,
     role: entry.role,
     category: entry.category,
     businessModel: entry.business_model,
@@ -1030,11 +1042,11 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
       return;
     case 'knowledge.create':
       await ensureContentMediaSchema(prisma);
-      await prisma.$executeRaw`insert into public.knowledge_entries (id, title, content, role, category, business_model, hashtags, is_actual, searchable, video_url, created_at, updated_at) values (${payload.id || newId('knowledge')}, ${payload.title}, ${payload.content}, ${payload.role}::public.levtia_role, ${payload.category}::public.knowledge_category, ${normalizeBusinessModel(payload.businessModel)}, ${payload.hashtags || null}, ${payload.isActual !== false}, true, ${payload.videoUrl || null}, now(), now())`;
+      await prisma.$executeRaw`insert into public.knowledge_entries (id, title, content, regulation_url, role, category, business_model, hashtags, is_actual, searchable, video_url, created_at, updated_at) values (${payload.id || newId('knowledge')}, ${payload.title}, ${payload.content}, ${payload.regulationUrl || null}, ${payload.role}::public.levtia_role, ${payload.category}::public.knowledge_category, ${normalizeBusinessModel(payload.businessModel)}, ${payload.hashtags || null}, ${payload.isActual !== false}, true, ${payload.videoUrl || null}, now(), now())`;
       return;
     case 'knowledge.update':
       await ensureContentMediaSchema(prisma);
-      await prisma.$executeRaw`update public.knowledge_entries set title = coalesce(${payload.input?.title ?? null}, title), content = coalesce(${payload.input?.content ?? null}, content), role = coalesce(${payload.input?.role ?? null}::public.levtia_role, role), category = coalesce(${payload.input?.category ?? null}::public.knowledge_category, category), business_model = coalesce(${payload.input?.businessModel ? normalizeBusinessModel(payload.input.businessModel) : null}, business_model), hashtags = coalesce(${payload.input?.hashtags ?? null}, hashtags), is_actual = coalesce(${payload.input?.isActual ?? null}, is_actual), video_url = case when ${Object.prototype.hasOwnProperty.call(payload.input || {}, 'videoUrl')} then ${payload.input?.videoUrl || null} else video_url end, updated_at = now() where id = ${payload.id}`;
+      await prisma.$executeRaw`update public.knowledge_entries set title = coalesce(${payload.input?.title ?? null}, title), content = coalesce(${payload.input?.content ?? null}, content), regulation_url = case when ${Object.prototype.hasOwnProperty.call(payload.input || {}, 'regulationUrl')} then ${payload.input?.regulationUrl || null} else regulation_url end, role = coalesce(${payload.input?.role ?? null}::public.levtia_role, role), category = coalesce(${payload.input?.category ?? null}::public.knowledge_category, category), business_model = coalesce(${payload.input?.businessModel ? normalizeBusinessModel(payload.input.businessModel) : null}, business_model), hashtags = coalesce(${payload.input?.hashtags ?? null}, hashtags), is_actual = coalesce(${payload.input?.isActual ?? null}, is_actual), video_url = case when ${Object.prototype.hasOwnProperty.call(payload.input || {}, 'videoUrl')} then ${payload.input?.videoUrl || null} else video_url end, updated_at = now() where id = ${payload.id}`;
       return;
     case 'knowledge.delete':
       await prisma.$executeRaw`delete from public.content_favorites where entity_type = 'knowledge' and entity_id = ${payload.id}`;

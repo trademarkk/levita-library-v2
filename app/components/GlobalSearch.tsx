@@ -59,7 +59,7 @@ export function GlobalSearch() {
           kind: categoryLabels[entry.category],
           title: entry.title,
           description: `${roleLabels[entry.role]}${entry.isActual === false ? ' · не актуально' : ''}`,
-          body: entry.content,
+          body: [entry.content, entry.regulationUrl].filter(Boolean).join(' '),
           hashtags: entry.hashtags,
           role: entry.role,
           category: entry.category,

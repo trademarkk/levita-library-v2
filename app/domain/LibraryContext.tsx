@@ -167,8 +167,8 @@ type LibraryContextValue = {
   createUsefulContact: (input: Omit<UsefulContact, 'id' | 'createdAt'>) => void;
   updateUsefulContact: (id: string, input: Partial<Omit<UsefulContact, 'id' | 'createdAt'>>) => void;
   deleteUsefulContact: (id: string) => void;
-  createKnowledge: (input: { title: string; content: string; role: Role; category: KnowledgeCategory; businessModel?: BusinessModelScope; hashtags?: string; isActual?: boolean; videoUrl?: string | null }) => Promise<string | null>;
-  updateKnowledge: (id: string, input: Partial<Pick<KnowledgeEntry, 'title' | 'content' | 'hashtags' | 'role' | 'category' | 'isActual' | 'businessModel' | 'videoUrl'>>) => Promise<boolean>;
+  createKnowledge: (input: { title: string; content: string; regulationUrl?: string | null; role: Role; category: KnowledgeCategory; businessModel?: BusinessModelScope; hashtags?: string; isActual?: boolean; videoUrl?: string | null }) => Promise<string | null>;
+  updateKnowledge: (id: string, input: Partial<Pick<KnowledgeEntry, 'title' | 'content' | 'regulationUrl' | 'hashtags' | 'role' | 'category' | 'isActual' | 'businessModel' | 'videoUrl'>>) => Promise<boolean>;
   deleteKnowledge: (id: string) => void;
   uploadKnowledgeAttachments: (knowledgeEntryId: string, files: File[]) => Promise<boolean>;
   deleteKnowledgeAttachment: (knowledgeEntryId: string, attachmentId: string) => Promise<boolean>;
@@ -629,6 +629,7 @@ function normalizeState(raw: Partial<LibraryState> | null): LibraryState {
     knowledge: (raw.knowledge ?? []).map((entry) => ({
       ...entry,
       businessModel: normalizeBusinessModel(entry.businessModel),
+      regulationUrl: entry.regulationUrl?.trim() || null,
       videoUrl: entry.videoUrl ?? null,
       attachments: Array.isArray(entry.attachments) ? entry.attachments : [],
     })),
@@ -1578,6 +1579,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         id: newId('knowledge'),
         title: input.title,
         content: input.content,
+        regulationUrl: input.regulationUrl?.trim() || null,
         role: input.role,
         category: input.category,
         businessModel: normalizeBusinessModel(input.businessModel),
@@ -1598,6 +1600,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         ...input,
         businessModel: input.businessModel ? normalizeBusinessModel(input.businessModel) : undefined,
         hashtags: input.hashtags !== undefined ? normalizeHashtags(input.hashtags) : undefined,
+        regulationUrl: input.regulationUrl !== undefined ? input.regulationUrl?.trim() || null : undefined,
         videoUrl: input.videoUrl !== undefined ? input.videoUrl?.trim() || null : undefined,
       };
       return runMutation('knowledge.update', { id, input: normalizedInput }, (draft) => {
