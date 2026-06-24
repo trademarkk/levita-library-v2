@@ -738,6 +738,42 @@ async function deletePendingMaxRemindersForShift(shiftId, slots) {
   `).run(shiftId, ...reportSlots);
 }
 
+async function deletePendingMaxRemindersForShiftContext({ shiftId, adminName, studio, date, slots }) {
+  const reportSlots = [...new Set((slots || []).filter(Boolean))];
+  if (!reportSlots.length) return;
+
+  if (shiftId) await deletePendingMaxRemindersForShift(shiftId, reportSlots);
+
+  const normalizedStudio = studio === 'MACHUGI' ? 'MACHUGI' : 'STAVROPOLSKAYA';
+  const shiftDate = stateDateKey(date);
+  if (!adminName || !shiftDate) return;
+
+  if (useSupabase) {
+    await supabaseRun(
+      supabase
+        .from('max_reminders')
+        .delete()
+        .eq('admin_name', adminName)
+        .eq('studio', normalizedStudio)
+        .eq('status', 'pending')
+        .in('report_slot', reportSlots)
+        .like('id', `%:${shiftDate}:%`),
+      'delete pending max reminders for shift context',
+    );
+    return;
+  }
+
+  const placeholders = reportSlots.map(() => '?').join(', ');
+  db.prepare(`
+    DELETE FROM max_reminders
+    WHERE admin_name = ?
+      AND studio = ?
+      AND status = 'pending'
+      AND report_slot IN (${placeholders})
+      AND id LIKE ?
+  `).run(adminName, normalizedStudio, ...reportSlots, `%:${shiftDate}:%`);
+}
+
 async function deletePendingMaxRemindersForChecklistReport({ checklistId, slot }) {
   if (!checklistId || !slot) return 0;
 
@@ -870,7 +906,13 @@ async function createMaxShiftReminders(input) {
       return buildMaxShiftReminder({ ...input, studio, slot, scheduledAt: scheduledAt.toISOString() });
     })
     .filter(Boolean);
-  await deletePendingMaxRemindersForShift(input.shiftId, reminders.map((reminder) => reminder.reportSlot));
+  await deletePendingMaxRemindersForShiftContext({
+    shiftId: input.shiftId,
+    adminName: input.adminName,
+    studio,
+    date: input.date,
+    slots: reminders.map((reminder) => reminder.reportSlot),
+  });
   await insertMaxReminders(reminders);
   return reminders.map((reminder) => ({
     slot: reminder.reportSlot,
@@ -2336,8 +2378,20 @@ export async function handleApiRequest(request, response) {
         send(response, 400, { error: 'shiftId, adminName and date are required' });
         return;
       }
+      let shiftId = body.shiftId;
+      if (usePrismaState && body.userId) {
+        const shifts = await prisma.$queryRaw`
+          select id
+          from public.admin_shifts
+          where user_id = ${body.userId}
+            and shift_date = ${stateDateKey(body.date)}::date
+          order by started_at desc
+          limit 1
+        `;
+        shiftId = shifts[0]?.id || shiftId;
+      }
       const scheduled = await createMaxShiftReminders({
-        shiftId: body.shiftId,
+        shiftId,
         adminName: body.adminName,
         studio: body.studio,
         date: body.date,

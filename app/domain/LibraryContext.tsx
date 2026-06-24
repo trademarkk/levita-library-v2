@@ -884,7 +884,7 @@ async function sendMaxChecklistReport(input: {
   return payload as { ok: boolean; sentAt: string; messageId?: string | null };
 }
 
-async function scheduleMaxShiftReminders(input: { shiftId: string; adminName: string; studio: Studio; date: string }) {
+async function scheduleMaxShiftReminders(input: { shiftId: string; userId?: string; adminName: string; studio: Studio; date: string }) {
   const response = await fetch('/api/max/shift-reminders', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1817,21 +1817,36 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     },
     async startAdminShift(input) {
       const shift = { id: newId('shift'), ...input, date: moscowDateKey(), startedAt: new Date().toISOString(), closedAt: null, remindersScheduledAt: null, reminderScheduleError: null };
-      let scheduleResult: { scheduled?: unknown[] } | null = null;
+      await runMutation('shift.start', shift as unknown as Record<string, unknown>, (draft) => {
+        draft.adminShifts = draft.adminShifts.filter((item) => !(item.userId === shift.userId && item.date === shift.date));
+        draft.adminShifts.unshift(shift);
+      });
       try {
-        scheduleResult = await scheduleMaxShiftReminders({
+        await scheduleMaxShiftReminders({
           shiftId: shift.id,
+          userId: shift.userId,
           adminName: shift.adminName,
           studio: shift.studio,
           date: shift.date,
         });
+        const remindersScheduledAt = new Date().toISOString();
+        await runMutation('shift.reminders.update', { id: shift.id, userId: shift.userId, date: shift.date, remindersScheduledAt, reminderScheduleError: null }, (draft) => {
+          const existing = draft.adminShifts.find((item) => item.id === shift.id || (item.userId === shift.userId && item.date === shift.date));
+          if (existing) {
+            existing.remindersScheduledAt = remindersScheduledAt;
+            existing.reminderScheduleError = null;
+          }
+        }, { showSaving: false });
       } catch (error) {
-        shift.reminderScheduleError = error instanceof Error ? error.message : 'MAX reminders were not scheduled.';
+        const reminderScheduleError = error instanceof Error ? error.message : 'MAX reminders were not scheduled.';
+        await runMutation('shift.reminders.update', { id: shift.id, userId: shift.userId, date: shift.date, remindersScheduledAt: null, reminderScheduleError }, (draft) => {
+          const existing = draft.adminShifts.find((item) => item.id === shift.id || (item.userId === shift.userId && item.date === shift.date));
+          if (existing) {
+            existing.remindersScheduledAt = null;
+            existing.reminderScheduleError = reminderScheduleError;
+          }
+        }, { showSaving: false });
       }
-      if (scheduleResult) shift.remindersScheduledAt = new Date().toISOString();
-      await runMutation('shift.start', shift as unknown as Record<string, unknown>, (draft) => {
-        draft.adminShifts.unshift(shift);
-      });
     },
     createRefund(input) {
       mutateOnServer('refund.create', input as unknown as Record<string, unknown>);

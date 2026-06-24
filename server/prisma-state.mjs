@@ -1475,7 +1475,18 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
       const users = await prisma.$queryRaw`select id, name, role from public.users where id = ${payload.userId} limit 1`;
       const user = users[0] || { id: payload.userId, name: payload.adminName, role: 'ADMIN' };
       await ensureChecklistForUser(prisma, user);
-      await prisma.$executeRaw`insert into public.admin_shifts (id, user_id, admin_name, studio, shift_date, started_at, reminders_scheduled_at, reminder_schedule_error, created_at, updated_at) values (${payload.id || newId('shift')}, ${payload.userId}, ${payload.adminName}, ${payload.studio}::text, ${dateOnly(payload.date)}::date, ${payload.startedAt || now}::timestamptz, ${payload.remindersScheduledAt || null}::timestamptz, ${payload.reminderScheduleError || null}, now(), now()) on conflict (user_id, shift_date) do update set admin_name = excluded.admin_name, studio = excluded.studio, started_at = excluded.started_at, reminders_scheduled_at = excluded.reminders_scheduled_at, reminder_schedule_error = excluded.reminder_schedule_error, updated_at = now()`;
+      await prisma.$executeRaw`insert into public.admin_shifts (id, user_id, admin_name, studio, shift_date, started_at, closed_at, reminders_scheduled_at, reminder_schedule_error, created_at, updated_at) values (${payload.id || newId('shift')}, ${payload.userId}, ${payload.adminName}, ${payload.studio}::text, ${dateOnly(payload.date)}::date, ${payload.startedAt || now}::timestamptz, null, ${payload.remindersScheduledAt || null}::timestamptz, ${payload.reminderScheduleError || null}, now(), now()) on conflict (user_id, shift_date) do update set admin_name = excluded.admin_name, studio = excluded.studio, started_at = excluded.started_at, closed_at = null, reminders_scheduled_at = excluded.reminders_scheduled_at, reminder_schedule_error = excluded.reminder_schedule_error, updated_at = now()`;
+      return;
+    }
+    case 'shift.reminders.update': {
+      await prisma.$executeRaw`
+        update public.admin_shifts
+        set reminders_scheduled_at = ${payload.remindersScheduledAt || null}::timestamptz,
+            reminder_schedule_error = ${payload.reminderScheduleError || null},
+            updated_at = now()
+        where id = ${payload.id}
+           or (user_id = ${payload.userId || null} and shift_date = ${dateOnly(payload.date)}::date)
+      `;
       return;
     }
     case 'callReview.upsert':
