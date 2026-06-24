@@ -1734,7 +1734,13 @@ async function getStateSlice(slice, params = {}) {
   const pickMonth = (date) => !month || String(date || '').slice(0, 7) === month;
   const sliceState = {};
 
-  if (slice === 'bootstrap' || slice === 'team') Object.assign(sliceState, { users: state.users || [], settings: state.settings });
+  if (slice === 'bootstrap' || slice === 'team') Object.assign(sliceState, {
+    users: state.users || [],
+    settings: state.settings,
+    adminShifts: slice === 'bootstrap'
+      ? (state.adminShifts || []).filter((shift) => shift.date === dateInTimeZone())
+      : state.adminShifts || [],
+  });
   else if (slice === 'tasks') Object.assign(sliceState, { tasks: state.tasks || [] });
   else if (slice === 'content') Object.assign(sliceState, {
     knowledge: state.knowledge || [],

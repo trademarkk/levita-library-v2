@@ -583,15 +583,35 @@ export async function readStateSliceFromPrisma(prisma, slice, params = {}) {
 
   switch (slice) {
     case 'bootstrap': {
+      const today = moscowDateParts().date;
       const [row] = await prisma.$queryRaw`
         select
           (select coalesce(jsonb_agg(to_jsonb(u) order by u.created_at asc), '[]'::jsonb) from public.users u) as users,
-          (select coalesce(jsonb_agg(to_jsonb(s)), '[]'::jsonb) from public.app_settings s) as settings_rows
+          (select coalesce(jsonb_agg(to_jsonb(s)), '[]'::jsonb) from public.app_settings s) as settings_rows,
+          (select coalesce(jsonb_agg(to_jsonb(a) order by a.started_at desc), '[]'::jsonb) from public.admin_shifts a where a.shift_date = ${today}::date) as admin_shifts
       `;
       const users = jsonRows(row?.users);
       const settingsRows = jsonRows(row?.settings_rows);
+      const adminShifts = jsonRows(row?.admin_shifts);
       const settings = settingsRows.find((row) => row.id === 'main')?.payload || { colorMode: 'dark', density: 'comfortable', animations: true, telegramReports: true };
-      return { updatedAt: nowIso(), state: { users: users.map(mapUser), settings } };
+      return {
+        updatedAt: nowIso(),
+        state: {
+          users: users.map(mapUser),
+          settings,
+          adminShifts: adminShifts.map((shift) => ({
+            id: shift.id,
+            userId: shift.user_id,
+            adminName: shift.admin_name,
+            studio: shift.studio,
+            date: dateOnly(shift.shift_date),
+            startedAt: iso(shift.started_at),
+            closedAt: iso(shift.closed_at),
+            remindersScheduledAt: iso(shift.reminders_scheduled_at),
+            reminderScheduleError: shift.reminder_schedule_error,
+          })),
+        },
+      };
     }
     case 'tasks': {
       const tasks = await selectTable(prisma, 'tasks', 'created_at asc');
