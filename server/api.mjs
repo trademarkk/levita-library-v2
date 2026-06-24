@@ -738,6 +738,37 @@ async function deletePendingMaxRemindersForShift(shiftId, slots) {
   `).run(shiftId, ...reportSlots);
 }
 
+async function deletePendingMaxRemindersForChecklistReport({ checklistId, slot }) {
+  if (!checklistId || !slot) return 0;
+
+  if (usePrismaState && prisma) {
+    const shifts = await prisma.$queryRaw`
+      select shift.id
+      from public.daily_checklists checklist
+      join public.admin_shifts shift
+        on shift.user_id = checklist.assigned_to
+       and shift.shift_date = checklist.checklist_date
+      where checklist.id = ${checklistId}
+      limit 1
+    `;
+    const shiftId = shifts[0]?.id;
+    if (!shiftId) return 0;
+    await deletePendingMaxRemindersForShift(shiftId, [slot]);
+    return 1;
+  }
+
+  const storedState = await getState();
+  const appState = storedState?.state || null;
+  const checklist = (appState?.checklists || []).find((item) => item.id === checklistId);
+  const shift = (appState?.adminShifts || []).find((item) => (
+    item.userId === checklist?.assignedTo
+    && stateDateKey(item.date) === stateDateKey(checklist?.date)
+  ));
+  if (!shift?.id) return 0;
+  await deletePendingMaxRemindersForShift(shift.id, [slot]);
+  return 1;
+}
+
 function stateDateKey(value) {
   if (/^\d{4}-\d{2}-\d{2}/.test(String(value || ''))) return String(value).slice(0, 10);
   const date = value ? new Date(value) : null;
@@ -747,12 +778,64 @@ function stateDateKey(value) {
 
 function isReminderReportSubmitted(reminder, appState) {
   const shift = (appState?.adminShifts || []).find((item) => item.id === reminder.shiftId);
+  if (shift?.closedAt) return true;
   const checklist = (appState?.checklists || []).find((item) => (
     item.assignedTo === shift?.userId
     && stateDateKey(item.date) === shift?.date
   ));
   const report = checklist?.reports?.find((item) => item.slot === reminder.reportSlot);
   return Boolean(report?.submittedAt || report?.sentToMax || report?.maxSentAt);
+}
+
+function reminderShiftDate(reminder) {
+  const fromId = String(reminder?.id || '').split(':')[1];
+  return /^\d{4}-\d{2}-\d{2}$/.test(fromId || '') ? fromId : stateDateKey(reminder?.scheduledAt);
+}
+
+function isPastMaxReminderCutoff(reminder) {
+  const date = reminderShiftDate(reminder);
+  const current = moscowCloseDateParts();
+  return Boolean(date && date <= current.date && current.hour >= 23);
+}
+
+async function getMaxReminderStopReason(reminder, appState = null) {
+  if (isPastMaxReminderCutoff(reminder)) return 'shift-close-time';
+
+  if (usePrismaState && prisma) {
+    const shifts = await prisma.$queryRaw`
+      select id, user_id, shift_date, closed_at
+      from public.admin_shifts
+      where id = ${reminder.shiftId}
+      limit 1
+    `;
+    const shift = shifts[0];
+    if (!shift) return 'shift-not-found';
+    if (shift.closed_at) return 'shift-closed';
+
+    const shiftDate = stateDateKey(shift.shift_date);
+    const reports = await prisma.$queryRaw`
+      select cr.submitted_at, cr.sent_to_max, cr.max_sent_at
+      from public.checklist_reports cr
+      join public.daily_checklists dc on dc.id = cr.checklist_id
+      where dc.assigned_to = ${shift.user_id}
+        and dc.checklist_date = ${shiftDate}::date
+        and cr.slot = ${reminder.reportSlot}
+      limit 1
+    `;
+    const report = reports[0];
+    return report && (report.submitted_at || report.sent_to_max || report.max_sent_at) ? 'report-submitted' : null;
+  }
+
+  return isReminderReportSubmitted(reminder, appState) ? 'report-submitted' : null;
+}
+
+async function getMaxReminderStopReasonSafe(reminder, appState = null) {
+  try {
+    return await getMaxReminderStopReason(reminder, appState);
+  } catch (error) {
+    console.error('MAX reminder stop check failed:', error);
+    return null;
+  }
 }
 
 function reminderDayEnd(date) {
@@ -1001,7 +1084,7 @@ async function createDatabaseBackup() {
 async function runMaxReminderJob() {
   const released = await releaseStaleProcessingMaxReminders();
   const reminders = await claimDueMaxReminders();
-  const storedState = reminders.length ? await getState() : null;
+  const storedState = reminders.length && !usePrismaState ? await getState() : null;
   const appState = storedState?.state || null;
   const results = [];
   for (const reminder of reminders) {
@@ -1011,21 +1094,22 @@ async function runMaxReminderJob() {
         results.push({ id: reminder.id, status: 'skipped', reason: 'disabled-slot' });
         continue;
       }
-      if (isReminderReportSubmitted(reminder, appState)) {
-        await markMaxReminderSent(reminder.id, 'skipped-report-submitted');
-        results.push({ id: reminder.id, status: 'skipped', reason: 'report-submitted' });
+      const stopReason = await getMaxReminderStopReasonSafe(reminder, appState);
+      if (stopReason) {
+        await markMaxReminderSent(reminder.id, `skipped-${stopReason}`);
+        results.push({ id: reminder.id, status: 'skipped', reason: stopReason });
         continue;
       }
       const message = await sendMaxMessage(reminder.messageText, reminder.studio);
       const messageId = message.message?.id || message.id || null;
       await markMaxReminderSent(reminder.id, messageId);
-      const nextReminder = isReminderReportSubmitted(reminder, appState) ? null : nextFollowUpReminder(reminder);
+      const nextReminder = await getMaxReminderStopReasonSafe(reminder, appState) ? null : nextFollowUpReminder(reminder);
       if (nextReminder) await insertMaxReminders([nextReminder]);
       results.push({ id: reminder.id, status: 'sent', messageId });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown MAX reminder error';
       await markMaxReminderFailed(reminder.id, message);
-      const nextReminder = isReminderReportSubmitted(reminder, appState) ? null : nextFollowUpReminder(reminder);
+      const nextReminder = await getMaxReminderStopReasonSafe(reminder, appState) ? null : nextFollowUpReminder(reminder);
       if (nextReminder) await insertMaxReminders([nextReminder]);
       results.push({ id: reminder.id, status: 'failed', error: message });
     }
@@ -2310,6 +2394,7 @@ export async function handleApiRequest(request, response) {
       const studio = body.report?.studio === 'MACHUGI' ? 'MACHUGI' : 'STAVROPOLSKAYA';
       try {
         const message = await sendMaxMessage(maxReportText(body), studio);
+        await deletePendingMaxRemindersForChecklistReport({ checklistId: body.checklistId, slot: body.slot });
         send(response, 200, {
           ok: true,
           sentAt,
