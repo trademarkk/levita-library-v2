@@ -52,10 +52,11 @@ const GOOGLE_TASK_HISTORY_LIMIT = Number(process.env.GOOGLE_TASK_HISTORY_LIMIT |
 const MAX_REQUEST_TIMEOUT_MS = Number(process.env.MAX_REQUEST_TIMEOUT_MS || 12000);
 const MAX_API_BASE = process.env.MAX_API_BASE || 'https://platform-api.max.ru';
 const MAX_BOT_TOKEN = process.env.MAX_BOT_TOKEN || '';
+const MAX_BOT_TOKEN_ASSISTANT = process.env.MAX_BOT_TOKEN_ASSISTANT || '';
 const MAX_REPORT_CHAT_ID = process.env.MAX_REPORT_CHAT_ID || '';
 const MAX_REPORT_CHAT_ID_STAVROPOLSKAYA = process.env.MAX_REPORT_CHAT_ID_STAVROPOLSKAYA || MAX_REPORT_CHAT_ID;
 const MAX_REPORT_CHAT_ID_MACHUGI = process.env.MAX_REPORT_CHAT_ID_MACHUGI || '';
-const MAX_FINANCE_CHAT_ID = process.env.MAX_FINANCE_CHAT_ID || '';
+const MAX_CHAT_ID_ASSISTANT = process.env.MAX_CHAT_ID_ASSISTANT || '';
 const MAX_REPORT_REMINDER_SLOTS = ['14:00', '18:00'];
 const MAX_REPORT_REPEAT_MINUTES = 15;
 const MAX_REMINDER_PROCESSING_TIMEOUT_MINUTES = 5;
@@ -594,9 +595,12 @@ function maxReportText(input) {
   ].join('\n');
 }
 
-async function sendMaxMessageToChat(text, chatId) {
+async function sendMaxMessageToChat(text, chatId, botTokenOverride) {
   const config = getMaxConfig();
-  if (!config.botToken) {
+  const botToken = botTokenOverride === undefined
+    ? config.botToken
+    : normalizeMaxToken(botTokenOverride);
+  if (!botToken) {
     const error = new Error('MAX не настроен: добавьте MAX_BOT_TOKEN.');
     error.statusCode = 409;
     throw error;
@@ -614,7 +618,7 @@ async function sendMaxMessageToChat(text, chatId) {
     const response = await fetch(`${config.apiBase}/messages?${params.toString()}`, {
       method: 'POST',
       headers: {
-        Authorization: config.botToken,
+        Authorization: botToken,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ text, format: 'markdown', notify: true }),
@@ -1264,8 +1268,8 @@ async function runFinancialPaymentReminderJob() {
     error.statusCode = 409;
     throw error;
   }
-  if (!MAX_FINANCE_CHAT_ID.trim()) {
-    const error = new Error('MAX finance chat is not configured: add MAX_FINANCE_CHAT_ID.');
+  if (!normalizeMaxToken(MAX_BOT_TOKEN_ASSISTANT) || !MAX_CHAT_ID_ASSISTANT.trim()) {
+    const error = new Error('MAX assistant notifications are not configured: add MAX_BOT_TOKEN_ASSISTANT and MAX_CHAT_ID_ASSISTANT.');
     error.statusCode = 409;
     throw error;
   }
@@ -1315,7 +1319,7 @@ async function runFinancialPaymentReminderJob() {
     }
 
     const messageText = buildFinancialPaymentReminderMessage(payments, today);
-    const message = await sendMaxMessageToChat(messageText, MAX_FINANCE_CHAT_ID);
+    const message = await sendMaxMessageToChat(messageText, MAX_CHAT_ID_ASSISTANT, MAX_BOT_TOKEN_ASSISTANT);
     const messageId = message.message?.id || message.id || null;
     const sentAt = new Date().toISOString();
     await prisma.$executeRaw`
@@ -2432,11 +2436,11 @@ export async function handleApiRequest(request, response) {
       const config = getMaxConfig();
       send(response, 200, {
         configured: Boolean(config.botToken && config.reportChatIds.STAVROPOLSKAYA),
-        financeConfigured: Boolean(config.botToken && MAX_FINANCE_CHAT_ID),
+        financeConfigured: Boolean(normalizeMaxToken(MAX_BOT_TOKEN_ASSISTANT) && MAX_CHAT_ID_ASSISTANT),
         chatIds: {
           STAVROPOLSKAYA: config.reportChatIds.STAVROPOLSKAYA || null,
           MACHUGI: config.reportChatIds.MACHUGI || null,
-          FINANCE: MAX_FINANCE_CHAT_ID || null,
+          FINANCE: MAX_CHAT_ID_ASSISTANT || null,
         },
       });
       return;
