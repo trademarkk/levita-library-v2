@@ -7,6 +7,7 @@ const AUDIT_LOG_LIMIT = Number(process.env.LEVTIA_AUDIT_LOG_LIMIT || 500);
 const REFUND_LIMIT = Number(process.env.LEVTIA_REFUND_LIMIT || 500);
 const SLICE_READ_CONCURRENCY = Math.max(1, Number(process.env.LEVTIA_SLICE_READ_CONCURRENCY || 2));
 let contentMediaSchemaPromise = null;
+let expenseSchemaPromise = null;
 const ADMIN_CHECKLIST_ITEMS = [
   'Проверить чистоту студии: зеркала, углы и поверхности',
   'Отправить кружок об открытии студии до 09:30',
@@ -120,6 +121,19 @@ export async function ensureContentMediaSchema(prisma) {
     });
   }
   await contentMediaSchemaPromise;
+}
+
+async function ensureExpenseSchema(prisma) {
+  if (!expenseSchemaPromise) {
+    expenseSchemaPromise = prisma.$executeRawUnsafe(`
+      alter table public.expenses
+        add column if not exists previous_month_credit boolean not null default false
+    `).catch((error) => {
+      expenseSchemaPromise = null;
+      throw error;
+    });
+  }
+  await expenseSchemaPromise;
 }
 
 function moscowDateParts(value = new Date()) {
@@ -461,7 +475,7 @@ function mapKnowledgeEntry(entry, groupedAttachments) {
 }
 
 export async function readStateFromPrisma(prisma) {
-  await ensureContentMediaSchema(prisma);
+  await Promise.all([ensureContentMediaSchema(prisma), ensureExpenseSchema(prisma)]);
   const users = await selectTable(prisma, 'users', 'created_at asc');
   const tasks = await selectTable(prisma, 'tasks', 'created_at asc');
   const templates = await selectTable(prisma, 'response_templates', 'created_at asc');
@@ -561,7 +575,7 @@ export async function readStateFromPrisma(prisma) {
       financialPlans: financialMonths.map((month) => ({ month: month.month, rows: rowsByMonth.get(month.month) || [] })),
       calendarEvents: calendarEvents.map((event) => ({ id: event.id, title: event.title, date: dateOnly(event.event_date), startTime: timeOnly(event.start_time), endTime: timeOnly(event.end_time), description: event.description, sourceTaskId: event.source_task_id, googleEventId: event.google_event_id, googleRecurringEventId: event.google_recurring_event_id, googleHtmlLink: event.google_html_link, googleSyncStatus: event.google_sync_status, googleSyncError: event.google_sync_error, source: event.source, sourceName: event.source_name, recurrence: event.recurrence, createdAt: iso(event.created_at) })),
       expenseCategories: expenseCategories.map((category) => ({ id: category.id, name: category.name, createdAt: iso(category.created_at) })),
-      expenses: expenses.map((expense) => ({ id: expense.id, date: dateOnly(expense.expense_date), amount: Number(expense.amount) || 0, account: expense.account, category: expense.category, studio: expense.studio, comment: expense.comment, createdAt: iso(expense.created_at) })),
+      expenses: expenses.map((expense) => ({ id: expense.id, date: dateOnly(expense.expense_date), amount: Number(expense.amount) || 0, account: expense.account, category: expense.category, studio: expense.studio, previousMonthCredit: Boolean(expense.previous_month_credit), comment: expense.comment, createdAt: iso(expense.created_at) })),
       trainerEvaluations: trainerEvaluations.map((evaluation) => ({ id: evaluation.id, trainerName: evaluation.trainer_name, studio: evaluation.studio, direction: evaluation.direction, score: Number(evaluation.score) || 0, evaluatedAt: dateOnly(evaluation.evaluated_at), sheetUrl: evaluation.sheet_url, createdById: evaluation.created_by_id, createdAt: iso(evaluation.created_at) })),
       trainerHiringCandidates: trainerHiringCandidates.map(mapTrainerHiringCandidate),
       callReviews: callReviews.map((review) => ({ id: review.id, source: review.source || 'levita-calls', externalId: review.external_id, adminName: review.admin_name, studio: review.studio, score: Number(review.score) || 0, reviewedAt: dateOnly(review.reviewed_at), amoCrmDealUrl: review.amo_crm_deal_url, callUrl: review.call_url, originalFilename: review.original_filename, comment: review.comment, createdAt: iso(review.created_at), updatedAt: iso(review.updated_at) })),
@@ -744,6 +758,7 @@ export async function readStateSliceFromPrisma(prisma, slice, params = {}) {
       };
     }
     case 'expenses': {
+      await ensureExpenseSchema(prisma);
       const [expenseCategories, expenses] = await runLimited([
         () => selectTable(prisma, 'expense_categories', 'created_at asc'),
         () => prisma.$queryRaw`select * from public.expenses where expense_date >= ${bounds.start}::date and expense_date <= ${bounds.end}::date order by expense_date desc`,
@@ -752,7 +767,7 @@ export async function readStateSliceFromPrisma(prisma, slice, params = {}) {
         updatedAt: nowIso(),
         state: {
           expenseCategories: expenseCategories.map((category) => ({ id: category.id, name: category.name, createdAt: iso(category.created_at) })),
-          expenses: expenses.map((expense) => ({ id: expense.id, date: dateOnly(expense.expense_date), amount: Number(expense.amount) || 0, account: expense.account, category: expense.category, studio: expense.studio, comment: expense.comment, createdAt: iso(expense.created_at) })),
+          expenses: expenses.map((expense) => ({ id: expense.id, date: dateOnly(expense.expense_date), amount: Number(expense.amount) || 0, account: expense.account, category: expense.category, studio: expense.studio, previousMonthCredit: Boolean(expense.previous_month_credit), comment: expense.comment, createdAt: iso(expense.created_at) })),
         },
         sliceMeta: { month: bounds.month },
       };
@@ -1293,10 +1308,12 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
       await prisma.$executeRaw`delete from public.expense_categories where id = ${payload.id}`;
       return;
     case 'expense.create':
-      await prisma.$executeRaw`insert into public.expenses (id, expense_date, amount, account, category, studio, comment, created_at, updated_at) values (${payload.id || newId('expense')}, ${dateOnly(payload.date)}::date, ${toNumber(payload.amount)}, ${payload.account}::public.expense_account, ${payload.category}, ${payload.studio}::public.expense_studio, ${payload.comment || null}, now(), now())`;
+      await ensureExpenseSchema(prisma);
+      await prisma.$executeRaw`insert into public.expenses (id, expense_date, amount, account, category, studio, previous_month_credit, comment, created_at, updated_at) values (${payload.id || newId('expense')}, ${dateOnly(payload.date)}::date, ${toNumber(payload.amount)}, ${payload.account}::public.expense_account, ${payload.category}, ${payload.studio}::public.expense_studio, ${Boolean(payload.previousMonthCredit)}, ${payload.comment || null}, now(), now())`;
       return;
     case 'expense.update':
-      await prisma.$executeRaw`update public.expenses set expense_date = coalesce(${payload.input?.date ? dateOnly(payload.input.date) : null}::date, expense_date), amount = coalesce(${payload.input?.amount ?? null}, amount), account = coalesce(${payload.input?.account ?? null}::public.expense_account, account), category = coalesce(${payload.input?.category ?? null}, category), studio = coalesce(${payload.input?.studio ?? null}::public.expense_studio, studio), comment = coalesce(${payload.input?.comment ?? null}, comment), updated_at = now() where id = ${payload.id}`;
+      await ensureExpenseSchema(prisma);
+      await prisma.$executeRaw`update public.expenses set expense_date = coalesce(${payload.input?.date ? dateOnly(payload.input.date) : null}::date, expense_date), amount = coalesce(${payload.input?.amount ?? null}, amount), account = coalesce(${payload.input?.account ?? null}::public.expense_account, account), category = coalesce(${payload.input?.category ?? null}, category), studio = coalesce(${payload.input?.studio ?? null}::public.expense_studio, studio), previous_month_credit = coalesce(${payload.input?.previousMonthCredit ?? null}::boolean, previous_month_credit), comment = coalesce(${payload.input?.comment ?? null}, comment), updated_at = now() where id = ${payload.id}`;
       return;
     case 'expense.delete':
       await prisma.$executeRaw`delete from public.expenses where id = ${payload.id}`;

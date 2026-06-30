@@ -109,6 +109,7 @@ type CreateExpenseInput = {
   account: ExpenseAccount;
   category: string;
   studio: ExpenseStudio;
+  previousMonthCredit?: boolean;
   comment?: string;
 };
 
@@ -1936,7 +1937,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       });
     },
     createExpense(input) {
-      const expense = { id: newId('expense'), ...input, createdAt: new Date().toISOString() };
+      const expense = { id: newId('expense'), ...input, previousMonthCredit: Boolean(input.previousMonthCredit), createdAt: new Date().toISOString() };
       mutateOnServer('expense.create', expense as unknown as Record<string, unknown>, (draft) => {
         draft.expenses.unshift(expense);
       });

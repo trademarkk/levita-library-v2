@@ -312,6 +312,7 @@ export interface ExpenseRecord {
   account: ExpenseAccount;
   category: string;
   studio: ExpenseStudio;
+  previousMonthCredit: boolean;
   comment?: string | null;
   createdAt: string;
 }

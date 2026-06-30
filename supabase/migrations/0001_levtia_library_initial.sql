@@ -302,6 +302,7 @@ create table if not exists public.expenses (
   account public.expense_account not null,
   category text not null,
   studio public.expense_studio not null,
+  previous_month_credit boolean not null default false,
   comment text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
