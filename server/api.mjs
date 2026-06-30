@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
 import { readStateFromTables, writeStateToTables } from './table-state.mjs';
-import { applyPrismaMutation, closeDuePrismaAdminShifts, createPrisma, ensureContentMediaSchema, readStateFromPrisma, readStateSliceFromPrisma } from './prisma-state.mjs';
+import { applyPrismaMutation, closeDuePrismaAdminShifts, createPrisma, ensureContentMediaSchema, ensureFinancialNotificationSchema, readStateFromPrisma, readStateSliceFromPrisma } from './prisma-state.mjs';
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const dataDir = join(rootDir, 'data');
@@ -55,11 +55,14 @@ const MAX_BOT_TOKEN = process.env.MAX_BOT_TOKEN || '';
 const MAX_REPORT_CHAT_ID = process.env.MAX_REPORT_CHAT_ID || '';
 const MAX_REPORT_CHAT_ID_STAVROPOLSKAYA = process.env.MAX_REPORT_CHAT_ID_STAVROPOLSKAYA || MAX_REPORT_CHAT_ID;
 const MAX_REPORT_CHAT_ID_MACHUGI = process.env.MAX_REPORT_CHAT_ID_MACHUGI || '';
+const MAX_FINANCE_CHAT_ID = process.env.MAX_FINANCE_CHAT_ID || '';
 const MAX_REPORT_REMINDER_SLOTS = ['14:00', '18:00'];
 const MAX_REPORT_REPEAT_MINUTES = 15;
 const MAX_REMINDER_PROCESSING_TIMEOUT_MINUTES = 5;
 const CRON_SECRET = process.env.CRON_SECRET || '';
 const MAX_REMINDER_RETENTION_DAYS = Number(process.env.MAX_REMINDER_RETENTION_DAYS || 20);
+const FINANCIAL_REMINDER_LOOKAHEAD_DAYS = Math.max(0, Number(process.env.FINANCIAL_REMINDER_LOOKAHEAD_DAYS || 2));
+const FINANCIAL_NOTIFICATION_RETENTION_DAYS = Math.max(1, Number(process.env.FINANCIAL_NOTIFICATION_RETENTION_DAYS || 30));
 const APP_STATE_BACKUP_RETENTION_DAYS = Number(process.env.APP_STATE_BACKUP_RETENTION_DAYS || 14);
 const APP_STATE_BACKUP_MAX_ROWS = Number(process.env.APP_STATE_BACKUP_MAX_ROWS || 20);
 const SESSION_COOKIE_NAME = 'levtia_session';
@@ -591,13 +594,23 @@ function maxReportText(input) {
   ].join('\n');
 }
 
-async function sendMaxMessage(text, studio = 'STAVROPOLSKAYA') {
-  const { config, reportChatId } = ensureMaxStudioConfigured(studio);
+async function sendMaxMessageToChat(text, chatId) {
+  const config = getMaxConfig();
+  if (!config.botToken) {
+    const error = new Error('MAX не настроен: добавьте MAX_BOT_TOKEN.');
+    error.statusCode = 409;
+    throw error;
+  }
+  if (!String(chatId || '').trim()) {
+    const error = new Error('Не указан ID чата MAX.');
+    error.statusCode = 409;
+    throw error;
+  }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MAX_REQUEST_TIMEOUT_MS);
   try {
-    const params = new URLSearchParams({ chat_id: reportChatId });
+    const params = new URLSearchParams({ chat_id: String(chatId).trim() });
     const response = await fetch(`${config.apiBase}/messages?${params.toString()}`, {
       method: 'POST',
       headers: {
@@ -630,6 +643,11 @@ async function sendMaxMessage(text, studio = 'STAVROPOLSKAYA') {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function sendMaxMessage(text, studio = 'STAVROPOLSKAYA') {
+  const { reportChatId } = ensureMaxStudioConfigured(studio);
+  return sendMaxMessageToChat(text, reportChatId);
 }
 
 function reminderRowToModel(row) {
@@ -1166,6 +1184,156 @@ async function runMaxReminderJob() {
     cleanup,
     results,
   };
+}
+
+function addIsoDateDays(value, days) {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function formatFinancialReminderDate(value, today) {
+  const offset = Math.round((new Date(`${value}T00:00:00.000Z`).getTime() - new Date(`${today}T00:00:00.000Z`).getTime()) / 86_400_000);
+  const prefix = offset === 0 ? 'Сегодня' : offset === 1 ? 'Завтра' : offset === 2 ? 'Послезавтра' : '';
+  const formatted = new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: 'long',
+    weekday: 'short',
+    timeZone: 'Europe/Moscow',
+  }).format(new Date(`${value}T12:00:00.000Z`));
+  return prefix ? `${prefix}, ${formatted}` : formatted;
+}
+
+function formatFinancialReminderValue(value) {
+  const normalized = String(value || '').trim().replace(/\s/g, '').replace(',', '.');
+  const amount = Number(normalized);
+  return normalized && Number.isFinite(amount)
+    ? `${amount.toLocaleString('ru-RU')} ₽`
+    : String(value || '').trim();
+}
+
+function buildFinancialPaymentReminderMessage(payments, today) {
+  const grouped = new Map();
+  for (const payment of payments) {
+    const date = stateDateKey(payment.payment_date);
+    const list = grouped.get(date) || [];
+    list.push(payment);
+    grouped.set(date, list);
+  }
+
+  const lines = ['Предстоящие платежи', ''];
+  for (const [date, datePayments] of grouped) {
+    lines.push(formatFinancialReminderDate(date, today));
+    for (const payment of datePayments) {
+      lines.push(`• ${payment.title} — ${formatFinancialReminderValue(payment.value)}`);
+    }
+    lines.push('');
+  }
+  lines.push(`Всего платежей: ${payments.length}`);
+  return lines.join('\n');
+}
+
+async function cleanupFinancialNotificationRuns(today) {
+  const deleted = await prisma.$executeRaw`
+    delete from public.financial_payment_notification_runs
+    where notification_date < (${today}::date - ${FINANCIAL_NOTIFICATION_RETENTION_DAYS}::int)
+  `;
+  return Number(deleted) || 0;
+}
+
+async function claimFinancialNotificationRun(today) {
+  const rows = await prisma.$queryRaw`
+    insert into public.financial_payment_notification_runs as existing_run (
+      notification_date, status, created_at, updated_at
+    ) values (${today}::date, 'processing', now(), now())
+    on conflict (notification_date) do update
+      set status = 'processing', error = null, updated_at = now()
+      where existing_run.status = 'failed'
+         or (
+           existing_run.status = 'processing'
+           and existing_run.updated_at < now() - interval '15 minutes'
+         )
+    returning *
+  `;
+  return rows[0] || null;
+}
+
+async function runFinancialPaymentReminderJob() {
+  if (!usePrismaState || !prisma) {
+    const error = new Error('Financial payment reminders require Supabase + Prisma mode.');
+    error.statusCode = 409;
+    throw error;
+  }
+  if (!MAX_FINANCE_CHAT_ID.trim()) {
+    const error = new Error('MAX finance chat is not configured: add MAX_FINANCE_CHAT_ID.');
+    error.statusCode = 409;
+    throw error;
+  }
+
+  await ensureFinancialNotificationSchema(prisma);
+  const today = moscowCloseDateParts().date;
+  const endDate = addIsoDateDays(today, FINANCIAL_REMINDER_LOOKAHEAD_DAYS);
+  const cleaned = await cleanupFinancialNotificationRuns(today);
+  const claimed = await claimFinancialNotificationRun(today);
+  if (!claimed) {
+    const existing = await prisma.$queryRaw`
+      select status, sent_at, updated_at
+      from public.financial_payment_notification_runs
+      where notification_date = ${today}::date
+      limit 1
+    `;
+    return {
+      ok: true,
+      skipped: true,
+      reason: 'already-processed',
+      date: today,
+      status: existing[0]?.status || null,
+      sentAt: existing[0]?.sent_at || null,
+      cleaned,
+    };
+  }
+
+  try {
+    const payments = await prisma.$queryRaw`
+      select payment.row_id, payment.payment_date, payment.value, row.title, row.position
+      from public.financial_plan_payments payment
+      join public.financial_plan_rows row on row.id = payment.row_id
+      where payment.payment_date >= ${today}::date
+        and payment.payment_date <= ${endDate}::date
+        and payment.is_paid = false
+        and nullif(btrim(payment.value), '') is not null
+      order by payment.payment_date asc, row.position asc, row.title asc
+    `;
+
+    if (!payments.length) {
+      await prisma.$executeRaw`
+        update public.financial_payment_notification_runs
+        set status = 'skipped', message_text = null, error = null, updated_at = now()
+        where notification_date = ${today}::date
+      `;
+      return { ok: true, skipped: true, reason: 'no-upcoming-payments', date: today, endDate, cleaned };
+    }
+
+    const messageText = buildFinancialPaymentReminderMessage(payments, today);
+    const message = await sendMaxMessageToChat(messageText, MAX_FINANCE_CHAT_ID);
+    const messageId = message.message?.id || message.id || null;
+    const sentAt = new Date().toISOString();
+    await prisma.$executeRaw`
+      update public.financial_payment_notification_runs
+      set status = 'sent', message_text = ${messageText}, max_message_id = ${messageId},
+          sent_at = ${sentAt}::timestamptz, error = null, updated_at = now()
+      where notification_date = ${today}::date
+    `;
+    return { ok: true, skipped: false, date: today, endDate, payments: payments.length, messageId, sentAt, cleaned };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown financial reminder error';
+    await prisma.$executeRaw`
+      update public.financial_payment_notification_runs
+      set status = 'failed', error = ${message}, updated_at = now()
+      where notification_date = ${today}::date
+    `.catch(() => undefined);
+    throw error;
+  }
 }
 
 function isCronAuthorized(request, url) {
@@ -2264,9 +2432,11 @@ export async function handleApiRequest(request, response) {
       const config = getMaxConfig();
       send(response, 200, {
         configured: Boolean(config.botToken && config.reportChatIds.STAVROPOLSKAYA),
+        financeConfigured: Boolean(config.botToken && MAX_FINANCE_CHAT_ID),
         chatIds: {
           STAVROPOLSKAYA: config.reportChatIds.STAVROPOLSKAYA || null,
           MACHUGI: config.reportChatIds.MACHUGI || null,
+          FINANCE: MAX_FINANCE_CHAT_ID || null,
         },
       });
       return;
@@ -2406,6 +2576,15 @@ export async function handleApiRequest(request, response) {
         return;
       }
       send(response, 200, await runMaxReminderJob());
+      return;
+    }
+
+    if (url.pathname === '/api/jobs/financial-payment-reminders' && (request.method === 'GET' || request.method === 'POST')) {
+      if (!isCronAuthorized(request, url)) {
+        send(response, 401, { error: 'Unauthorized cron request' });
+        return;
+      }
+      send(response, 200, await runFinancialPaymentReminderJob());
       return;
     }
 

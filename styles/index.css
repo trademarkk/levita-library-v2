@@ -251,6 +251,35 @@ body,
   vertical-align: middle;
 }
 
+.financial-table-cell.financial-payment-paid {
+  background: rgb(74 108 78 / 0.2);
+  box-shadow: inset 0 0 0 1px rgb(120 164 126 / 0.22);
+}
+
+.financial-payment-status {
+  display: flex;
+  min-height: 1.25rem;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  color: #a89b8f;
+  font-size: 0.68rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.financial-payment-status input {
+  width: 0.9rem;
+  height: 0.9rem;
+  cursor: pointer;
+  accent-color: #7ca882;
+}
+
+.financial-payment-paid .financial-payment-status {
+  color: #a8c7aa;
+}
+
 .financial-sticky-cell {
   position: sticky;
   left: 0;
@@ -332,6 +361,15 @@ thead .financial-sticky-cell {
 .theme-light .financial-table,
 .theme-light .financial-table-cell {
   background: rgb(255 250 244 / 0.92);
+}
+
+.theme-light .financial-table-cell.financial-payment-paid {
+  background: rgb(220 239 221 / 0.92);
+  box-shadow: inset 0 0 0 1px rgb(71 119 77 / 0.18);
+}
+
+.theme-light .financial-payment-status {
+  color: #55705a;
 }
 
 .theme-light .financial-table-head {

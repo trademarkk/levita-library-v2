@@ -176,7 +176,15 @@ function downloadExcel(filename: string, rows: Array<Array<string | number>>) {
 }
 
 export function FinancialPlanSection() {
-  const { state, refreshSlice, addFinancialPlanRow, updateFinancialPlanRow, deleteFinancialPlanRow, updateFinancialPlanCell } = useLibrary();
+  const {
+    state,
+    refreshSlice,
+    addFinancialPlanRow,
+    updateFinancialPlanRow,
+    deleteFinancialPlanRow,
+    updateFinancialPlanCell,
+    updateFinancialPlanPaymentStatus,
+  } = useLibrary();
   const [month, setMonth] = useState(currentMonthKey());
   const [newTitle, setNewTitle] = useState('');
   const [cellDrafts, setCellDrafts] = useState<Record<string, string>>({});
@@ -268,28 +276,41 @@ export function FinancialPlanSection() {
                     <input value={row.title} onChange={(event) => updateFinancialPlanRow(month, row.id, event.target.value)} className="field min-w-56" />
                   </td>
                   {days.map((day) => (
-                    <td key={day} className="financial-table-cell">
-                      <input
-                        value={cellDrafts[cellKey(row.id, day)] ?? row.payments[day] ?? ''}
-                        onChange={(event) => {
-                          const nextValue = event.target.value;
-                          setCellDrafts((current) => ({ ...current, [cellKey(row.id, day)]: nextValue }));
-                        }}
-                        onBlur={(event) => {
-                          const key = cellKey(row.id, day);
-                          commitCell(row.id, day, event.target.value);
-                          setCellDrafts((current) => {
-                            const next = { ...current };
-                            delete next[key];
-                            return next;
-                          });
-                        }}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') event.currentTarget.blur();
-                        }}
-                        className="field px-2 py-1 text-sm text-center"
-                        placeholder="₽"
-                      />
+                    <td key={day} className={`financial-table-cell ${row.paidPayments?.[day] ? 'financial-payment-paid' : ''}`}>
+                      <div className="space-y-1.5">
+                        <input
+                          value={cellDrafts[cellKey(row.id, day)] ?? row.payments[day] ?? ''}
+                          onChange={(event) => {
+                            const nextValue = event.target.value;
+                            setCellDrafts((current) => ({ ...current, [cellKey(row.id, day)]: nextValue }));
+                          }}
+                          onBlur={(event) => {
+                            const key = cellKey(row.id, day);
+                            commitCell(row.id, day, event.target.value);
+                            setCellDrafts((current) => {
+                              const next = { ...current };
+                              delete next[key];
+                              return next;
+                            });
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') event.currentTarget.blur();
+                          }}
+                          className="field px-2 py-1 text-sm text-center"
+                          placeholder="₽"
+                        />
+                        {String(row.payments[day] || '').trim() && (
+                          <label className="financial-payment-status">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(row.paidPayments?.[day])}
+                              onChange={(event) => updateFinancialPlanPaymentStatus(month, row.id, day, event.target.checked)}
+                              aria-label={`Оплачено: ${row.title}, ${formatPlanDay(day)}`}
+                            />
+                            <span>Оплачено</span>
+                          </label>
+                        )}
+                      </div>
                     </td>
                   ))}
                   <td className="financial-table-cell text-center">

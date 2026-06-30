@@ -216,6 +216,7 @@ export interface FinancialPlanRow {
   id: string;
   title: string;
   payments: Record<string, string>;
+  paidPayments: Record<string, boolean>;
 }
 
 export interface FinancialPlanMonth {

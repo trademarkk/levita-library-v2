@@ -8,6 +8,7 @@ const REFUND_LIMIT = Number(process.env.LEVTIA_REFUND_LIMIT || 500);
 const SLICE_READ_CONCURRENCY = Math.max(1, Number(process.env.LEVTIA_SLICE_READ_CONCURRENCY || 2));
 let contentMediaSchemaPromise = null;
 let expenseSchemaPromise = null;
+let financialNotificationSchemaPromise = null;
 const ADMIN_CHECKLIST_ITEMS = [
   'Проверить чистоту студии: зеркала, углы и поверхности',
   'Отправить кружок об открытии студии до 09:30',
@@ -134,6 +135,42 @@ async function ensureExpenseSchema(prisma) {
     });
   }
   await expenseSchemaPromise;
+}
+
+export async function ensureFinancialNotificationSchema(prisma) {
+  if (!financialNotificationSchemaPromise) {
+    financialNotificationSchemaPromise = (async () => {
+      await prisma.$executeRawUnsafe(`
+        alter table public.financial_plan_payments
+          add column if not exists is_paid boolean not null default false,
+          add column if not exists paid_at timestamptz
+      `);
+      await prisma.$executeRawUnsafe(`
+        create table if not exists public.financial_payment_notification_runs (
+          notification_date date primary key,
+          status text not null default 'processing' check (status in ('processing', 'sent', 'failed', 'skipped')),
+          message_text text,
+          max_message_id text,
+          sent_at timestamptz,
+          error text,
+          created_at timestamptz not null default now(),
+          updated_at timestamptz not null default now()
+        )
+      `);
+      await prisma.$executeRawUnsafe(`
+        create index if not exists financial_plan_unpaid_payment_date_idx
+          on public.financial_plan_payments (payment_date)
+          where is_paid = false and nullif(btrim(value), '') is not null
+      `);
+      await prisma.$executeRawUnsafe(`
+        alter table public.financial_payment_notification_runs enable row level security
+      `);
+    })().catch((error) => {
+      financialNotificationSchemaPromise = null;
+      throw error;
+    });
+  }
+  await financialNotificationSchemaPromise;
 }
 
 function moscowDateParts(value = new Date()) {
@@ -379,16 +416,28 @@ function mapChecklistRows(checklists, checklistItems, checklistReports) {
 
 function mapFinancialPlans(financialMonths, financialRows, financialPayments) {
   const paymentsByRow = new Map();
+  const paidPaymentsByRow = new Map();
   for (const payment of financialPayments) {
     const payments = paymentsByRow.get(payment.row_id) || {};
-    payments[dateOnly(payment.payment_date)] = payment.value || '';
+    const paymentDate = dateOnly(payment.payment_date);
+    payments[paymentDate] = payment.value || '';
     paymentsByRow.set(payment.row_id, payments);
+    if (payment.is_paid) {
+      const paidPayments = paidPaymentsByRow.get(payment.row_id) || {};
+      paidPayments[paymentDate] = true;
+      paidPaymentsByRow.set(payment.row_id, paidPayments);
+    }
   }
 
   const rowsByMonth = new Map();
   for (const row of financialRows) {
     const list = rowsByMonth.get(row.month) || [];
-    list.push({ id: row.id, title: row.title, payments: paymentsByRow.get(row.id) || {} });
+    list.push({
+      id: row.id,
+      title: row.title,
+      payments: paymentsByRow.get(row.id) || {},
+      paidPayments: paidPaymentsByRow.get(row.id) || {},
+    });
     rowsByMonth.set(row.month, list);
   }
 
@@ -727,6 +776,7 @@ export async function readStateSliceFromPrisma(prisma, slice, params = {}) {
       };
     }
     case 'financial-plan': {
+      await ensureFinancialNotificationSchema(prisma);
       const upcomingStart = dateInTimeZone();
       const upcomingEnd = addDateDays(upcomingStart, 2);
       const [financialMonths, financialRows, financialPayments, upcomingPayments] = await runLimited([
@@ -740,6 +790,7 @@ export async function readStateSliceFromPrisma(prisma, slice, params = {}) {
           where payment.payment_date >= ${upcomingStart}::date
             and payment.payment_date <= ${upcomingEnd}::date
             and nullif(btrim(coalesce(payment.value, '')), '') is not null
+            and payment.is_paid = false
           order by payment.payment_date asc, row.position asc, row.title asc
         `,
       ]);
@@ -918,6 +969,7 @@ async function assertWorkLinkMutationAllowed(prisma, actor, { linkId = null, tar
 
 export async function applyPrismaMutation(prisma, action, payload = {}, actor = null) {
   const now = nowIso();
+  if (action.startsWith('financial.')) await ensureFinancialNotificationSchema(prisma);
   switch (action) {
     case 'employee.create': {
       const id = payload.id || newId('user');
@@ -1270,15 +1322,30 @@ export async function applyPrismaMutation(prisma, action, payload = {}, actor = 
         const targetDate = row.month === payload.month ? dateOnly(payload.date) : clampDate(row.month, payload.date);
         if (String(payload.value || '').trim()) {
           await prisma.$executeRaw`
-            insert into public.financial_plan_payments (row_id, payment_date, value, updated_at)
-            select ${row.id}, ${targetDate}::date, ${String(payload.value)}, now()
+            insert into public.financial_plan_payments (row_id, payment_date, value, is_paid, paid_at, updated_at)
+            select ${row.id}, ${targetDate}::date, ${String(payload.value)}, false, null, now()
             where exists (select 1 from public.financial_plan_rows where id = ${row.id})
-            on conflict (row_id, payment_date) do update set value = excluded.value, updated_at = now()
+            on conflict (row_id, payment_date) do update
+              set value = excluded.value, is_paid = false, paid_at = null, updated_at = now()
           `;
         } else {
           await prisma.$executeRaw`delete from public.financial_plan_payments where row_id = ${row.id} and payment_date = ${targetDate}::date`;
         }
       }
+      return;
+    }
+    case 'financial.payment.status': {
+      const rowId = storageFinancialRowId(payload.month, payload.rowId);
+      const isPaid = Boolean(payload.isPaid);
+      await prisma.$executeRaw`
+        update public.financial_plan_payments
+        set is_paid = ${isPaid},
+            paid_at = case when ${isPaid} then now() else null end,
+            updated_at = now()
+        where row_id = ${rowId}
+          and payment_date = ${dateOnly(payload.date)}::date
+          and nullif(btrim(value), '') is not null
+      `;
       return;
     }
     case 'calendar.create':

@@ -192,6 +192,7 @@ type LibraryContextValue = {
   updateFinancialPlanRow: (month: string, rowId: string, title: string) => void;
   deleteFinancialPlanRow: (month: string, rowId: string) => void;
   updateFinancialPlanCell: (month: string, rowId: string, date: string, value: string) => void;
+  updateFinancialPlanPaymentStatus: (month: string, rowId: string, date: string, isPaid: boolean) => void;
   createExpenseCategory: (name: string) => void;
   deleteExpenseCategory: (id: string) => void;
   createExpense: (input: CreateExpenseInput) => void;
@@ -345,7 +346,7 @@ function ensureFinancialPlan(draft: LibraryState, month: string): FinancialPlanM
 function ensureFinancialPlanRow(plan: FinancialPlanMonth, sourceRow: FinancialPlanRow): FinancialPlanRow {
   let row = plan.rows.find((item) => item.id === sourceRow.id);
   if (!row) {
-    row = { id: sourceRow.id, title: sourceRow.title, payments: {} };
+    row = { id: sourceRow.id, title: sourceRow.title, payments: {}, paidPayments: {} };
     plan.rows.push(row);
   }
   return row;
@@ -355,7 +356,11 @@ function normalizeFinancialPlans(plans: FinancialPlanMonth[]): FinancialPlanMont
   return cloneState(plans)
     .map((plan) => ({
       ...plan,
-      rows: [...(plan.rows || [])].map((row) => ({ ...row, payments: { ...(row.payments || {}) } })),
+      rows: [...(plan.rows || [])].map((row) => ({
+        ...row,
+        payments: { ...(row.payments || {}) },
+        paidPayments: { ...(row.paidPayments || {}) },
+      })),
     }))
     .sort((left, right) => left.month.localeCompare(right.month));
 }
@@ -1863,7 +1868,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           const targetMonth = addFinancialPlanMonths(month, index);
           const plan = ensureFinancialPlan(draft, targetMonth);
           const id = `${targetMonth}:${baseId}`;
-          if (!plan.rows.some((row) => row.id === id)) plan.rows.push({ id, title: title.trim(), payments: {} });
+          if (!plan.rows.some((row) => row.id === id)) plan.rows.push({ id, title: title.trim(), payments: {}, paidPayments: {} });
         }
       }, { showSaving: false });
     },
@@ -1902,8 +1907,13 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           const row = plan.rows.find((item) => item.id === rowId || item.id.endsWith(`:${base}`) || item.id === base);
           if (!row) return;
           const targetDate = plan.month === month ? date : clampFinancialPlanDate(plan.month, date);
-          if (String(value).trim()) row.payments[targetDate] = value;
-          else delete row.payments[targetDate];
+          if (String(value).trim()) {
+            row.payments[targetDate] = value;
+            delete row.paidPayments[targetDate];
+          } else {
+            delete row.payments[targetDate];
+            delete row.paidPayments[targetDate];
+          }
         });
         if (isUpcomingFinancialDate(date)) {
           const planRow = draft.financialPlans
@@ -1921,6 +1931,25 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
             });
             draft.upcomingFinancialPayments.sort((left, right) => left.date.localeCompare(right.date) || left.title.localeCompare(right.title));
           }
+        }
+      }, { showSaving: false });
+    },
+    updateFinancialPlanPaymentStatus(month, rowId, date, isPaid) {
+      mutateOnServer('financial.payment.status', { month, rowId, date, isPaid }, (draft) => {
+        const base = financialPlanBaseId(rowId);
+        const row = draft.financialPlans
+          .find((plan) => plan.month === month)
+          ?.rows.find((item) => financialPlanBaseId(item.id) === base);
+        if (!row || !String(row.payments[date] || '').trim()) return;
+        if (isPaid) row.paidPayments[date] = true;
+        else delete row.paidPayments[date];
+
+        draft.upcomingFinancialPayments = draft.upcomingFinancialPayments.filter((payment) => (
+          payment.date !== date || financialPlanBaseId(payment.rowId) !== base
+        ));
+        if (!isPaid && isUpcomingFinancialDate(date)) {
+          draft.upcomingFinancialPayments.push({ rowId, title: row.title, date, value: row.payments[date] });
+          draft.upcomingFinancialPayments.sort((left, right) => left.date.localeCompare(right.date) || left.title.localeCompare(right.title));
         }
       }, { showSaving: false });
     },

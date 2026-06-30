@@ -99,7 +99,15 @@ function rowsFromState(state) {
       const storageRowId = `${plan.month}:${row.id}`;
       financialRows.push({ id: storageRowId, month: plan.month, title: row.title, position: index, updated_at: now });
       Object.entries(row.payments || {}).forEach(([paymentDate, value]) => {
-        financialPayments.push({ row_id: storageRowId, payment_date: paymentDate, value: String(value ?? ''), updated_at: now });
+        const isPaid = Boolean(row.paidPayments?.[paymentDate]);
+        financialPayments.push({
+          row_id: storageRowId,
+          payment_date: paymentDate,
+          value: String(value ?? ''),
+          is_paid: isPaid,
+          paid_at: isPaid ? now : null,
+          updated_at: now,
+        });
       });
     });
   }
@@ -405,16 +413,27 @@ export async function readStateFromTables(supabase) {
   }
 
   const paymentsByRow = new Map();
+  const paidPaymentsByRow = new Map();
   for (const payment of financialPayments) {
     const payments = paymentsByRow.get(payment.row_id) || {};
     payments[payment.payment_date] = payment.value || '';
     paymentsByRow.set(payment.row_id, payments);
+    if (payment.is_paid) {
+      const paidPayments = paidPaymentsByRow.get(payment.row_id) || {};
+      paidPayments[payment.payment_date] = true;
+      paidPaymentsByRow.set(payment.row_id, paidPayments);
+    }
   }
 
   const rowsByMonth = new Map();
   for (const row of financialRows) {
     const list = rowsByMonth.get(row.month) || [];
-    list.push({ id: row.id, title: row.title, payments: paymentsByRow.get(row.id) || {} });
+    list.push({
+      id: row.id,
+      title: row.title,
+      payments: paymentsByRow.get(row.id) || {},
+      paidPayments: paidPaymentsByRow.get(row.id) || {},
+    });
     rowsByMonth.set(row.month, list);
   }
 
