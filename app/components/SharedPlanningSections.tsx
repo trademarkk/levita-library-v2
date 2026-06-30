@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { CalendarClock, Download, Plus, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { CalendarClock, Download, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { GlassCard } from './GlassCard';
 import { TabNavigation } from './TabNavigation';
 import { useLibrary } from '../domain/LibraryContext';
@@ -16,6 +16,63 @@ const studioLabels: Record<ExpenseStudio, string> = {
   STAVROPOLSKAYA: 'Ставропольская',
   MACHUGI: 'Мачуги',
 };
+
+const EXPENSE_REVIEW_STORAGE_PREFIX = 'levita.expense-review.v1';
+
+function expenseReviewStorageKey(userId?: string) {
+  return `${EXPENSE_REVIEW_STORAGE_PREFIX}:${userId || 'anonymous'}`;
+}
+
+function readReviewedExpenseIds(storageKey: string) {
+  if (typeof window === 'undefined') return new Set<string>();
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(storageKey) || '{}') as { ids?: unknown };
+    return new Set(Array.isArray(stored.ids) ? stored.ids.filter((id): id is string => typeof id === 'string') : []);
+  } catch {
+    window.localStorage.removeItem(storageKey);
+    return new Set<string>();
+  }
+}
+
+function persistReviewedExpenseIds(storageKey: string, reviewedIds: Set<string>) {
+  if (typeof window === 'undefined') return;
+  if (reviewedIds.size === 0) {
+    window.localStorage.removeItem(storageKey);
+    return;
+  }
+  window.localStorage.setItem(storageKey, JSON.stringify({ ids: [...reviewedIds] }));
+}
+
+function useReviewedExpenses(userId?: string) {
+  const storageKey = expenseReviewStorageKey(userId);
+  const [reviewedIds, setReviewedIds] = useState<Set<string>>(() => readReviewedExpenseIds(storageKey));
+
+  useEffect(() => {
+    setReviewedIds(readReviewedExpenseIds(storageKey));
+    const syncFromStorage = (event: StorageEvent) => {
+      if (event.key === storageKey) setReviewedIds(readReviewedExpenseIds(storageKey));
+    };
+    window.addEventListener('storage', syncFromStorage);
+    return () => window.removeEventListener('storage', syncFromStorage);
+  }, [storageKey]);
+
+  const setReviewed = useCallback((expenseId: string, checked: boolean) => {
+    setReviewedIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(expenseId);
+      else next.delete(expenseId);
+      persistReviewedExpenseIds(storageKey, next);
+      return next;
+    });
+  }, [storageKey]);
+
+  const clearReviewed = useCallback(() => {
+    if (typeof window !== 'undefined') window.localStorage.removeItem(storageKey);
+    setReviewedIds(new Set());
+  }, [storageKey]);
+
+  return { reviewedIds, setReviewed, clearReviewed };
+}
 
 function currentMonthKey() {
   const date = new Date();
@@ -216,10 +273,11 @@ export function FinancialPlanSection() {
 }
 
 export function ExpensesSection() {
-  const { state, refreshSlice, createExpense, deleteExpense, createExpenseCategory, deleteExpenseCategory } = useLibrary();
+  const { state, currentUser, refreshSlice, createExpense, deleteExpense, createExpenseCategory, deleteExpenseCategory } = useLibrary();
   const [activeTab, setActiveTab] = useState('STAVROPOLSKAYA');
   const [month, setMonth] = useState(currentMonthKey());
   const [categoryName, setCategoryName] = useState('');
+  const { reviewedIds, setReviewed, clearReviewed } = useReviewedExpenses(currentUser?.id);
   const [draft, setDraft] = useState({
     date: todayKey(),
     amount: 0,
@@ -237,6 +295,7 @@ export function ExpensesSection() {
   const monthlyExpenses = state.expenses.filter((expense) => expense.date.startsWith(month));
   const visibleExpenses = activeTab === 'SUMMARY' ? monthlyExpenses : monthlyExpenses.filter((expense) => expense.studio === activeTab);
   const total = visibleExpenses.reduce((sum, expense) => sum + expense.amount, 0);
+  const visibleReviewedCount = visibleExpenses.reduce((count, expense) => count + Number(reviewedIds.has(expense.id)), 0);
 
   useEffect(() => {
     void refreshSlice('expenses', { month });
@@ -251,6 +310,11 @@ export function ExpensesSection() {
   const addCategory = () => {
     createExpenseCategory(categoryName);
     setCategoryName('');
+  };
+
+  const removeExpense = (id: string) => {
+    setReviewed(id, false);
+    deleteExpense(id);
   };
 
   const exportRows = visibleExpenses.map((expense) => [
@@ -315,17 +379,50 @@ export function ExpensesSection() {
         </div>
       </GlassCard>
 
-      <ExpenseTable expenses={visibleExpenses} onDelete={deleteExpense} />
+      <ExpenseTable
+        expenses={visibleExpenses}
+        reviewedIds={reviewedIds}
+        reviewedCount={visibleReviewedCount}
+        onReviewedChange={setReviewed}
+        onClearReviewed={clearReviewed}
+        onDelete={removeExpense}
+      />
     </div>
   );
 }
 
-function ExpenseTable({ expenses, onDelete }: { expenses: ExpenseRecord[]; onDelete: (id: string) => void }) {
+type ExpenseTableProps = {
+  expenses: ExpenseRecord[];
+  reviewedIds: Set<string>;
+  reviewedCount: number;
+  onReviewedChange: (id: string, checked: boolean) => void;
+  onClearReviewed: () => void;
+  onDelete: (id: string) => void;
+};
+
+function ExpenseTable({ expenses, reviewedIds, reviewedCount, onReviewedChange, onClearReviewed, onDelete }: ExpenseTableProps) {
   return (
-    <GlassCard className="overflow-x-auto">
-      <table className="min-w-[900px] w-full">
+    <GlassCard>
+      <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h3 className="text-lg text-[#f5f3f0]">Проверка расходов</h3>
+          <p className="mt-1 text-sm text-[#a89b8f]">Отмечено в текущем списке: {reviewedCount} из {expenses.length}</p>
+        </div>
+        <button
+          type="button"
+          onClick={onClearReviewed}
+          disabled={reviewedIds.size === 0}
+          className="inline-flex items-center gap-2 self-start rounded-lg border border-[#c9a98d]/25 px-4 py-2 text-sm text-[#c9a98d] transition-colors hover:border-[#c9a98d]/50 hover:bg-[#c9a98d]/10 disabled:cursor-not-allowed disabled:opacity-45 sm:self-auto"
+        >
+          <RotateCcw className="h-4 w-4" />
+          Сбросить отметки
+        </button>
+      </div>
+      <div className="-mx-6 overflow-x-auto px-6 pb-1">
+        <table className="min-w-[960px] w-full">
         <thead>
           <tr className="text-left text-sm text-[#c9a98d]">
+            <th className="w-24 p-3 border-b border-[#c9a98d]/15">Проверен</th>
             <th className="p-3 border-b border-[#c9a98d]/15">Дата</th>
             <th className="p-3 border-b border-[#c9a98d]/15">Расход</th>
             <th className="p-3 border-b border-[#c9a98d]/15">Счет</th>
@@ -336,22 +433,39 @@ function ExpenseTable({ expenses, onDelete }: { expenses: ExpenseRecord[]; onDel
           </tr>
         </thead>
         <tbody>
-          {expenses.map((expense) => (
-            <tr key={expense.id} className="text-sm text-[#d8d1c8]">
-              <td className="p-3 border-b border-[#c9a98d]/10">{formatDate(expense.date)}</td>
-              <td className="p-3 border-b border-[#c9a98d]/10">{money(expense.amount)}</td>
-              <td className="p-3 border-b border-[#c9a98d]/10">{accountLabels[expense.account]}</td>
-              <td className="p-3 border-b border-[#c9a98d]/10">{expense.category}</td>
-              <td className="p-3 border-b border-[#c9a98d]/10">{studioLabels[expense.studio]}</td>
-              <td className="p-3 border-b border-[#c9a98d]/10">{expense.comment}</td>
-              <td className="p-3 border-b border-[#c9a98d]/10">
-                <button onClick={() => onDelete(expense.id)} className="text-[#a89b8f] hover:text-[#8b3a52]" aria-label="Удалить расход"><Trash2 className="w-4 h-4" /></button>
-              </td>
-            </tr>
-          ))}
-          {expenses.length === 0 && <tr><td colSpan={7} className="p-6 text-center text-[#a89b8f]">Расходы пока не добавлены.</td></tr>}
+          {expenses.map((expense) => {
+            const isReviewed = reviewedIds.has(expense.id);
+            return (
+              <tr
+                key={expense.id}
+                className={`text-sm transition-colors ${isReviewed ? 'bg-[#3b5147]/55 text-[#f5f3f0]' : 'text-[#d8d1c8] hover:bg-[#c9a98d]/5'}`}
+                data-expense-reviewed={isReviewed ? 'true' : 'false'}
+              >
+                <td className="p-3 border-b border-[#c9a98d]/10">
+                  <input
+                    type="checkbox"
+                    checked={isReviewed}
+                    onChange={(event) => onReviewedChange(expense.id, event.target.checked)}
+                    className="h-5 w-5 cursor-pointer accent-[#c9a98d]"
+                    aria-label={`Отметить расход от ${formatDate(expense.date)} как проверенный`}
+                  />
+                </td>
+                <td className="p-3 border-b border-[#c9a98d]/10">{formatDate(expense.date)}</td>
+                <td className="p-3 border-b border-[#c9a98d]/10">{money(expense.amount)}</td>
+                <td className="p-3 border-b border-[#c9a98d]/10">{accountLabels[expense.account]}</td>
+                <td className="p-3 border-b border-[#c9a98d]/10">{expense.category}</td>
+                <td className="p-3 border-b border-[#c9a98d]/10">{studioLabels[expense.studio]}</td>
+                <td className="p-3 border-b border-[#c9a98d]/10">{expense.comment}</td>
+                <td className="p-3 border-b border-[#c9a98d]/10">
+                  <button onClick={() => onDelete(expense.id)} className="text-[#a89b8f] hover:text-[#8b3a52]" aria-label="Удалить расход"><Trash2 className="w-4 h-4" /></button>
+                </td>
+              </tr>
+            );
+          })}
+          {expenses.length === 0 && <tr><td colSpan={8} className="p-6 text-center text-[#a89b8f]">Расходы пока не добавлены.</td></tr>}
         </tbody>
-      </table>
+        </table>
+      </div>
     </GlassCard>
   );
 }
