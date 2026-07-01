@@ -700,10 +700,20 @@ function ExpenseTable({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<ExpenseEditDraft | null>(null);
   const [editError, setEditError] = useState('');
-  const hasActiveFilters = creditFilter !== 'ALL'
-    || Object.entries(filters).some(([key, value]) => key === 'category' || key === 'account' || key === 'studio' || key === 'reviewed'
-      ? value !== 'ALL'
-      : Boolean(value));
+  const [isFiltersOpen, setIsFiltersOpen] = useState(false);
+  const activeFilterCount = [
+    filters.query,
+    filters.dateFrom,
+    filters.dateTo,
+    filters.amountMin,
+    filters.amountMax,
+    filters.account !== 'ALL',
+    filters.category !== 'ALL',
+    filters.studio !== 'ALL',
+    filters.reviewed !== 'ALL',
+    creditFilter !== 'ALL',
+  ].filter(Boolean).length;
+  const hasActiveFilters = activeFilterCount > 0;
 
   const updateFilter = <Key extends keyof ExpenseFilterState,>(key: Key, value: ExpenseFilterState[Key]) => {
     onFiltersChange({ ...filters, [key]: value });
@@ -772,21 +782,36 @@ function ExpenseTable({
       </div>
 
       <div className="mb-5 rounded-lg border border-[#c9a98d]/15 bg-[#17151c]/35 p-4">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="inline-flex items-center gap-2 text-sm font-medium text-[#d9b99c]">
-            <Filter className="h-4 w-4" />
-            Фильтры
-          </div>
+        <div className={`flex flex-wrap items-center justify-between gap-3 ${isFiltersOpen ? 'mb-3' : ''}`}>
           <button
             type="button"
-            onClick={onResetFilters}
-            disabled={!hasActiveFilters}
-            className="soft-action px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-40"
+            data-testid="expense-filters-toggle"
+            aria-expanded={isFiltersOpen}
+            aria-controls="expense-filters-panel"
+            onClick={() => setIsFiltersOpen((current) => !current)}
+            className="inline-flex min-h-9 items-center gap-2 rounded-lg px-2 text-sm font-medium text-[#d9b99c] transition-colors hover:bg-[#c9a98d]/10 hover:text-[#f5f3f0]"
           >
-            Сбросить фильтры
+            <Filter className="h-4 w-4" />
+            Фильтры
+            {activeFilterCount > 0 && (
+              <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[#c9a98d] px-1.5 text-[11px] font-semibold text-[#17151c]">
+                {activeFilterCount}
+              </span>
+            )}
+            <ChevronDown className={`h-4 w-4 transition-transform duration-200 ${isFiltersOpen ? 'rotate-180' : ''}`} />
           </button>
+          {hasActiveFilters && (
+            <button
+              type="button"
+              onClick={onResetFilters}
+              className="soft-action px-3 py-1.5 text-xs"
+            >
+              Сбросить фильтры
+            </button>
+          )}
         </div>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {isFiltersOpen && (
+        <div id="expense-filters-panel" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <label className="relative sm:col-span-2">
             <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-[#a89b8f]" />
             <input
@@ -826,6 +851,7 @@ function ExpenseTable({
             <option value="UNFLAGGED">Без Кр. пред. месяца</option>
           </select>
         </div>
+        )}
       </div>
 
       {editError && <p role="alert" className="mb-3 text-sm text-[#f0a9b9]">{editError}</p>}
