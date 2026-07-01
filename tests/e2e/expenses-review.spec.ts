@@ -61,13 +61,13 @@ test('расход добавляется с первого раза, сорти
   await page.getByRole('button', { name: 'Добавить', exact: true }).click();
   await expect(page.getByRole('alert')).toHaveText('Укажите сумму расхода больше нуля.');
 
-  await page.getByLabel('Дата расхода').fill(newExpenseDate);
-  await page.getByLabel('Сумма расхода').fill('1250');
+  await page.getByLabel('Дата расхода', { exact: true }).fill(newExpenseDate);
+  await page.getByLabel('Сумма расхода', { exact: true }).fill('1250');
   await page.getByLabel('Комментарий к расходу').fill('Расход с флагом прошлого месяца');
   await page.getByRole('checkbox', { name: 'Кр. пред. месяца', exact: true }).check();
   await page.getByRole('button', { name: 'Добавить', exact: true }).click();
 
-  const createdRow = page.locator(`tr[data-expense-date="${newExpenseDate}"]`);
+  const createdRow = page.locator('tr[data-expense-previous-month-credit="true"]').filter({ hasText: 'Расход с флагом прошлого месяца' });
   await expect(createdRow).toBeVisible();
   await expect(createdRow).toHaveAttribute('data-expense-previous-month-credit', 'true');
 
@@ -82,5 +82,52 @@ test('расход добавляется с первого раза, сорти
   await expect(createdRow).toBeVisible();
   await createdRow.getByRole('checkbox', { name: 'Кр. пред. месяца для расхода от' }).click();
   await expect(page.locator('tr[data-expense-id]')).toHaveCount(0);
+  expect(consoleFailures).toEqual([]);
+});
+
+test('расходы фильтруются по полям и редактируются непосредственно в строке', async ({ page }) => {
+  const consoleFailures = collectConsoleFailures(page);
+  const mutationBodies: Array<{ action?: string; payload?: { id?: string; input?: Record<string, unknown> } }> = [];
+
+  await loginAs(page, 'owner');
+  await openTab(page, 'Расходы');
+  await page.route('**/api/mutations', async (route) => {
+    const body = route.request().postDataJSON();
+    mutationBodies.push(body);
+    if (body.action === 'expense.update') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, state: null, skipRefresh: true }) });
+      return;
+    }
+    await route.continue();
+  });
+
+  const expenseRow = page.locator('tr[data-expense-id="expense-1"]');
+  await expect(expenseRow).toBeVisible();
+
+  await expect(page.getByLabel('Название новой статьи расходов')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Управлять', exact: true }).click();
+  await expect(page.getByLabel('Название новой статьи расходов')).toBeVisible();
+  await page.getByRole('button', { name: 'Свернуть', exact: true }).click();
+  await expect(page.getByLabel('Название новой статьи расходов')).toHaveCount(0);
+
+  await page.getByLabel('Максимальная сумма расхода').fill('0');
+  await expect(page.locator('tr[data-expense-id]')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Сбросить фильтры' }).click();
+  await expect(expenseRow).toBeVisible();
+
+  await expenseRow.getByRole('button', { name: /Редактировать расход от/ }).click();
+  await expenseRow.getByLabel('Редактировать сумму расхода').fill('4321');
+  await expenseRow.getByLabel('Редактировать комментарий расхода').fill('Обновлённый комментарий');
+  await expenseRow.getByRole('button', { name: 'Сохранить изменения расхода' }).click();
+
+  await expect(expenseRow).toContainText('Обновлённый комментарий');
+  await expect(expenseRow.getByLabel('Редактировать сумму расхода')).toHaveCount(0);
+  await expect.poll(() => mutationBodies.find((body) => body.action === 'expense.update')).toMatchObject({
+    action: 'expense.update',
+    payload: {
+      id: 'expense-1',
+      input: { amount: 4321, comment: 'Обновлённый комментарий' },
+    },
+  });
   expect(consoleFailures).toEqual([]);
 });

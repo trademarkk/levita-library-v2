@@ -1,5 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, ArrowUpDown, CalendarClock, Download, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpDown, CalendarClock, ChevronDown, Download, Filter, Pencil, Plus, RotateCcw, Save, Search, Tags, Trash2, X } from 'lucide-react';
 import { GlassCard } from './GlassCard';
 import { TabNavigation } from './TabNavigation';
 import { useLibrary } from '../domain/LibraryContext';
@@ -22,7 +22,31 @@ const EXPENSE_REVIEW_STORAGE_PREFIX = 'levita.expense-review.v1';
 type ExpenseSortKey = 'reviewed' | 'date' | 'amount' | 'account' | 'category' | 'studio' | 'previousMonthCredit' | 'comment';
 type ExpenseSortDirection = 'asc' | 'desc';
 type ExpenseCreditFilter = 'ALL' | 'FLAGGED' | 'UNFLAGGED';
+type ExpenseReviewFilter = 'ALL' | 'REVIEWED' | 'UNREVIEWED';
 type ExpenseSortConfig = { key: ExpenseSortKey; direction: ExpenseSortDirection };
+type ExpenseFilterState = {
+  query: string;
+  dateFrom: string;
+  dateTo: string;
+  amountMin: string;
+  amountMax: string;
+  account: 'ALL' | ExpenseAccount;
+  category: string;
+  studio: 'ALL' | ExpenseStudio;
+  reviewed: ExpenseReviewFilter;
+};
+
+const EMPTY_EXPENSE_FILTERS: ExpenseFilterState = {
+  query: '',
+  dateFrom: '',
+  dateTo: '',
+  amountMin: '',
+  amountMax: '',
+  account: 'ALL',
+  category: 'ALL',
+  studio: 'ALL',
+  reviewed: 'ALL',
+};
 
 const expenseTextCollator = new Intl.Collator('ru', { numeric: true, sensitivity: 'base' });
 
@@ -52,6 +76,40 @@ function sortExpenses(expenses: ExpenseRecord[], sort: ExpenseSortConfig, review
       ? leftValue - rightValue
       : expenseTextCollator.compare(String(leftValue), String(rightValue));
     return comparison * direction || right.date.localeCompare(left.date) || right.id.localeCompare(left.id);
+  });
+}
+
+function filterExpenses(
+  expenses: ExpenseRecord[],
+  filters: ExpenseFilterState,
+  creditFilter: ExpenseCreditFilter,
+  reviewedIds: Set<string>,
+) {
+  const query = filters.query.trim().toLocaleLowerCase('ru-RU');
+  const amountMin = filters.amountMin.trim() ? Number(filters.amountMin.replace(',', '.')) : null;
+  const amountMax = filters.amountMax.trim() ? Number(filters.amountMax.replace(',', '.')) : null;
+
+  return expenses.filter((expense) => {
+    if (creditFilter !== 'ALL' && Boolean(expense.previousMonthCredit) !== (creditFilter === 'FLAGGED')) return false;
+    if (filters.dateFrom && expense.date < filters.dateFrom) return false;
+    if (filters.dateTo && expense.date > filters.dateTo) return false;
+    if (amountMin !== null && Number.isFinite(amountMin) && expense.amount < amountMin) return false;
+    if (amountMax !== null && Number.isFinite(amountMax) && expense.amount > amountMax) return false;
+    if (filters.account !== 'ALL' && expense.account !== filters.account) return false;
+    if (filters.category !== 'ALL' && expense.category !== filters.category) return false;
+    if (filters.studio !== 'ALL' && expense.studio !== filters.studio) return false;
+    if (filters.reviewed !== 'ALL' && reviewedIds.has(expense.id) !== (filters.reviewed === 'REVIEWED')) return false;
+    if (!query) return true;
+    const searchable = [
+      expense.date,
+      formatDate(expense.date),
+      String(expense.amount),
+      accountLabels[expense.account],
+      expense.category,
+      studioLabels[expense.studio],
+      expense.comment || '',
+    ].join(' ').toLocaleLowerCase('ru-RU');
+    return searchable.includes(query);
   });
 }
 
@@ -135,6 +193,15 @@ function formatPlanDay(dateKey: string) {
 
 function money(value: number) {
   return value.toLocaleString('ru-RU') + ' ₽';
+}
+
+function expenseCategoryCountLabel(count: number) {
+  const lastTwo = count % 100;
+  const last = count % 10;
+  if (lastTwo >= 11 && lastTwo <= 14) return 'статей';
+  if (last === 1) return 'статья';
+  if (last >= 2 && last <= 4) return 'статьи';
+  return 'статей';
 }
 
 function upcomingDayTitle(dateKey: string) {
@@ -334,8 +401,10 @@ export function ExpensesSection() {
   const [activeTab, setActiveTab] = useState('STAVROPOLSKAYA');
   const [month, setMonth] = useState(currentMonthKey());
   const [categoryName, setCategoryName] = useState('');
+  const [isCategoryManagerOpen, setIsCategoryManagerOpen] = useState(false);
   const [formError, setFormError] = useState('');
   const [creditFilter, setCreditFilter] = useState<ExpenseCreditFilter>('ALL');
+  const [filters, setFilters] = useState<ExpenseFilterState>(() => ({ ...EMPTY_EXPENSE_FILTERS }));
   const [sort, setSort] = useState<ExpenseSortConfig>({ key: 'date', direction: 'desc' });
   const { reviewedIds, setReviewed, clearReviewed } = useReviewedExpenses(currentUser?.id);
   const [draft, setDraft] = useState({
@@ -359,17 +428,19 @@ export function ExpensesSection() {
     [activeTab, monthlyExpenses],
   );
   const displayedExpenses = useMemo(() => {
-    const filtered = creditFilter === 'ALL'
-      ? visibleExpenses
-      : visibleExpenses.filter((expense) => Boolean(expense.previousMonthCredit) === (creditFilter === 'FLAGGED'));
+    const filtered = filterExpenses(visibleExpenses, filters, creditFilter, reviewedIds);
     return sortExpenses(filtered, sort, reviewedIds);
-  }, [creditFilter, reviewedIds, sort, visibleExpenses]);
+  }, [creditFilter, filters, reviewedIds, sort, visibleExpenses]);
   const total = visibleExpenses.reduce((sum, expense) => sum + expense.amount, 0);
   const visibleReviewedCount = displayedExpenses.reduce((count, expense) => count + Number(reviewedIds.has(expense.id)), 0);
 
   useEffect(() => {
     void refreshSlice('expenses', { month });
   }, [month]);
+
+  useEffect(() => {
+    setFilters((current) => current.studio === 'ALL' ? current : { ...current, studio: 'ALL' });
+  }, [activeTab]);
 
   useEffect(() => {
     const firstCategory = state.expenseCategories[0]?.name;
@@ -467,33 +538,85 @@ export function ExpensesSection() {
         </form>
       </GlassCard>
 
-      <GlassCard className="max-w-3xl">
-        <h3 className="text-lg text-[#f5f3f0] mb-3">Статьи расходов</h3>
-        <div className="mb-3 flex max-w-xl flex-col gap-3 sm:flex-row">
-          <input value={categoryName} onChange={(event) => setCategoryName(event.target.value)} placeholder="Новая категория" className="field sm:max-w-sm" />
-          <button onClick={addCategory} className="primary-action">Добавить статью</button>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {state.expenseCategories.map((category) => (
-            <span key={category.id} className="inline-flex items-center gap-2 rounded-full bg-[#c9a98d]/15 px-3 py-1 text-sm text-[#c9a98d]">
-              {category.name}
-              <button onClick={() => deleteExpenseCategory(category.id)} className="hover:text-[#f0c5cf]" aria-label={`Удалить ${category.name}`}>×</button>
+      <div className="overflow-hidden rounded-lg border border-[#c9a98d]/20 bg-[#1a1820]/65">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[#c9a98d]/12 text-[#c9a98d]">
+              <Tags className="h-4 w-4" />
             </span>
-          ))}
+            <div className="min-w-0">
+              <h3 className="text-base text-[#f5f3f0]">Статьи расходов</h3>
+              <p className="text-xs text-[#a89b8f]">{state.expenseCategories.length} {expenseCategoryCountLabel(state.expenseCategories.length)}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsCategoryManagerOpen((current) => !current)}
+            aria-expanded={isCategoryManagerOpen}
+            aria-controls="expense-category-manager"
+            className="soft-action inline-flex items-center gap-2 px-3 py-2 text-sm"
+          >
+            {isCategoryManagerOpen ? 'Свернуть' : 'Управлять'}
+            <ChevronDown className={`h-4 w-4 transition-transform ${isCategoryManagerOpen ? 'rotate-180' : ''}`} />
+          </button>
         </div>
-      </GlassCard>
+
+        {isCategoryManagerOpen && (
+          <div id="expense-category-manager" className="border-t border-[#c9a98d]/15 px-4 py-4">
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                addCategory();
+              }}
+              className="flex max-w-2xl flex-col gap-2 sm:flex-row"
+            >
+              <input
+                value={categoryName}
+                onChange={(event) => setCategoryName(event.target.value)}
+                placeholder="Новая статья расходов"
+                aria-label="Название новой статьи расходов"
+                className="field min-w-0 flex-1"
+              />
+              <button type="submit" disabled={!categoryName.trim()} className="primary-action inline-flex items-center justify-center gap-2 px-4 disabled:cursor-not-allowed disabled:opacity-45">
+                <Plus className="h-4 w-4" />
+                Добавить
+              </button>
+            </form>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {state.expenseCategories.map((category) => (
+                <span key={category.id} className="inline-flex items-center gap-1.5 rounded-full border border-[#c9a98d]/15 bg-[#c9a98d]/10 py-1 pl-3 pr-1.5 text-sm text-[#c9a98d]">
+                  {category.name}
+                  <button type="button" onClick={() => deleteExpenseCategory(category.id)} className="grid h-6 w-6 place-items-center rounded-full hover:bg-[#8b3a52]/25 hover:text-[#f0c5cf]" aria-label={`Удалить статью ${category.name}`} title="Удалить статью">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </span>
+              ))}
+              {state.expenseCategories.length === 0 && <p className="text-sm text-[#a89b8f]">Статьи пока не добавлены.</p>}
+            </div>
+          </div>
+        )}
+      </div>
 
       <ExpenseTable
         expenses={displayedExpenses}
         totalCount={visibleExpenses.length}
+        categories={state.expenseCategories.map((category) => category.name)}
+        showStudioFilter={activeTab === 'SUMMARY'}
         reviewedIds={reviewedIds}
         reviewedCount={visibleReviewedCount}
         creditFilter={creditFilter}
+        filters={filters}
         sort={sort}
         onCreditFilterChange={setCreditFilter}
+        onFiltersChange={setFilters}
+        onResetFilters={() => {
+          setFilters({ ...EMPTY_EXPENSE_FILTERS });
+          setCreditFilter('ALL');
+        }}
         onSort={changeSort}
         onReviewedChange={setReviewed}
         onPreviousMonthCreditChange={(id, checked) => updateExpense(id, { previousMonthCredit: checked })}
+        onUpdate={updateExpense}
         onClearReviewed={clearReviewed}
         onDelete={removeExpense}
       />
@@ -504,16 +627,32 @@ export function ExpensesSection() {
 type ExpenseTableProps = {
   expenses: ExpenseRecord[];
   totalCount: number;
+  categories: string[];
+  showStudioFilter: boolean;
   reviewedIds: Set<string>;
   reviewedCount: number;
   creditFilter: ExpenseCreditFilter;
+  filters: ExpenseFilterState;
   sort: ExpenseSortConfig;
   onCreditFilterChange: (filter: ExpenseCreditFilter) => void;
+  onFiltersChange: (filters: ExpenseFilterState) => void;
+  onResetFilters: () => void;
   onSort: (key: ExpenseSortKey) => void;
   onReviewedChange: (id: string, checked: boolean) => void;
   onPreviousMonthCreditChange: (id: string, checked: boolean) => void;
+  onUpdate: (id: string, input: Partial<Pick<ExpenseRecord, 'date' | 'amount' | 'account' | 'category' | 'studio' | 'previousMonthCredit' | 'comment'>>) => void;
   onClearReviewed: () => void;
   onDelete: (id: string) => void;
+};
+
+type ExpenseEditDraft = {
+  date: string;
+  amount: string;
+  account: ExpenseAccount;
+  category: string;
+  studio: ExpenseStudio;
+  previousMonthCredit: boolean;
+  comment: string;
 };
 
 type SortableExpenseHeaderProps = {
@@ -541,17 +680,79 @@ function SortableExpenseHeader({ label, sortKey, sort, onSort, className = '' }:
 function ExpenseTable({
   expenses,
   totalCount,
+  categories,
+  showStudioFilter,
   reviewedIds,
   reviewedCount,
   creditFilter,
+  filters,
   sort,
   onCreditFilterChange,
+  onFiltersChange,
+  onResetFilters,
   onSort,
   onReviewedChange,
   onPreviousMonthCreditChange,
+  onUpdate,
   onClearReviewed,
   onDelete,
 }: ExpenseTableProps) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<ExpenseEditDraft | null>(null);
+  const [editError, setEditError] = useState('');
+  const hasActiveFilters = creditFilter !== 'ALL'
+    || Object.entries(filters).some(([key, value]) => key === 'category' || key === 'account' || key === 'studio' || key === 'reviewed'
+      ? value !== 'ALL'
+      : Boolean(value));
+
+  const updateFilter = <Key extends keyof ExpenseFilterState,>(key: Key, value: ExpenseFilterState[Key]) => {
+    onFiltersChange({ ...filters, [key]: value });
+  };
+
+  const startEditing = (expense: ExpenseRecord) => {
+    setEditingId(expense.id);
+    setEditError('');
+    setEditDraft({
+      date: expense.date,
+      amount: String(expense.amount),
+      account: expense.account,
+      category: expense.category,
+      studio: expense.studio,
+      previousMonthCredit: Boolean(expense.previousMonthCredit),
+      comment: expense.comment || '',
+    });
+  };
+
+  const cancelEditing = () => {
+    setEditingId(null);
+    setEditDraft(null);
+    setEditError('');
+  };
+
+  const saveEditing = () => {
+    if (!editingId || !editDraft) return;
+    const amount = Number(editDraft.amount.replace(',', '.'));
+    if (!editDraft.date) {
+      setEditError('Укажите дату расхода.');
+      return;
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setEditError('Сумма расхода должна быть больше нуля.');
+      return;
+    }
+    if (!editDraft.category.trim()) {
+      setEditError('Выберите статью расхода.');
+      return;
+    }
+    onUpdate(editingId, {
+      ...editDraft,
+      amount,
+      category: editDraft.category.trim(),
+      comment: editDraft.comment.trim(),
+    });
+    cancelEditing();
+  };
+
   return (
     <GlassCard>
       <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -559,28 +760,75 @@ function ExpenseTable({
           <h3 className="text-lg text-[#f5f3f0]">Проверка расходов</h3>
           <p className="mt-1 text-sm text-[#a89b8f]">Показано: {expenses.length} из {totalCount}. Проверено: {reviewedCount}</p>
         </div>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <select
-            aria-label="Фильтр по кредиторской задолженности предыдущего месяца"
-            value={creditFilter}
-            onChange={(event) => onCreditFilterChange(event.target.value as ExpenseCreditFilter)}
-            className="field min-w-52 py-2 text-sm"
+        <button
+          type="button"
+          onClick={onClearReviewed}
+          disabled={reviewedIds.size === 0}
+          className="inline-flex items-center justify-center gap-2 rounded-lg border border-[#c9a98d]/25 px-4 py-2 text-sm text-[#c9a98d] transition-colors hover:border-[#c9a98d]/50 hover:bg-[#c9a98d]/10 disabled:cursor-not-allowed disabled:opacity-45"
+        >
+          <RotateCcw className="h-4 w-4" />
+          Сбросить отметки
+        </button>
+      </div>
+
+      <div className="mb-5 rounded-lg border border-[#c9a98d]/15 bg-[#17151c]/35 p-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="inline-flex items-center gap-2 text-sm font-medium text-[#d9b99c]">
+            <Filter className="h-4 w-4" />
+            Фильтры
+          </div>
+          <button
+            type="button"
+            onClick={onResetFilters}
+            disabled={!hasActiveFilters}
+            className="soft-action px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-40"
           >
+            Сбросить фильтры
+          </button>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <label className="relative sm:col-span-2">
+            <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-[#a89b8f]" />
+            <input
+              aria-label="Поиск по расходам"
+              value={filters.query}
+              onChange={(event) => updateFilter('query', event.target.value)}
+              placeholder="Поиск по статье, комментарию, сумме"
+              className="field pl-10"
+            />
+          </label>
+          <input aria-label="Дата расхода от" type="date" value={filters.dateFrom} onChange={(event) => updateFilter('dateFrom', event.target.value)} className="field" />
+          <input aria-label="Дата расхода до" type="date" value={filters.dateTo} onChange={(event) => updateFilter('dateTo', event.target.value)} className="field" />
+          <input aria-label="Минимальная сумма расхода" type="number" min="0" step="0.01" value={filters.amountMin} onChange={(event) => updateFilter('amountMin', event.target.value)} placeholder="Сумма от" className="field" />
+          <input aria-label="Максимальная сумма расхода" type="number" min="0" step="0.01" value={filters.amountMax} onChange={(event) => updateFilter('amountMax', event.target.value)} placeholder="Сумма до" className="field" />
+          <select aria-label="Фильтр по счету" value={filters.account} onChange={(event) => updateFilter('account', event.target.value as ExpenseFilterState['account'])} className="field">
+            <option value="ALL">Все счета</option>
+            {Object.entries(accountLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+          <select aria-label="Фильтр по статье" value={filters.category} onChange={(event) => updateFilter('category', event.target.value)} className="field">
+            <option value="ALL">Все статьи</option>
+            {categories.map((category) => <option key={category} value={category}>{category}</option>)}
+          </select>
+          {showStudioFilter && (
+            <select aria-label="Фильтр по студии" value={filters.studio} onChange={(event) => updateFilter('studio', event.target.value as ExpenseFilterState['studio'])} className="field">
+              <option value="ALL">Все студии</option>
+              {Object.entries(studioLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          )}
+          <select aria-label="Фильтр по статусу проверки" value={filters.reviewed} onChange={(event) => updateFilter('reviewed', event.target.value as ExpenseReviewFilter)} className="field">
+            <option value="ALL">Все статусы проверки</option>
+            <option value="REVIEWED">Только проверенные</option>
+            <option value="UNREVIEWED">Только непроверенные</option>
+          </select>
+          <select aria-label="Фильтр по кредиторской задолженности предыдущего месяца" value={creditFilter} onChange={(event) => onCreditFilterChange(event.target.value as ExpenseCreditFilter)} className="field">
             <option value="ALL">Все расходы</option>
             <option value="FLAGGED">Только Кр. пред. месяца</option>
             <option value="UNFLAGGED">Без Кр. пред. месяца</option>
           </select>
-          <button
-            type="button"
-            onClick={onClearReviewed}
-            disabled={reviewedIds.size === 0}
-            className="inline-flex items-center justify-center gap-2 rounded-lg border border-[#c9a98d]/25 px-4 py-2 text-sm text-[#c9a98d] transition-colors hover:border-[#c9a98d]/50 hover:bg-[#c9a98d]/10 disabled:cursor-not-allowed disabled:opacity-45"
-          >
-            <RotateCcw className="h-4 w-4" />
-            Сбросить отметки
-          </button>
         </div>
       </div>
+
+      {editError && <p role="alert" className="mb-3 text-sm text-[#f0a9b9]">{editError}</p>}
       <div className="-mx-6 overflow-x-auto px-6 pb-1">
         <table className="min-w-[1120px] w-full">
           <thead>
@@ -599,6 +847,7 @@ function ExpenseTable({
           <tbody>
             {expenses.map((expense) => {
               const isReviewed = reviewedIds.has(expense.id);
+              const rowDraft = editingId === expense.id ? editDraft : null;
               return (
                 <tr
                   key={expense.id}
@@ -617,26 +866,76 @@ function ExpenseTable({
                       aria-label={`Отметить расход от ${formatDate(expense.date)} как проверенный`}
                     />
                   </td>
-                  <td className="p-3 border-b border-[#c9a98d]/10">{formatDate(expense.date)}</td>
-                  <td className="p-3 border-b border-[#c9a98d]/10">{money(expense.amount)}</td>
-                  <td className="p-3 border-b border-[#c9a98d]/10">{accountLabels[expense.account]}</td>
-                  <td className="p-3 border-b border-[#c9a98d]/10">{expense.category}</td>
-                  <td className="p-3 border-b border-[#c9a98d]/10">{studioLabels[expense.studio]}</td>
+                  {rowDraft ? (
+                    <>
+                      <td className="p-2 border-b border-[#c9a98d]/10">
+                        <input aria-label="Редактировать дату расхода" type="date" value={rowDraft.date} onChange={(event) => setEditDraft({ ...rowDraft, date: event.target.value })} className="field min-w-36 px-2 py-1.5 text-sm" />
+                      </td>
+                      <td className="p-2 border-b border-[#c9a98d]/10">
+                        <input aria-label="Редактировать сумму расхода" type="number" min="0.01" step="0.01" value={rowDraft.amount} onChange={(event) => setEditDraft({ ...rowDraft, amount: event.target.value })} className="field min-w-28 px-2 py-1.5 text-sm" />
+                      </td>
+                      <td className="p-2 border-b border-[#c9a98d]/10">
+                        <select aria-label="Редактировать счет расхода" value={rowDraft.account} onChange={(event) => setEditDraft({ ...rowDraft, account: event.target.value as ExpenseAccount })} className="field min-w-32 px-2 py-1.5 text-sm">
+                          {Object.entries(accountLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                        </select>
+                      </td>
+                      <td className="p-2 border-b border-[#c9a98d]/10">
+                        <select aria-label="Редактировать статью расхода" value={rowDraft.category} onChange={(event) => setEditDraft({ ...rowDraft, category: event.target.value })} className="field min-w-36 px-2 py-1.5 text-sm">
+                          {!categories.includes(rowDraft.category) && <option value={rowDraft.category}>{rowDraft.category}</option>}
+                          {categories.map((category) => <option key={category} value={category}>{category}</option>)}
+                        </select>
+                      </td>
+                      <td className="p-2 border-b border-[#c9a98d]/10">
+                        <select aria-label="Редактировать студию расхода" value={rowDraft.studio} onChange={(event) => setEditDraft({ ...rowDraft, studio: event.target.value as ExpenseStudio })} className="field min-w-36 px-2 py-1.5 text-sm">
+                          {Object.entries(studioLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                        </select>
+                      </td>
+                      <td className="p-2 border-b border-[#c9a98d]/10">
+                        <label className="inline-flex cursor-pointer items-center gap-2 whitespace-nowrap">
+                          <input type="checkbox" checked={rowDraft.previousMonthCredit} onChange={(event) => setEditDraft({ ...rowDraft, previousMonthCredit: event.target.checked })} className="h-4 w-4 shrink-0 accent-[#c9a98d]" />
+                          {rowDraft.previousMonthCredit ? 'Да' : 'Нет'}
+                        </label>
+                      </td>
+                      <td className="p-2 border-b border-[#c9a98d]/10">
+                        <input aria-label="Редактировать комментарий расхода" value={rowDraft.comment} onChange={(event) => setEditDraft({ ...rowDraft, comment: event.target.value })} className="field min-w-48 px-2 py-1.5 text-sm" />
+                      </td>
+                    </>
+                  ) : (
+                    <>
+                      <td className="p-3 border-b border-[#c9a98d]/10">{formatDate(expense.date)}</td>
+                      <td className="p-3 border-b border-[#c9a98d]/10">{money(expense.amount)}</td>
+                      <td className="p-3 border-b border-[#c9a98d]/10">{accountLabels[expense.account]}</td>
+                      <td className="p-3 border-b border-[#c9a98d]/10">{expense.category}</td>
+                      <td className="p-3 border-b border-[#c9a98d]/10">{studioLabels[expense.studio]}</td>
+                      <td className="p-3 border-b border-[#c9a98d]/10">
+                        <label className="inline-flex cursor-pointer items-center gap-2 whitespace-nowrap">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(expense.previousMonthCredit)}
+                            onChange={(event) => onPreviousMonthCreditChange(expense.id, event.target.checked)}
+                            className="h-4 w-4 shrink-0 accent-[#c9a98d]"
+                            aria-label={`Кр. пред. месяца для расхода от ${formatDate(expense.date)}`}
+                          />
+                          {expense.previousMonthCredit ? 'Да' : 'Нет'}
+                        </label>
+                      </td>
+                      <td className="p-3 border-b border-[#c9a98d]/10">{expense.comment}</td>
+                    </>
+                  )}
                   <td className="p-3 border-b border-[#c9a98d]/10">
-                    <label className="inline-flex cursor-pointer items-center gap-2 whitespace-nowrap">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(expense.previousMonthCredit)}
-                        onChange={(event) => onPreviousMonthCreditChange(expense.id, event.target.checked)}
-                        className="h-4 w-4 shrink-0 accent-[#c9a98d]"
-                        aria-label={`Кр. пред. месяца для расхода от ${formatDate(expense.date)}`}
-                      />
-                      {expense.previousMonthCredit ? 'Да' : 'Нет'}
-                    </label>
-                  </td>
-                  <td className="p-3 border-b border-[#c9a98d]/10">{expense.comment}</td>
-                  <td className="p-3 border-b border-[#c9a98d]/10">
-                    <button onClick={() => onDelete(expense.id)} className="text-[#a89b8f] hover:text-[#8b3a52]" aria-label="Удалить расход"><Trash2 className="w-4 h-4" /></button>
+                    <div className="flex items-center justify-end gap-2">
+                      {rowDraft ? (
+                        <>
+                          <button type="button" onClick={saveEditing} className="icon-action h-8 w-8 p-0 text-[#9fc5a4]" aria-label="Сохранить изменения расхода" title="Сохранить"><Save className="h-4 w-4" /></button>
+                          <button type="button" onClick={cancelEditing} className="icon-action h-8 w-8 p-0" aria-label="Отменить редактирование расхода" title="Отменить"><X className="h-4 w-4" /></button>
+                        </>
+                      ) : (
+                        <>
+                          <button type="button" onClick={() => startEditing(expense)} className="text-[#a89b8f] hover:text-[#d9b99c]" aria-label={`Редактировать расход от ${formatDate(expense.date)}`} title="Редактировать"><Pencil className="h-4 w-4" /></button>
+                          <button type="button" onClick={() => onDelete(expense.id)} className="text-[#a89b8f] hover:text-[#8b3a52]" aria-label="Удалить расход" title="Удалить"><Trash2 className="w-4 h-4" /></button>
+                        </>
+                      )}
+                    </div>
                   </td>
                 </tr>
               );
