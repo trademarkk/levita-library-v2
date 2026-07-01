@@ -1252,7 +1252,7 @@ async function claimFinancialNotificationRun(today) {
     ) values (${today}::date, 'processing', now(), now())
     on conflict (notification_date) do update
       set status = 'processing', error = null, updated_at = now()
-      where existing_run.status = 'failed'
+      where existing_run.status in ('failed', 'skipped')
          or (
            existing_run.status = 'processing'
            and existing_run.updated_at < now() - interval '15 minutes'
